@@ -1,23 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:base"
   ],
-  "labels": ["dependencies"],
+  "schedule": ["every weekend"],
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": ["security"]
   },
   "packageRules": [
     {
-      "matchUpdateTypes": ["patch"],
-      "automerge": true
-    },
-    {
-      "matchPackagePatterns": ["typescript", "vite", "eslint"],
-      "groupName": "dev dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
       "automerge": true
     }
   ],
-  "schedule": ["before 6am on Monday"]
+  "prConcurrentLimit": 5
 }
