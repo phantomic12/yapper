@@ -1,11 +1,10 @@
 import './style.css';
-import { env, LogLevel } from '@huggingface/transformers';
+import { env } from '@huggingface/transformers';
 import { TTSEngine, MODELS, detectWebGPU, type TTSModel } from './engine';
 
 // ─── Surface pipeline internals so failures don't look like silent hangs ───
-// Default in v4 is WARNING, but the SpeechT5 path is sensitive — keep INFO so
-// ONNX Runtime session creation messages appear in the browser console.
-env.logLevel = LogLevel.INFO;
+// v3 uses plain string levels — no LogLevel enum.
+env.logLevel = 'INFO';
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const app = document.getElementById('app')!;
@@ -154,7 +153,6 @@ function bindEvents() {
     try {
       await engine.loadModel(selectedModel);
     } catch (err) {
-      // loadModel already called onError, but make sure the button is usable again
       showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
@@ -167,7 +165,6 @@ function bindEvents() {
     charCount.textContent = `${len} / 2000`;
     charCount.classList.toggle('char-count--warn', len > 1800);
   });
-  // Initial count
   charCount.textContent = `${textInput.value.length} / 2000`;
 
   // Generate
@@ -175,7 +172,6 @@ function bindEvents() {
     const text = textInput.value.trim();
     if (!text) return;
 
-    // ── Show generating overlay BEFORE the blocking ONNX call ──
     const overlay = document.createElement('div');
     overlay.className = 'gen-overlay';
     overlay.innerHTML = `
@@ -215,7 +211,6 @@ function bindEvents() {
       document.getElementById('player')!.classList.add('player--visible');
       audioEl.play();
     } catch (err) {
-      // ── Surface the actual error so "doesn't work" is debuggable ──
       const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       console.error('[voxelforge] generate failed:', err);
       const card = overlay.querySelector('.gen-overlay__card')!;
@@ -336,26 +331,22 @@ function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(totalLength);
   const view = new DataView(buffer);
 
-  // RIFF header
   writeString(view, 0, 'RIFF');
   view.setUint32(4, totalLength - 8, true);
   writeString(view, 8, 'WAVE');
 
-  // fmt chunk
   writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);              // chunk size
-  view.setUint16(20, 1, true);               // PCM
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, byteRate, true);
   view.setUint16(32, blockAlign, true);
   view.setUint16(34, bitsPerSample, true);
 
-  // data chunk
   writeString(view, 36, 'data');
   view.setUint32(40, dataLength, true);
 
-  // samples
   const offset = 44;
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i]));
