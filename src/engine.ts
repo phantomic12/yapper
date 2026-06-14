@@ -16,16 +16,8 @@ export interface TTSModel {
    * Sampling rate of the model's output audio (Hz). MMS-TTS = 16000, SpeechT5 = 16000.
    */
   sampleRate?: number;
-  /**
-   * Device override. Some models (notably SpeechT5) have known issues on WebGPU
-   * in transformers.js v4 — pin to WASM for them.
-   */
-  device?: 'wasm' | 'webgpu';
-  /**
-   * Dtype override. SpeechT5's quantized (q8) ONNX produces wrong inputs in v4,
-   * so we force fp32.
-   */
-  dtype?: 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16' | 'uint8' | 'int8' | 'bnb4';
+  /** If true, use the unquantized fp32 model (required for SpeechT5 quality). */
+  quantized?: boolean;
 }
 
 export const MODELS: TTSModel[] = [
@@ -47,10 +39,8 @@ export const MODELS: TTSModel[] = [
     // SpeechT5 has no built-in default speaker — must pass speaker embeddings.
     // Using the public CMU-Arctic xvector sample from the Transformers.js docs dataset.
     speakerEmbeddings: 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin',
-    // Force WASM + fp32: the q8 (default for WASM in v4) and WebGPU paths
-    // both produce "Missing inputs" errors on SpeechT5's merged decoder.
-    device: 'wasm',
-    dtype: 'fp32',
+    // SpeechT5 must use unquantized fp32 — quantized versions produce distorted/garbled audio.
+    quantized: false,
   },
   {
     id: 'mms-tts-spa',
@@ -149,9 +139,10 @@ export class TTSEngine {
     this.events.onProgress?.(0, 1, model.name);
 
     try {
+      // v3 API: use `quantized: false` for unquantized models (SpeechT5 needs fp32).
+      // For all other models, default to quantized (smaller download, acceptable quality).
       const newPipe = await pipeline('text-to-speech', model.modelId, {
-        device: model.device ?? (this.useWebGPU ? 'webgpu' : 'wasm'),
-        dtype: model.dtype,
+        quantized: model.quantized ?? true,
         progress_callback: (progress: any) => {
           if (progress.status === 'progress') {
             this.events.onProgress?.(
