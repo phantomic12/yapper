@@ -1,12 +1,12 @@
 """
-VoxelForge TTS — End-to-end browser test via raw CDP.
+Yapper — End-to-end browser test via raw CDP.
 
 Drives a fresh Chrome instance (on gravebuster, port 9335) through the full
 TTS workflow: load page → detect WebGPU → select model → load model → generate
 speech → verify audio is produced.
 
 This script does NOT use the Hermes browser tool — it talks directly to the
-voxelforge-test CDP at http://100.93.66.35:9335, keeping the wileyplus session
+the yapper-test CDP at http://100.93.66.35:9335, keeping the wileyplus session
 on 9333 completely untouched.
 """
 
@@ -19,7 +19,7 @@ import urllib.request
 import websocket
 
 CDP = "http://100.93.66.35:9335"
-SCREENSHOT_DIR = Path("/tmp/voxelforge-shots")
+SCREENSHOT_DIR = Path("/tmp/yapper-shots")
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
 
@@ -139,7 +139,7 @@ def banner(label):
 
 
 def main():
-    banner("VoxelForge TTS — E2E browser test via raw CDP")
+    banner("Yapper — E2E browser test via raw CDP")
 
     # 1. Discover browser
     print(f"\n[1/9] Connecting to CDP at {CDP}")
@@ -166,11 +166,11 @@ def main():
         sys.exit(1)
     print(f"      ✓ Attached, sessionId={sid[:16]}...")
 
-    # 3. Navigate to voxelforge
-    print(f"\n[3/9] Navigating to https://phantomic12.github.io/voxelforge-tts/")
+    # 3. Navigate to yapper
+    print(f"\n[3/9] Navigating to https://phantomic12.github.io/yapper/")
     nav_id = cdp.send("Page.enable", session_id=sid)
     cdp.wait_for(nav_id)
-    nav_id = cdp.send("Page.navigate", {"url": "https://phantomic12.github.io/voxelforge-tts/"}, session_id=sid)
+    nav_id = cdp.send("Page.navigate", {"url": "https://phantomic12.github.io/yapper/"}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
     print("      ✓ Navigated, waiting for page load...")
 
@@ -328,7 +328,7 @@ def main():
 
     # 9. Generate speech
     print(f"\n[9/9] Typing text and generating speech")
-    TEST_TEXT = "Hello! This is VoxelForge, a privacy-first text to speech engine running entirely in your browser."
+    TEST_TEXT = "Hello! This is Yapper, a privacy-first text to speech engine running entirely in your browser."
     type_resp = cdp.eval(
         f"""(function() {{
             const ta = document.getElementById('text-input');

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start Chrome for voxelforge testing
+# Start Chrome for yapper testing
 pkill -f "chrome.*remote-debugging" 2>/dev/null || true
 sleep 2
 

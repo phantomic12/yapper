@@ -1,5 +1,5 @@
 {
-  "name": "voxelforge-tts",
+  "name": "yapper",
   "version": "0.1.0",
   "type": "module",
   "description": "Privacy-first browser TTS — all inference runs locally via WebGPU",
