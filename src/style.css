@@ -195,6 +195,7 @@ body {
 .model-card__tag--fast { background: rgba(34, 197, 94, 0.12); color: var(--success); }
 .model-card__tag--balanced { background: rgba(99, 102, 241, 0.12); color: var(--accent); }
 .model-card__tag--multilingual { background: rgba(168, 85, 247, 0.12); color: #a855f7; }
+.model-card__tag--premium { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
 
 /* ─── Load Button ─────────────────────────────────────────── */
 .load-btn {

@@ -8,7 +8,9 @@ No cloud processing. No data sent anywhere. Models load once, then everything ru
 
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
-- **Multiple models** — SpeechT5, MMS-TTS (English, Spanish, French, German, Japanese, Chinese)
+- **Multiple models** — SpeechT5, MMS-TTS (English, Spanish, French, German, Japanese, Chinese), Kokoro-82M (28 voices), Kitten TTS Nano (8 voices)
+- **Non-blocking queue** — stack up multiple generations, page stays usable
+- **Voice selection** — pick from built-in voices for Kokoro (28) and Kitten (8); SpeechT5 supports custom xvector URLs
 - **Models from Hugging Face** — zero hosting burden, loaded on demand
 - **WAV download** — save generated audio as standard WAV files
 - **Dark mode UI** — minimal, fast, no frameworks

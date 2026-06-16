@@ -117,6 +117,47 @@ export const MODELS: TTSModel[] = [
     sampleRate: 16000,
     dtype: 'q8',
   },
+  {
+    id: 'kokoro-82m',
+    name: 'Kokoro-82M',
+    modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+    description: 'High-quality 82M-param TTS. 28 built-in voices. Powered by kokoro-js (xenova).',
+    category: 'premium',
+    sampleRate: 24000,
+    custom: true,
+    voices: [
+      // Populated at runtime from kokoro-js's KokoroTTS.voices
+      // (see src/engines/kokoro.ts). Hardcoded list below is used until
+      // the model is loaded.
+      { id: 'af_heart',   name: 'Heart (en-us, Female)' },
+      { id: 'af_bella',   name: 'Bella (en-us, Female)' },
+      { id: 'am_michael', name: 'Michael (en-us, Male)' },
+      { id: 'am_adam',    name: 'Adam (en-us, Male)' },
+      { id: 'bf_emma',    name: 'Emma (en-gb, Female)' },
+      { id: 'bm_george',  name: 'George (en-gb, Male)' },
+    ],
+    defaultVoiceId: 'af_heart',
+  },
+  {
+    id: 'kitten-nano',
+    name: 'Kitten TTS Nano',
+    modelId: 'KittenML/kitten-tts-nano-0.8-int8',
+    description: 'Tiny (~24MB) fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
+    category: 'fast',
+    sampleRate: 24000,
+    custom: true,
+    voices: [
+      { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
+      { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
+      { id: 'expr-voice-3-m', name: 'Voice 3 (Male)' },
+      { id: 'expr-voice-3-f', name: 'Voice 3 (Female)' },
+      { id: 'expr-voice-4-m', name: 'Voice 4 (Male)' },
+      { id: 'expr-voice-4-f', name: 'Voice 4 (Female)' },
+      { id: 'expr-voice-5-m', name: 'Voice 5 (Male)' },
+      { id: 'expr-voice-5-f', name: 'Voice 5 (Female)' },
+    ],
+    defaultVoiceId: 'expr-voice-2-m',
+  },
 ];
 
 // ─── Job queue ───────────────────────────────────────────────────
@@ -158,7 +199,7 @@ export interface EngineEvents {
 // (e.g. Kitten TTS using onnxruntime-web directly). The custom engine
 // receives the raw job and returns a Float32Array + sample rate.
 export interface CustomEngine {
-  load(model: TTSModel): Promise<{ sampleRate: number }>;
+  load(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }>;
   generate(model: TTSModel, voiceId: string | undefined, text: string): Promise<{ audio: Float32Array; samplingRate: number }>;
   dispose(): void;
 }
@@ -260,7 +301,9 @@ export class TTSEngine {
         if (!custom) {
           throw new Error(`No custom engine registered for model ${model.modelId}`);
         }
-        const { sampleRate } = await custom.load(model);
+        const { sampleRate } = await custom.load(model, (loaded, total) => {
+          this.events.onLoadProgress?.(loaded, total, model.name);
+        });
         this.currentSampleRate = sampleRate;
       } else {
         // Wait for in-flight job on a different model to finish first

@@ -1,5 +1,24 @@
 import './style.css';
-import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState } from './engine';
+import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
+import { KokoroCustomEngine } from './engines/kokoro';
+import { KittenCustomEngine } from './engines/kitten';
+
+// ─── Register custom engines (one-time, before render) ──────────
+// Both Kokoro and Kitten are integrated as CustomEngine instances. We
+// instantiate them up front (cheap — no network) and register with the
+// engine registry so the engine's loadModel() can find them when the user
+// picks those models.
+//
+// KittenCustomEngine and KokoroCustomEngine do no I/O in their constructor;
+// they only fetch model files in their .load() method, which is called
+// later when the user clicks "Download & Load Model".
+for (const [modelId, ctor] of [
+  ['onnx-community/Kokoro-82M-v1.0-ONNX', KokoroCustomEngine],
+  ['KittenML/kitten-tts-nano-0.8-int8', KittenCustomEngine],
+] as const) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerCustomEngine(modelId, new (ctor as any)());
+}
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const app = document.getElementById('app')!;
