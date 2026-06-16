@@ -334,18 +334,17 @@ function bindEvents() {
 
     // For SpeechT5, ensure we have a valid speaker embedding
     let voiceId = selectedVoiceId;
-    if (selectedModel.id === 'speecht5' && voiceId === 'custom' && !customEmbeddingUrl) {
+    const isCustom = selectedModel.id === 'speecht5' && voiceId === 'custom';
+    if (isCustom && !customEmbeddingUrl) {
       showStatus('error', 'Custom voice: paste a speaker embedding URL first.');
       return;
     }
 
-    // For "Custom" voice, we'd need to plumb the URL through. Since voices
-    // are static, we override the voice's speakerEmbeddings at enqueue time.
-    // Simplest: if custom, just enqueue with voiceId='custom' and let the
-    // engine read the current custom URL via a side channel.
-    // For v1, custom is unsupported at engine level (we'd need to make voices
-    // mutable). TODO: pass the custom URL via a separate field.
-    engine.enqueue(text, { modelId: selectedModel.id, voiceId });
+    engine.enqueue(text, {
+      modelId: selectedModel.id,
+      voiceId,
+      customSpeakerEmbeddings: isCustom ? customEmbeddingUrl : undefined,
+    });
   });
 
   // Clear finished

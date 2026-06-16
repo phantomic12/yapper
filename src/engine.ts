@@ -128,6 +128,8 @@ export interface GenerationJob {
   text: string;
   voiceId?: string;
   voiceName?: string;
+  /** Override the voice's static speakerEmbeddings URL (e.g. user-pasted custom URL). */
+  customSpeakerEmbeddings?: string;
   modelId: string;
   modelName: string;
   status: JobStatus;
@@ -296,7 +298,7 @@ export class TTSEngine {
   }
 
   // ─── Job queue ─────────────────────────────────────────────────
-  enqueue(text: string, options: { modelId: string; voiceId?: string }): GenerationJob {
+  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string }): GenerationJob {
     const model = MODELS.find(m => m.id === options.modelId) ?? this.currentModel;
     if (!model) {
       throw new Error(`Unknown model: ${options.modelId}`);
@@ -311,6 +313,7 @@ export class TTSEngine {
       voiceName: voice?.name,
       modelId: model.id,
       modelName: model.name,
+      customSpeakerEmbeddings: options.customSpeakerEmbeddings,
       status: 'pending',
       createdAt: Date.now(),
     };
@@ -369,12 +372,13 @@ export class TTSEngine {
           samplingRate = result.samplingRate;
         } else {
           const callOptions: any = {};
-          if (voice?.speakerEmbeddings) {
-            callOptions.speaker_embeddings = voice.speakerEmbeddings;
-          } else if (model.voices?.[0]?.speakerEmbeddings) {
-            // Fallback to the model's first/default voice
-            callOptions.speaker_embeddings = model.voices.find(v => v.id === model.defaultVoiceId)?.speakerEmbeddings
-              ?? model.voices[0].speakerEmbeddings;
+          // Priority: job-level custom URL > voice's static URL > model's default voice URL
+          const embeddingUrl = next.customSpeakerEmbeddings
+            ?? voice?.speakerEmbeddings
+            ?? model.voices?.find(v => v.id === model.defaultVoiceId)?.speakerEmbeddings
+            ?? model.voices?.[0]?.speakerEmbeddings;
+          if (embeddingUrl) {
+            callOptions.speaker_embeddings = embeddingUrl;
           }
           const result = await this.pipe(next.text, callOptions);
           audio = result.audio;
