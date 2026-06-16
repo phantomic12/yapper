@@ -1,5 +1,24 @@
 import './style.css';
-import { TTSEngine, MODELS, detectWebGPU, type TTSModel } from './engine';
+import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
+import { KokoroCustomEngine } from './engines/kokoro';
+import { KittenCustomEngine } from './engines/kitten';
+
+// ─── Register custom engines (one-time, before render) ──────────
+// Both Kokoro and Kitten are integrated as CustomEngine instances. We
+// instantiate them up front (cheap — no network) and register with the
+// engine registry so the engine's loadModel() can find them when the user
+// picks those models.
+//
+// KittenCustomEngine and KokoroCustomEngine do no I/O in their constructor;
+// they only fetch model files in their .load() method, which is called
+// later when the user clicks "Download & Load Model".
+for (const [modelId, ctor] of [
+  ['onnx-community/Kokoro-82M-v1.0-ONNX', KokoroCustomEngine],
+  ['KittenML/kitten-tts-nano-0.8-int8', KittenCustomEngine],
+] as const) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerCustomEngine(modelId, new (ctor as any)());
+}
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const app = document.getElementById('app')!;
@@ -8,19 +27,24 @@ const root = app as HTMLDivElement;
 // ─── State ───────────────────────────────────────────────────────
 let engine: TTSEngine;
 let selectedModel: TTSModel = MODELS[0];
+let selectedVoiceId: string | undefined = MODELS[0].defaultVoiceId ?? MODELS[0].voices?.[0]?.id;
+let customEmbeddingUrl: string = '';
 let webgpuAvailable = false;
-let audioContext: AudioContext | null = null;
-let lastAudioBlob: Blob | null = null;
+let currentJobs: GenerationJob[] = [];
 
 // ─── Render ──────────────────────────────────────────────────────
 async function render() {
   webgpuAvailable = await detectWebGPU();
 
   engine = new TTSEngine({
-    onStateChange: handleStateChange,
-    onProgress: handleProgress,
-    onError: handleError,
-  }, webgpuAvailable);
+    onJobsChange: (jobs) => {
+      currentJobs = jobs;
+      renderJobList();
+    },
+    onEngineStateChange: handleEngineStateChange,
+    onLoadProgress: handleLoadProgress,
+    onEngineError: handleEngineError,
+  });
 
   root.innerHTML = `
     <div class="app">
@@ -70,10 +94,20 @@ async function render() {
         `).join('')}
       </div>
 
+      <!-- Voice Selection (hidden if model has no voices) -->
+      <div class="voice-section" id="voice-section" style="display:none">
+        <div class="section-label">Voice</div>
+        <div class="voice-grid" id="voice-grid"></div>
+        <div class="custom-voice-input" id="custom-voice-input" style="display:none">
+          <input type="url" id="custom-voice-url" placeholder="https://example.com/your-speaker-embedding.bin" />
+          <div class="custom-voice-hint">512-dim Float32 xvector. Generate one with the SpeechT5 reference script.</div>
+        </div>
+      </div>
+
       <!-- Load Button -->
       <button class="load-btn" id="load-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span>Download & Load Model</span>
+        <span id="load-btn-label">Download & Load Model</span>
       </button>
 
       <!-- Progress -->
@@ -95,27 +129,18 @@ async function render() {
         <span class="char-count" id="char-count">0 / 2000</span>
       </div>
 
-      <!-- Generate -->
-      <button class="generate-btn" id="generate-btn" disabled>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-        <span>Generate Speech</span>
-      </button>
-
-      <!-- Audio Player -->
-      <div class="player" id="player">
-        <div class="player__label">Output</div>
-        <audio id="audio-element" controls></audio>
-        <div class="player__actions">
-          <button class="player__btn" id="download-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download WAV
-          </button>
-          <button class="player__btn" id="replay-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-            Replay
-          </button>
-        </div>
+      <!-- Generate (creates a job — does NOT block) -->
+      <div class="generate-row">
+        <button class="generate-btn" id="generate-btn" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+          <span id="generate-btn-label">Add to queue</span>
+        </button>
+        <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
       </div>
+
+      <!-- Job list -->
+      <div class="section-label" id="queue-label" style="display:none">Queue</div>
+      <div class="job-list" id="job-list"></div>
 
       <footer class="footer">
         <p class="footer__text">
@@ -128,7 +153,148 @@ async function render() {
     </div>
   `;
 
+  renderVoiceSection();
   bindEvents();
+}
+
+// ─── Voice section render ────────────────────────────────────────
+function renderVoiceSection() {
+  const section = document.getElementById('voice-section')!;
+  const grid = document.getElementById('voice-grid')!;
+  const customInput = document.getElementById('custom-voice-input')!;
+
+  if (!selectedModel.voices || selectedModel.voices.length === 0) {
+    section.style.display = 'none';
+    selectedVoiceId = undefined;
+    return;
+  }
+
+  section.style.display = '';
+  grid.innerHTML = selectedModel.voices.map(v => `
+    <button class="voice-card ${v.id === selectedVoiceId ? 'voice-card--selected' : ''}" data-voice-id="${v.id}">
+      <div class="voice-card__name">${escapeHtml(v.name)}</div>
+      ${v.description ? `<div class="voice-card__desc">${escapeHtml(v.description)}</div>` : ''}
+    </button>
+  `).join('');
+
+  // Show custom URL input if "Custom" is selected
+  const customVoice = selectedModel.voices.find(v => v.id === 'custom');
+  if (customVoice) {
+    customInput.style.display = selectedVoiceId === 'custom' ? '' : 'none';
+  } else {
+    customInput.style.display = 'none';
+  }
+
+  // Bind voice card clicks
+  grid.querySelectorAll<HTMLButtonElement>('.voice-card').forEach(card => {
+    card.addEventListener('click', () => {
+      selectedVoiceId = card.dataset.voiceId;
+      renderVoiceSection();
+    });
+  });
+}
+
+// ─── Job list render ─────────────────────────────────────────────
+function renderJobList() {
+  const list = document.getElementById('job-list')!;
+  const label = document.getElementById('queue-label')!;
+  const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+
+  if (currentJobs.length === 0) {
+    list.innerHTML = '';
+    label.style.display = 'none';
+    clearBtn.disabled = true;
+    return;
+  }
+
+  label.style.display = '';
+  const hasFinished = currentJobs.some(j => j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
+  clearBtn.disabled = !hasFinished;
+
+  list.innerHTML = currentJobs.map(job => renderJobCard(job)).join('');
+
+  // Wire up the buttons
+  list.querySelectorAll<HTMLButtonElement>('[data-action="cancel"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.jobId!;
+      engine.cancel(id);
+    });
+  });
+  list.querySelectorAll<HTMLButtonElement>('[data-action="download"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.jobId!;
+      const job = currentJobs.find(j => j.id === id);
+      if (!job?.url) return;
+      const a = document.createElement('a');
+      a.href = job.url;
+      a.download = `yapper-${id}-${Date.now()}.wav`;
+      a.click();
+    });
+  });
+  list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(audio => {
+    audio.addEventListener('play', () => {
+      // Pause other audios when one starts
+      list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(other => {
+        if (other !== audio && !other.paused) other.pause();
+      });
+    });
+  });
+}
+
+function renderJobCard(job: GenerationJob): string {
+  const statusIcon = statusIconHtml(job.status);
+  const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
+  const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
+
+  let body = '';
+  switch (job.status) {
+    case 'pending':
+      body = `<div class="job-card__hint">Waiting in queue…</div>`;
+      break;
+    case 'generating':
+      const elapsed = job.startedAt ? Math.round((Date.now() - job.startedAt) / 100) / 10 : 0;
+      body = `<div class="job-card__hint">Generating… ${elapsed}s</div>`;
+      break;
+    case 'done':
+      body = `
+        <audio controls preload="metadata" data-job-id="${job.id}" src="${job.url}"></audio>
+        <div class="job-card__actions">
+          <button class="job-card__btn" data-action="download" data-job-id="${job.id}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download WAV
+          </button>
+          <span class="job-card__meta">${((job.durationMs ?? 0) / 1000).toFixed(1)}s · ${((job.audio?.length ?? 0) / (job.sampleRate ?? 1) | 0)}s audio</span>
+        </div>`;
+      break;
+    case 'error':
+      body = `<div class="job-card__error">${escapeHtml(job.error ?? 'Unknown error')}</div>`;
+      break;
+    case 'cancelled':
+      body = `<div class="job-card__hint">Cancelled</div>`;
+      break;
+  }
+
+  const cancellable = job.status === 'pending' || job.status === 'generating';
+  return `
+    <div class="job-card job-card--${job.status}">
+      <div class="job-card__header">
+        <span class="job-card__status">${statusIcon}</span>
+        <span class="job-card__meta-line">${escapeHtml(job.modelName)}${voiceLabel}</span>
+        ${cancellable ? `<button class="job-card__cancel" data-action="cancel" data-job-id="${job.id}" title="Cancel">×</button>` : ''}
+      </div>
+      <div class="job-card__text">"${escapeHtml(textPreview)}"</div>
+      <div class="job-card__body">${body}</div>
+    </div>`;
+}
+
+function statusIconHtml(status: GenerationJob['status']): string {
+  switch (status) {
+    case 'pending':    return '<span class="status-dot status-dot--pending" title="Pending"></span>';
+    case 'generating': return '<span class="status-dot status-dot--generating" title="Generating"></span>';
+    case 'done':       return '<span class="status-dot status-dot--done" title="Done">✓</span>';
+    case 'error':      return '<span class="status-dot status-dot--error" title="Error">✕</span>';
+    case 'cancelled':  return '<span class="status-dot status-dot--cancelled" title="Cancelled">⊘</span>';
+  }
 }
 
 // ─── Event Binding ───────────────────────────────────────────────
@@ -137,18 +303,36 @@ function bindEvents() {
   document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
     card.addEventListener('click', () => {
       const modelId = card.dataset.modelId!;
-      selectedModel = MODELS.find(m => m.id === modelId)!;
+      const newModel = MODELS.find(m => m.id === modelId);
+      if (!newModel) return;
+      selectedModel = newModel;
+      // Reset voice selection to this model's default
+      selectedVoiceId = newModel.defaultVoiceId ?? newModel.voices?.[0]?.id;
+      customEmbeddingUrl = '';
       document.querySelectorAll('.model-card').forEach(c => c.classList.remove('model-card--selected'));
       card.classList.add('model-card--selected');
+      renderVoiceSection();
     });
+  });
+
+  // Custom voice URL input
+  const customUrlInput = document.getElementById('custom-voice-url') as HTMLInputElement;
+  customUrlInput.addEventListener('input', () => {
+    customEmbeddingUrl = customUrlInput.value.trim();
   });
 
   // Load model
   document.getElementById('load-btn')!.addEventListener('click', async () => {
+    const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
+    const loadBtnLabel = document.getElementById('load-btn-label')!;
+    loadBtn.disabled = true;
+    loadBtnLabel.textContent = 'Loading…';
     try {
       await engine.loadModel(selectedModel);
     } catch (err) {
       showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      loadBtn.disabled = false;
     }
   });
 
@@ -162,90 +346,38 @@ function bindEvents() {
   });
   charCount.textContent = `${textInput.value.length} / 2000`;
 
-  // Generate
-  document.getElementById('generate-btn')!.addEventListener('click', async () => {
+  // Generate — creates a job, does NOT block
+  document.getElementById('generate-btn')!.addEventListener('click', () => {
     const text = textInput.value.trim();
     if (!text) return;
 
-    const overlay = document.createElement('div');
-    overlay.className = 'gen-overlay';
-    overlay.innerHTML = `
-      <div class="gen-overlay__card">
-        <div class="gen-overlay__spinner"></div>
-        <div class="gen-overlay__title">Generating speech…</div>
-        <div class="gen-overlay__sub">Text-to-speech inference running locally</div>
-      </div>`;
-    document.body.appendChild(overlay);
-    overlay.offsetHeight;
-
-    const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
-    generateBtn.disabled = true;
-
-    const t0 = performance.now();
-    try {
-      const { audio, samplingRate } = await engine.generate(text, {
-        speakerEmbeddings: selectedModel.speakerEmbeddings,
-      });
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-
-      const elapsedMs = performance.now() - t0;
-      const minVisible = 700;
-      const holdMs = Math.max(0, minVisible - elapsedMs);
-      const card = overlay.querySelector('.gen-overlay__card')!;
-      card.innerHTML = `
-        <div class="gen-overlay__check">✓</div>
-        <div class="gen-overlay__title">Generated in ${elapsed}s</div>`;
-      overlay.classList.add('gen-overlay--done');
-      setTimeout(() => overlay.remove(), 200 + holdMs);
-
-      lastAudioBlob = float32ToWav(audio, samplingRate);
-
-      const audioUrl = URL.createObjectURL(lastAudioBlob);
-      const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
-      audioEl.src = audioUrl;
-      document.getElementById('player')!.classList.add('player--visible');
-      audioEl.play();
-    } catch (err) {
-      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-      console.error('[yapper] generate failed:', err);
-      const card = overlay.querySelector('.gen-overlay__card')!;
-      card.innerHTML = `
-        <div class="gen-overlay__check" style="background:#dc2626">✕</div>
-        <div class="gen-overlay__title">Generation failed</div>
-        <div class="gen-overlay__sub" style="font-family:ui-monospace,monospace;font-size:11px;max-width:520px;white-space:pre-wrap;word-break:break-word;text-align:left">${msg}</div>
-        <div class="gen-overlay__sub" style="margin-top:8px">Open the browser console (F12) for the full stack.</div>`;
-      overlay.classList.add('gen-overlay--done');
-      setTimeout(() => overlay.remove(), 8000);
-    } finally {
-      generateBtn.disabled = false;
+    // For SpeechT5, ensure we have a valid speaker embedding
+    let voiceId = selectedVoiceId;
+    const isCustom = selectedModel.id === 'speecht5' && voiceId === 'custom';
+    if (isCustom && !customEmbeddingUrl) {
+      showStatus('error', 'Custom voice: paste a speaker embedding URL first.');
+      return;
     }
+
+    engine.enqueue(text, {
+      modelId: selectedModel.id,
+      voiceId,
+      customSpeakerEmbeddings: isCustom ? customEmbeddingUrl : undefined,
+    });
   });
 
-  // Download
-  document.getElementById('download-btn')!.addEventListener('click', () => {
-    if (!lastAudioBlob) return;
-    const url = URL.createObjectURL(lastAudioBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `yapper-${Date.now()}.wav`;
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  // Replay
-  document.getElementById('replay-btn')!.addEventListener('click', () => {
-    const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
-    audioEl.currentTime = 0;
-    audioEl.play();
+  // Clear finished
+  document.getElementById('clear-btn')!.addEventListener('click', () => {
+    engine.clearFinished();
   });
 }
 
-// ─── UI Handlers ─────────────────────────────────────────────────
-function handleStateChange(state: string) {
+// ─── Engine state handlers ───────────────────────────────────────
+function handleEngineStateChange(state: EngineState) {
   const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
   const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
   const textInput = document.getElementById('text-input') as HTMLTextAreaElement;
-  const loadBtnLabel = loadBtn.querySelector('span')!;
+  const loadBtnLabel = document.getElementById('load-btn-label')!;
   const progressBar = document.getElementById('progress-bar')!;
   const progressText = document.getElementById('progress-text')!;
 
@@ -256,6 +388,7 @@ function handleStateChange(state: string) {
       textInput.disabled = true;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
+      loadBtnLabel.textContent = 'Download & Load Model';
       break;
 
     case 'loading':
@@ -265,19 +398,17 @@ function handleStateChange(state: string) {
       progressText.classList.add('progress-text--visible');
       break;
 
-    case 'ready':
+    case 'ready': {
+      const current = engine.getCurrentModel();
       loadBtn.disabled = false;
-      loadBtnLabel.textContent = `✓ ${selectedModel.name} loaded`;
+      loadBtnLabel.textContent = `✓ ${current?.name ?? 'Model'} loaded`;
       generateBtn.disabled = false;
       textInput.disabled = false;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
-      showStatus('success', `${selectedModel.name} is ready. Type something and hit Generate.`);
+      showStatus('success', `${current?.name} is ready. Type something and hit Generate (or queue several).`);
       break;
-
-    case 'generating':
-      generateBtn.disabled = true;
-      break;
+    }
 
     case 'error':
       loadBtn.disabled = false;
@@ -289,7 +420,7 @@ function handleStateChange(state: string) {
   }
 }
 
-function handleProgress(loaded: number, total: number, modelName: string) {
+function handleLoadProgress(loaded: number, total: number, modelName: string) {
   const fill = document.getElementById('progress-fill')!;
   const text = document.getElementById('progress-text')!;
   const pct = total > 0 ? Math.round((loaded / total) * 100) : 0;
@@ -299,8 +430,8 @@ function handleProgress(loaded: number, total: number, modelName: string) {
   text.textContent = `Downloading ${modelName}… ${pct}% (${sizeMB} MB)`;
 }
 
-function handleError(msg: string) {
-  showStatus('error', `Error: ${msg}`);
+function handleEngineError(msg: string) {
+  showStatus('error', msg);
 }
 
 function showStatus(type: 'success' | 'error', message: string) {
@@ -312,49 +443,14 @@ function showStatus(type: 'success' | 'error', message: string) {
   container.innerHTML = `<div class="status-banner status-banner--${type}">${icon}<span>${message}</span></div>`;
 }
 
-// ─── WAV Encoding ────────────────────────────────────────────────
-function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const bytesPerSample = bitsPerSample / 8;
-  const blockAlign = numChannels * bytesPerSample;
-  const byteRate = sampleRate * blockAlign;
-  const dataLength = samples.length * bytesPerSample;
-  const headerLength = 44;
-  const totalLength = headerLength + dataLength;
-
-  const buffer = new ArrayBuffer(totalLength);
-  const view = new DataView(buffer);
-
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, totalLength - 8, true);
-  writeString(view, 8, 'WAVE');
-
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-
-  writeString(view, 36, 'data');
-  view.setUint32(40, dataLength, true);
-
-  const offset = 44;
-  for (let i = 0; i < samples.length; i++) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-function writeString(view: DataView, offset: number, str: string) {
-  for (let i = 0; i < str.length; i++) {
-    view.setUint8(offset + i, str.charCodeAt(i));
-  }
+// ─── Utilities ───────────────────────────────────────────────────
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ─── Boot ────────────────────────────────────────────────────────

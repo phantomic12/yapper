@@ -1,27 +1,39 @@
 import { pipeline } from '@huggingface/transformers';
 
 // ─── Model definitions ───────────────────────────────────────────
+
+export interface Voice {
+  id: string;
+  name: string;
+  description?: string;
+  /** Speaker embedding URL/path (SpeechT5) or voice ID string (Kokoro, etc.) */
+  speakerEmbeddings?: string;
+}
+
 export interface TTSModel {
   id: string;
   name: string;
   modelId: string;
   description: string;
-  category: 'fast' | 'balanced' | 'multilingual';
-  /**
-   * If set, URL (or relative path) to a 512-dim Float32Array of speaker embeddings
-   * Required by SpeechT5. MMS-TTS models work without this.
-   */
-  speakerEmbeddings?: string;
-  /**
-   * Sampling rate of the model's output audio (Hz). MMS-TTS = 16000, SpeechT5 = 16000.
-   */
-  sampleRate?: number;
+  category: 'fast' | 'balanced' | 'multilingual' | 'premium';
   /**
    * v3 data type passed to the pipeline. SpeechT5 MUST use 'fp32' — the
    * quantized variant produces garbled audio (see huggingface/transformers.js#406).
    * MMS-TTS uses 'q8' by default for smaller downloads with acceptable quality.
    */
   dtype?: 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16';
+  /** Sampling rate of the model's output audio (Hz). */
+  sampleRate?: number;
+  /** Available voices for this model. Empty/omitted = single fixed voice. */
+  voices?: Voice[];
+  /** Default voice id when none selected. */
+  defaultVoiceId?: string;
+  /**
+   * If true, this model is implemented outside of transformers.js (custom ONNX
+   * integration). The engine routes jobs for these models to a custom
+   * integration registered via `registerCustomEngine`.
+   */
+  custom?: boolean;
 }
 
 export const MODELS: TTSModel[] = [
@@ -29,7 +41,7 @@ export const MODELS: TTSModel[] = [
     id: 'mms-tts-eng',
     name: 'MMS-TTS (English)',
     modelId: 'Xenova/mms-tts-eng',
-    description: 'Meta MMS. 1,100+ languages supported.',
+    description: 'Meta MMS. Fast, compact, single voice.',
     category: 'multilingual',
     sampleRate: 16000,
     dtype: 'q8',
@@ -38,15 +50,27 @@ export const MODELS: TTSModel[] = [
     id: 'speecht5',
     name: 'SpeechT5',
     modelId: 'Xenova/speecht5_tts',
-    description: 'Microsoft transformer-based TTS. Good quality, English.',
+    description: 'Microsoft transformer-based TTS. Multiple voices via speaker embeddings.',
     category: 'balanced',
     sampleRate: 16000,
-    // SpeechT5 has no built-in default speaker — must pass speaker embeddings.
-    // Using the public CMU-Arctic xvector sample from the Transformers.js docs dataset.
-    speakerEmbeddings: 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin',
     // SpeechT5 must use fp32 — the quantized variant produces garbled audio
     // (huggingface/transformers.js#406).
     dtype: 'fp32',
+    voices: [
+      {
+        id: 'cmarctic',
+        name: 'CMU Arctic (default)',
+        description: 'Neutral US English, male. Public xvector from transformers.js docs.',
+        speakerEmbeddings: 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin',
+      },
+      {
+        id: 'custom',
+        name: 'Custom (paste URL)',
+        description: 'Provide your own 512-dim xvector .bin file URL. Generate one with the SpeechT5 reference script.',
+        speakerEmbeddings: '', // filled in at runtime by the UI
+      },
+    ],
+    defaultVoiceId: 'cmarctic',
   },
   {
     id: 'mms-tts-spa',
@@ -93,7 +117,102 @@ export const MODELS: TTSModel[] = [
     sampleRate: 16000,
     dtype: 'q8',
   },
+  {
+    id: 'kokoro-82m',
+    name: 'Kokoro-82M',
+    modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+    description: 'High-quality 82M-param TTS. 28 built-in voices. Powered by kokoro-js (xenova).',
+    category: 'premium',
+    sampleRate: 24000,
+    custom: true,
+    voices: [
+      // Populated at runtime from kokoro-js's KokoroTTS.voices
+      // (see src/engines/kokoro.ts). Hardcoded list below is used until
+      // the model is loaded.
+      { id: 'af_heart',   name: 'Heart (en-us, Female)' },
+      { id: 'af_bella',   name: 'Bella (en-us, Female)' },
+      { id: 'am_michael', name: 'Michael (en-us, Male)' },
+      { id: 'am_adam',    name: 'Adam (en-us, Male)' },
+      { id: 'bf_emma',    name: 'Emma (en-gb, Female)' },
+      { id: 'bm_george',  name: 'George (en-gb, Male)' },
+    ],
+    defaultVoiceId: 'af_heart',
+  },
+  {
+    id: 'kitten-nano',
+    name: 'Kitten TTS Nano',
+    modelId: 'KittenML/kitten-tts-nano-0.8-int8',
+    description: 'Tiny (~24MB) fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
+    category: 'fast',
+    sampleRate: 24000,
+    custom: true,
+    voices: [
+      { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
+      { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
+      { id: 'expr-voice-3-m', name: 'Voice 3 (Male)' },
+      { id: 'expr-voice-3-f', name: 'Voice 3 (Female)' },
+      { id: 'expr-voice-4-m', name: 'Voice 4 (Male)' },
+      { id: 'expr-voice-4-f', name: 'Voice 4 (Female)' },
+      { id: 'expr-voice-5-m', name: 'Voice 5 (Male)' },
+      { id: 'expr-voice-5-f', name: 'Voice 5 (Female)' },
+    ],
+    defaultVoiceId: 'expr-voice-2-m',
+  },
 ];
+
+// ─── Job queue ───────────────────────────────────────────────────
+
+export type JobStatus = 'pending' | 'generating' | 'done' | 'error' | 'cancelled';
+
+export interface GenerationJob {
+  id: string;
+  text: string;
+  voiceId?: string;
+  voiceName?: string;
+  /** Override the voice's static speakerEmbeddings URL (e.g. user-pasted custom URL). */
+  customSpeakerEmbeddings?: string;
+  modelId: string;
+  modelName: string;
+  status: JobStatus;
+  audio?: Float32Array;
+  sampleRate?: number;
+  blob?: Blob;
+  url?: string;
+  error?: string;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+}
+
+export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
+
+export interface EngineEvents {
+  onJobsChange?: (jobs: GenerationJob[]) => void;
+  onEngineStateChange?: (state: EngineState) => void;
+  onLoadProgress?: (loaded: number, total: number, modelName: string) => void;
+  onEngineError?: (message: string) => void;
+}
+
+// ─── Custom-engine registry (Phase C hook) ───────────────────────
+// Models with `custom: true` are handled by a custom integration
+// (e.g. Kitten TTS using onnxruntime-web directly). The custom engine
+// receives the raw job and returns a Float32Array + sample rate.
+export interface CustomEngine {
+  load(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }>;
+  generate(model: TTSModel, voiceId: string | undefined, text: string): Promise<{ audio: Float32Array; samplingRate: number }>;
+  dispose(): void;
+}
+
+const customEngines = new Map<string, CustomEngine>();
+
+export function registerCustomEngine(modelId: string, engine: CustomEngine): void {
+  customEngines.set(modelId, engine);
+}
+
+export function unregisterCustomEngine(modelId: string): void {
+  customEngines.delete(modelId);
+}
 
 // ─── GPU detection ───────────────────────────────────────────────
 export async function detectWebGPU(): Promise<boolean> {
@@ -106,107 +225,236 @@ export async function detectWebGPU(): Promise<boolean> {
   }
 }
 
-// ─── Engine state ────────────────────────────────────────────────
-export type EngineState = 'idle' | 'loading' | 'ready' | 'generating' | 'error';
-
-export interface EngineEvents {
-  onStateChange?: (state: EngineState) => void;
-  onProgress?: (loaded: number, total: number, model: string) => void;
-  onError?: (error: string) => void;
-}
-
 // ─── TTS Engine ──────────────────────────────────────────────────
 export class TTSEngine {
-  // The pipeline return type is a massive union; we use 'any' internally to avoid type gymnastics
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private pipe: any = null;
-  private currentModelId: string | null = null;
+  private currentModel: TTSModel | null = null;
   private currentSampleRate: number = 16000;
-  private state: EngineState = 'idle';
+  private engineState: EngineState = 'idle';
+  private jobs: GenerationJob[] = [];
+  private processing = false;
   private events: EngineEvents;
-  private useWebGPU: boolean;
+  private nextJobId = 1;
 
-  constructor(events: EngineEvents = {}, useWebGPU = true) {
+  constructor(events: EngineEvents = {}) {
     this.events = events;
-    this.useWebGPU = useWebGPU;
   }
 
-  private setState(state: EngineState) {
-    this.state = state;
-    this.events.onStateChange?.(state);
+  // ─── State ──────────────────────────────────────────────────────
+  private setEngineState(state: EngineState) {
+    this.engineState = state;
+    this.events.onEngineStateChange?.(state);
   }
 
-  getState(): EngineState {
-    return this.state;
+  getEngineState(): EngineState {
+    return this.engineState;
   }
 
+  getCurrentModel(): TTSModel | null {
+    return this.currentModel;
+  }
+
+  getJobs(): GenerationJob[] {
+    return this.jobs;
+  }
+
+  private notifyJobs() {
+    // Return a copy so consumers can't mutate internal state
+    this.events.onJobsChange?.(this.jobs.slice());
+  }
+
+  // ─── Model loading ─────────────────────────────────────────────
   async loadModel(model: TTSModel): Promise<void> {
-    if (this.currentModelId === model.modelId && this.pipe) {
-      this.setState('ready');
+    if (this.currentModel?.modelId === model.modelId && (this.pipe || customEngines.has(model.modelId))) {
+      this.setEngineState('ready');
       return;
     }
 
-    this.setState('loading');
-    this.events.onProgress?.(0, 1, model.name);
+    // If we're mid-generation on a different model, let it finish but cancel
+    // any pending jobs for the OLD model — they can never run with the new one.
+    for (const job of this.jobs) {
+      if (job.status === 'pending' && job.modelId !== model.modelId) {
+        job.status = 'cancelled';
+        job.error = 'Model changed before generation started';
+        job.completedAt = Date.now();
+      }
+    }
+    this.notifyJobs();
+
+    // Dispose old pipe (if switching models)
+    if (this.pipe && typeof this.pipe.dispose === 'function') {
+      this.pipe.dispose();
+      this.pipe = null;
+    }
+    if (this.currentModel) {
+      const oldCustom = customEngines.get(this.currentModel.modelId);
+      if (oldCustom) oldCustom.dispose();
+    }
+
+    this.setEngineState('loading');
+    this.events.onLoadProgress?.(0, 1, model.name);
 
     try {
-      // v3 API uses `dtype` (e.g. 'fp32', 'q8', 'q4'). Default to 'q8' for compact
-      // downloads; SpeechT5 overrides to 'fp32' because the quantized variant
-      // produces garbled output (huggingface/transformers.js#406).
-      const newPipe = await pipeline('text-to-speech', model.modelId, {
-        dtype: model.dtype ?? 'q8',
-        progress_callback: (progress: any) => {
-          if (progress.status === 'progress') {
-            this.events.onProgress?.(
-              progress.loaded ?? 0,
-              progress.total ?? 1,
-              model.name
-            );
-          } else if (progress.status === 'done') {
-            this.events.onProgress?.(1, 1, model.name);
-          }
-        },
-      });
-
-      // Dispose previous pipeline if switching models
-      if (this.pipe && typeof this.pipe.dispose === 'function') {
-        this.pipe.dispose();
+      if (model.custom) {
+        const custom = customEngines.get(model.modelId);
+        if (!custom) {
+          throw new Error(`No custom engine registered for model ${model.modelId}`);
+        }
+        const { sampleRate } = await custom.load(model, (loaded, total) => {
+          this.events.onLoadProgress?.(loaded, total, model.name);
+        });
+        this.currentSampleRate = sampleRate;
+      } else {
+        // Wait for in-flight job on a different model to finish first
+        // (we just disposed the old pipe; jobs in flight will error out gracefully
+        //  because they use the old pipe reference — handled in processQueue)
+        const newPipe = await pipeline('text-to-speech', model.modelId, {
+          dtype: model.dtype ?? 'q8',
+          progress_callback: (progress: any) => {
+            if (progress.status === 'progress') {
+              this.events.onLoadProgress?.(
+                progress.loaded ?? 0,
+                progress.total ?? 1,
+                model.name
+              );
+            } else if (progress.status === 'done') {
+              this.events.onLoadProgress?.(1, 1, model.name);
+            }
+          },
+        });
+        this.pipe = newPipe;
+        this.currentSampleRate = model.sampleRate ?? 16000;
       }
 
-      this.pipe = newPipe;
-      this.currentModelId = model.modelId;
-      this.currentSampleRate = model.sampleRate ?? 16000;
-      this.setState('ready');
+      this.currentModel = model;
+      this.setEngineState('ready');
+
+      // Process any pending jobs that match the newly loaded model
+      this.processQueue();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.events.onError?.(msg);
-      this.setState('error');
+      this.events.onEngineError?.(`Load failed: ${msg}`);
+      this.setEngineState('error');
       throw err;
     }
   }
 
-  async generate(text: string, options: { speakerEmbeddings?: string } = {}): Promise<{ audio: Float32Array; samplingRate: number }> {
-    if (!this.pipe) {
-      throw new Error('No model loaded');
+  // ─── Job queue ─────────────────────────────────────────────────
+  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string }): GenerationJob {
+    const model = MODELS.find(m => m.id === options.modelId) ?? this.currentModel;
+    if (!model) {
+      throw new Error(`Unknown model: ${options.modelId}`);
     }
+    const voice = options.voiceId
+      ? model.voices?.find(v => v.id === options.voiceId)
+      : model.voices?.find(v => v.id === model.defaultVoiceId);
+    const job: GenerationJob = {
+      id: `job-${this.nextJobId++}`,
+      text,
+      voiceId: voice?.id,
+      voiceName: voice?.name,
+      modelId: model.id,
+      modelName: model.name,
+      customSpeakerEmbeddings: options.customSpeakerEmbeddings,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    this.jobs.unshift(job); // newest at top
+    this.notifyJobs();
+    // Try to process immediately
+    queueMicrotask(() => this.processQueue());
+    return job;
+  }
 
-    this.setState('generating');
+  cancel(jobId: string): void {
+    const job = this.jobs.find(j => j.id === jobId);
+    if (!job) return;
+    if (job.status === 'pending' || job.status === 'generating') {
+      job.status = 'cancelled';
+      job.completedAt = Date.now();
+      // If this was the active job, the processQueue loop will see it on next tick
+      this.notifyJobs();
+    }
+  }
 
-    try {
-      const callOptions: any = {};
-      if (options.speakerEmbeddings) {
-        callOptions.speaker_embeddings = options.speakerEmbeddings;
+  clearFinished(): void {
+    this.jobs = this.jobs.filter(j => j.status === 'pending' || j.status === 'generating');
+    this.notifyJobs();
+  }
+
+  private async processQueue(): Promise<void> {
+    if (this.processing) return;
+    if (this.engineState !== 'ready') return;
+
+    while (true) {
+      const next = this.jobs.find(j => j.status === 'pending');
+      if (!next) break;
+      if (this.currentModel?.id !== next.modelId) break; // need to load the right model first
+      if (!this.pipe && !this.currentModel.custom) break;
+
+      this.processing = true;
+      next.status = 'generating';
+      next.startedAt = Date.now();
+      this.notifyJobs();
+
+      try {
+        const model = this.currentModel!;
+        const voice = next.voiceId
+          ? model.voices?.find(v => v.id === next.voiceId)
+          : undefined;
+
+        let audio: Float32Array;
+        let samplingRate: number;
+
+        if (model.custom) {
+          const custom = customEngines.get(model.modelId);
+          if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
+          const result = await custom.generate(model, next.voiceId, next.text);
+          audio = result.audio;
+          samplingRate = result.samplingRate;
+        } else {
+          const callOptions: any = {};
+          // Priority: job-level custom URL > voice's static URL > model's default voice URL
+          const embeddingUrl = next.customSpeakerEmbeddings
+            ?? voice?.speakerEmbeddings
+            ?? model.voices?.find(v => v.id === model.defaultVoiceId)?.speakerEmbeddings
+            ?? model.voices?.[0]?.speakerEmbeddings;
+          if (embeddingUrl) {
+            callOptions.speaker_embeddings = embeddingUrl;
+          }
+          const result = await this.pipe(next.text, callOptions);
+          audio = result.audio;
+          samplingRate = result.sampling_rate ?? this.currentSampleRate;
+        }
+
+        // Check if cancelled while running. cancel() may have mutated the
+        // status during the await above; TS can't see that across methods.
+        const liveStatus = next.status as JobStatus;
+        if (liveStatus === 'cancelled') {
+          this.processing = false;
+          this.notifyJobs();
+          continue;
+        }
+
+        next.audio = audio;
+        next.sampleRate = samplingRate;
+        next.blob = float32ToWav(audio, samplingRate);
+        next.url = URL.createObjectURL(next.blob);
+        next.status = 'done';
+        next.completedAt = Date.now();
+        next.durationMs = next.completedAt - (next.startedAt ?? next.completedAt);
+      } catch (err) {
+        if ((next.status as JobStatus) !== 'cancelled') {
+          const msg = err instanceof Error ? err.message : String(err);
+          next.status = 'error';
+          next.error = msg;
+          next.completedAt = Date.now();
+        }
       }
-      const result = await this.pipe(text, callOptions);
-      this.setState('ready');
-      // Some pipelines return RawAudio { audio, sampling_rate }; some return just { audio }
-      const samplingRate = result.sampling_rate ?? this.currentSampleRate;
-      return { audio: result.audio, samplingRate };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.events.onError?.(msg);
-      this.setState('error');
-      throw err;
+
+      this.processing = false;
+      this.notifyJobs();
     }
   }
 
@@ -215,7 +463,57 @@ export class TTSEngine {
       this.pipe.dispose();
     }
     this.pipe = null;
-    this.currentModelId = null;
-    this.setState('idle');
+    this.currentModel = null;
+    // Revoke all object URLs
+    for (const job of this.jobs) {
+      if (job.url) URL.revokeObjectURL(job.url);
+    }
+    this.jobs = [];
+    this.setEngineState('idle');
+  }
+}
+
+// ─── WAV Encoding (moved here so the engine owns it) ─────────────
+export function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataLength = samples.length * bytesPerSample;
+  const headerLength = 44;
+  const totalLength = headerLength + dataLength;
+
+  const buffer = new ArrayBuffer(totalLength);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalLength - 8, true);
+  writeString(view, 8, 'WAVE');
+
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  const offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
   }
 }

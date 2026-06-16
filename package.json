@@ -10,7 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@huggingface/transformers": "3.8.1"
+    "@huggingface/transformers": "3.8.1",
+    "fflate": "^0.8.3",
+    "kokoro-js": "^1.2.1",
+    "onnxruntime-web": "^1.26.0"
   },
   "devDependencies": {
     "typescript": "^6.0.0",
