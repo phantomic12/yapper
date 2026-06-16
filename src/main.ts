@@ -1,10 +1,5 @@
 import './style.css';
-import { env } from '@huggingface/transformers';
 import { TTSEngine, MODELS, detectWebGPU, type TTSModel } from './engine';
-
-// ─── Surface pipeline internals so failures don't look like silent hangs ───
-// v3 uses plain string levels — no LogLevel enum.
-env.logLevel = 'INFO';
 
 // ─── DOM refs ────────────────────────────────────────────────────
 const app = document.getElementById('app')!;
@@ -48,7 +43,7 @@ async function render() {
               <circle cx="50" cy="50" r="6" fill="white" stroke="none"/>
             </g>
           </svg>
-          <h1 class="header__title">VoxelForge TTS</h1>
+          <h1 class="header__title">Yapper</h1>
         </div>
         <p class="header__subtitle">Text-to-speech that runs entirely in your browser</p>
         <div class="privacy-badge">
@@ -127,7 +122,7 @@ async function render() {
           Models loaded from <a href="https://huggingface.co" target="_blank" rel="noopener">Hugging Face</a> •
           Powered by <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noopener">Transformers.js</a> +
           <a href="https://onnxruntime.ai" target="_blank" rel="noopener">ONNX Runtime</a> •
-          <a href="https://github.com/phantomic12/voxelforge-tts" target="_blank" rel="noopener">Source</a>
+          <a href="https://github.com/phantomic12/yapper" target="_blank" rel="noopener">Source</a>
         </p>
       </footer>
     </div>
@@ -212,7 +207,7 @@ function bindEvents() {
       audioEl.play();
     } catch (err) {
       const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-      console.error('[voxelforge] generate failed:', err);
+      console.error('[yapper] generate failed:', err);
       const card = overlay.querySelector('.gen-overlay__card')!;
       card.innerHTML = `
         <div class="gen-overlay__check" style="background:#dc2626">✕</div>
@@ -232,7 +227,7 @@ function bindEvents() {
     const url = URL.createObjectURL(lastAudioBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `voxelforge-tts-${Date.now()}.wav`;
+    a.download = `yapper-${Date.now()}.wav`;
     a.click();
     URL.revokeObjectURL(url);
   });
