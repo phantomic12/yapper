@@ -1,7 +1,18 @@
 import './style.css';
+import { env } from '@huggingface/transformers';
 import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
 import { KittenCustomEngine } from './engines/kitten';
+
+// ─── Run transformers.js inference in a Web Worker ──────────────
+// Without this, an MMS-TTS or SpeechT5 generation freezes the page
+// (the WASM runs on the main thread). With proxy = true, the heavy
+// work happens off-thread; the main thread stays responsive for typing,
+// model switching, queueing more jobs, etc.
+(env.backends.onnx as { wasm: { proxy?: boolean; numThreads?: number } }).wasm = {
+  proxy: true,
+  numThreads: 1,
+};
 
 // ─── Register custom engines (one-time, before render) ──────────
 // Both Kokoro and Kitten are integrated as CustomEngine instances. We

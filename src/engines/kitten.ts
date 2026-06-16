@@ -60,18 +60,22 @@ interface NpyArray {
 
 function parseNpy(buffer: ArrayBuffer): NpyArray {
   const view = new DataView(buffer);
-  // Magic: \x93NUMPY
-  if (view.getUint8(0) !== 0x93 || view.getUint8(1) !== 0x4E) {
+  // Magic: \x93NUMPY (6 bytes: 93 4E 55 4D 50 59)
+  if (view.getUint8(0) !== 0x93 || view.getUint8(1) !== 0x4E ||
+      view.getUint8(2) !== 0x55 || view.getUint8(3) !== 0x4D ||
+      view.getUint8(4) !== 0x50 || view.getUint8(5) !== 0x59) {
     throw new Error('Not a .npy file (bad magic)');
   }
-  // Version: 1 byte major, 1 byte minor
-  const major = view.getUint8(2);
+  // Version: major at byte 6
+  const major = view.getUint8(6);
   if (major !== 1 && major !== 2 && major !== 3) {
     throw new Error(`Unsupported .npy version: ${major}`);
   }
-  // Header length: 2 bytes (v1) or 4 bytes (v2/v3)
-  const headerLen = major === 1 ? view.getUint16(3, true) : view.getUint32(4, true);
-  const headerOffset = major === 1 ? 5 : 8;
+  // Header length: 2 bytes at offset 8-9 (v1) or 4 bytes at offset 12-15 (v2/v3)
+  const headerOffset = major === 1 ? 10 : 14;
+  const headerLen = major === 1
+    ? view.getUint16(8, true)
+    : view.getUint32(12, true);
   const headerBytes = new Uint8Array(buffer, headerOffset, headerLen);
   const header = strFromU8(headerBytes);
 
@@ -155,6 +159,11 @@ async function getOrt() {
     ortModule = await import('onnxruntime-web');
     // Configure WASM paths. The single-threaded WASM is small and works everywhere.
     ortModule.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
+    // Run inference in a Web Worker so the main thread stays responsive
+    // while a job is generating. Without this, a 20-second Kokoro
+    // generation would freeze the page for 20 seconds.
+    ortModule.env.wasm.proxy = true;
+    ortModule.env.wasm.numThreads = 1;
   }
   return ortModule;
 }
