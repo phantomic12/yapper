@@ -16,8 +16,12 @@ export interface TTSModel {
    * Sampling rate of the model's output audio (Hz). MMS-TTS = 16000, SpeechT5 = 16000.
    */
   sampleRate?: number;
-  /** If true, use the unquantized fp32 model (required for SpeechT5 quality). */
-  quantized?: boolean;
+  /**
+   * v3 data type passed to the pipeline. SpeechT5 MUST use 'fp32' — the
+   * quantized variant produces garbled audio (see huggingface/transformers.js#406).
+   * MMS-TTS uses 'q8' by default for smaller downloads with acceptable quality.
+   */
+  dtype?: 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16';
 }
 
 export const MODELS: TTSModel[] = [
@@ -28,6 +32,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS. 1,100+ languages supported.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
   {
     id: 'speecht5',
@@ -39,8 +44,9 @@ export const MODELS: TTSModel[] = [
     // SpeechT5 has no built-in default speaker — must pass speaker embeddings.
     // Using the public CMU-Arctic xvector sample from the Transformers.js docs dataset.
     speakerEmbeddings: 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin',
-    // SpeechT5 must use unquantized fp32 — quantized versions produce distorted/garbled audio.
-    quantized: false,
+    // SpeechT5 must use fp32 — the quantized variant produces garbled audio
+    // (huggingface/transformers.js#406).
+    dtype: 'fp32',
   },
   {
     id: 'mms-tts-spa',
@@ -49,6 +55,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS for Spanish.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
   {
     id: 'mms-tts-fra',
@@ -57,6 +64,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS for French.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
   {
     id: 'mms-tts-deu',
@@ -65,6 +73,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS for German.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
   {
     id: 'mms-tts-jpn',
@@ -73,6 +82,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS for Japanese.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
   {
     id: 'mms-tts-zho',
@@ -81,6 +91,7 @@ export const MODELS: TTSModel[] = [
     description: 'Meta MMS for Chinese.',
     category: 'multilingual',
     sampleRate: 16000,
+    dtype: 'q8',
   },
 ];
 
@@ -139,10 +150,11 @@ export class TTSEngine {
     this.events.onProgress?.(0, 1, model.name);
 
     try {
-      // v3 API: use `quantized: false` for unquantized models (SpeechT5 needs fp32).
-      // For all other models, default to quantized (smaller download, acceptable quality).
+      // v3 API uses `dtype` (e.g. 'fp32', 'q8', 'q4'). Default to 'q8' for compact
+      // downloads; SpeechT5 overrides to 'fp32' because the quantized variant
+      // produces garbled output (huggingface/transformers.js#406).
       const newPipe = await pipeline('text-to-speech', model.modelId, {
-        quantized: model.quantized ?? true,
+        dtype: model.dtype ?? 'q8',
         progress_callback: (progress: any) => {
           if (progress.status === 'progress') {
             this.events.onProgress?.(

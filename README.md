@@ -1,4 +1,4 @@
-# VoxelForge TTS 🔊
+# Yapper 🔊
 
 **Privacy-first text-to-speech that runs entirely in your browser.**
 
