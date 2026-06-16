@@ -17,9 +17,10 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 
 const MODEL_URL = 'https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/kitten_tts_nano_v0_8.onnx';
 const VOICES_URL = 'https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/voices.npz';
-// Tokenizer (phoneme vocab) is from the reference demo's bundled file.
-// raw.githubusercontent.com serves CORS: * so the browser can fetch it directly.
-const TOKENIZER_URL = 'https://raw.githubusercontent.com/balas-world/kitten-tts-web-demo/main/public/tts-model/tokenizer.json';
+// Tokenizer (phoneme vocab) is mirrored from the original demo's bundled
+// file (balas-world/kitten-tts-web-demo). Served from /lib/ at runtime —
+// no external repo dependency, fully self-contained.
+const TOKENIZER_URL = `${import.meta.env.BASE_URL}lib/kitten-tokenizer.json`;
 // Phonemizer: eSpeak NG WASM wrapped by xenova/phonemizer.js. Loaded from CDN
 // at runtime (jsdelivr's field in their package.json points to this file).
 const PHONEMIZER_URL = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
