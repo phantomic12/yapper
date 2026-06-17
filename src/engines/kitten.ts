@@ -157,13 +157,14 @@ let ortModule: any = null;
 async function getOrt() {
   if (!ortModule) {
     ortModule = await import('onnxruntime-web');
-    // Configure WASM paths. The single-threaded WASM is small and works everywhere.
-    ortModule.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
-    // Run inference in a Web Worker so the main thread stays responsive
-    // while a job is generating. Without this, a 20-second Kokoro
-    // generation would freeze the page for 20 seconds.
-    ortModule.env.wasm.proxy = true;
-    ortModule.env.wasm.numThreads = 1;
+    // Web Worker proxy is intentionally NOT enabled. With Vite's bundling,
+    // the proxy worker can't find the WASM (Vite emits the WASM with a content
+    // hash; `wasmPaths` doesn't help because the worker fetches from the same
+    // path as the main script, which is content-hashed). Result was
+    // "no available backend found". Inference runs on the main thread —
+    // generation blocks the page for the duration, but the queue still
+    // accepts new jobs (each is just blocked behind the current one).
+    // TODO: implement proper off-thread inference via a Vite `?worker` import.
   }
   return ortModule;
 }
