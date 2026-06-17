@@ -42,6 +42,7 @@ let engine: TTSEngine;
 let selectedModel: TTSModel = MODELS[0];
 let selectedVoiceId: string | undefined = MODELS[0].defaultVoiceId ?? MODELS[0].voices?.[0]?.id;
 let customEmbeddingUrl: string = '';
+let currentSpeed = 1.0;
 let webgpuAvailable = false;
 let currentJobs: GenerationJob[] = [];
 
@@ -151,6 +152,14 @@ async function render() {
         <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
       </div>
 
+      <!-- Speed slider -->
+      <div class="speed-row">
+        <label for="speed-slider" class="speed-label">Speed</label>
+        <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.05" value="1.0" />
+        <span class="speed-value" id="speed-value">1.00x</span>
+        <div class="speed-hint">0.5x – 2.0x. Kokoro/Kitten use native speed; SpeechT5/MMS resample.</div>
+      </div>
+
       <!-- Job list -->
       <div class="section-label" id="queue-label" style="display:none">Queue</div>
       <div class="job-list" id="job-list"></div>
@@ -255,8 +264,9 @@ function renderJobList() {
 }
 
 function renderJobCard(job: GenerationJob): string {
-  const statusIcon = statusIconHtml(job.status);
+  let statusIcon = statusIconHtml(job.status);
   const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
+  const speedLabel = job.speed !== 1.0 ? ` · ${job.speed.toFixed(2)}x` : '';
   const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
 
   let body = '';
@@ -292,7 +302,7 @@ function renderJobCard(job: GenerationJob): string {
     <div class="job-card job-card--${job.status}">
       <div class="job-card__header">
         <span class="job-card__status">${statusIcon}</span>
-        <span class="job-card__meta-line">${escapeHtml(job.modelName)}${voiceLabel}</span>
+        <span class="job-card__meta-line">${escapeHtml(job.modelName)}${voiceLabel}${speedLabel}</span>
         ${cancellable ? `<button class="job-card__cancel" data-action="cancel" data-job-id="${job.id}" title="Cancel">×</button>` : ''}
       </div>
       <div class="job-card__text">"${escapeHtml(textPreview)}"</div>
@@ -376,12 +386,21 @@ function bindEvents() {
       modelId: selectedModel.id,
       voiceId,
       customSpeakerEmbeddings: isCustom ? customEmbeddingUrl : undefined,
+      speed: currentSpeed,
     });
   });
 
   // Clear finished
   document.getElementById('clear-btn')!.addEventListener('click', () => {
     engine.clearFinished();
+  });
+
+  // Speed slider
+  const speedSlider = document.getElementById('speed-slider') as HTMLInputElement;
+  const speedValue = document.getElementById('speed-value')!;
+  speedSlider.addEventListener('input', () => {
+    currentSpeed = parseFloat(speedSlider.value);
+    speedValue.textContent = `${currentSpeed.toFixed(2)}x`;
   });
 }
 

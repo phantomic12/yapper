@@ -220,12 +220,13 @@ export class KittenCustomEngine implements CustomEngine {
     return { sampleRate: this.sampleRate };
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string): Promise<{ audio: Float32Array; samplingRate: number }> {
+  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }> {
     if (!this.session || !this.tokenizer) {
       throw new Error('Kitten model not loaded');
     }
     const phonemize = await getPhonemize();
     const voice = voiceId ?? 'expr-voice-2-m';
+    const speed = options?.speed ?? 1.0;
     const voiceArr = this.voices[voice];
     if (!voiceArr) throw new Error(`Unknown voice: ${voice}`);
     // The voice array is shape (400, 256) in row-major. We use the first
@@ -249,7 +250,7 @@ export class KittenCustomEngine implements CustomEngine {
     const inputs = {
       input_ids: new ort.Tensor('int64', inputIdsBig, [1, inputIdsBig.length]),
       style: new ort.Tensor('float32', voiceVec, [1, 256]),
-      speed: new ort.Tensor('float32', new Float32Array([1.0]), [1]),
+      speed: new ort.Tensor('float32', new Float32Array([speed]), [1]),
     };
 
     const result = await this.session.run(inputs);

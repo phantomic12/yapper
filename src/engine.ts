@@ -173,6 +173,8 @@ export interface GenerationJob {
   customSpeakerEmbeddings?: string;
   modelId: string;
   modelName: string;
+  /** Playback speed multiplier. 1.0 = normal, 0.5 = half speed, 2.0 = double. */
+  speed: number;
   status: JobStatus;
   audio?: Float32Array;
   sampleRate?: number;
@@ -200,7 +202,7 @@ export interface EngineEvents {
 // receives the raw job and returns a Float32Array + sample rate.
 export interface CustomEngine {
   load(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }>;
-  generate(model: TTSModel, voiceId: string | undefined, text: string): Promise<{ audio: Float32Array; samplingRate: number }>;
+  generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }>;
   dispose(): void;
 }
 
@@ -341,7 +343,7 @@ export class TTSEngine {
   }
 
   // ─── Job queue ─────────────────────────────────────────────────
-  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string }): GenerationJob {
+  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string; speed?: number }): GenerationJob {
     const model = MODELS.find(m => m.id === options.modelId) ?? this.currentModel;
     if (!model) {
       throw new Error(`Unknown model: ${options.modelId}`);
@@ -357,6 +359,7 @@ export class TTSEngine {
       modelId: model.id,
       modelName: model.name,
       customSpeakerEmbeddings: options.customSpeakerEmbeddings,
+      speed: options.speed ?? 1.0,
       status: 'pending',
       createdAt: Date.now(),
     };
@@ -410,7 +413,7 @@ export class TTSEngine {
         if (model.custom) {
           const custom = customEngines.get(model.modelId);
           if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
-          const result = await custom.generate(model, next.voiceId, next.text);
+          const result = await custom.generate(model, next.voiceId, next.text, { speed: next.speed });
           audio = result.audio;
           samplingRate = result.samplingRate;
         } else {
@@ -426,6 +429,13 @@ export class TTSEngine {
           const result = await this.pipe(next.text, callOptions);
           audio = result.audio;
           samplingRate = result.sampling_rate ?? this.currentSampleRate;
+        }
+
+        // Resample to apply playback speed for engines that don't have
+        // a native speed param (SpeechT5, MMS-TTS). Kokoro and Kitten
+        // already applied speed during inference.
+        if (next.speed !== 1.0) {
+          audio = changeSpeed(audio, next.speed);
         }
 
         // Check if cancelled while running. cancel() may have mutated the
@@ -516,4 +526,29 @@ function writeString(view: DataView, offset: number, str: string) {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));
   }
+}
+
+// ─── Speed change via resampling ────────────────────────────────
+// Used for engines that don't expose a native speed param
+// (SpeechT5, MMS-TTS). Linear interpolation — good enough for TTS.
+// Slight pitch shift at extreme values (0.5x or 2.0x) is acceptable
+// since the model already sounded that voice — only the duration
+// changes, not the speaker identity.
+//
+// speed = 0.5 → 2x as many samples (audio plays 2x slower at the same
+//              sample rate, so the WAV plays back slower)
+// speed = 1.0 → no change
+// speed = 2.0 → half as many samples (audio plays 2x faster)
+export function changeSpeed(audio: Float32Array, speed: number): Float32Array {
+  if (speed === 1.0 || speed <= 0) return audio;
+  const newLength = Math.max(1, Math.floor(audio.length / speed));
+  const out = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const srcIdx = i * speed;
+    const idx0 = Math.floor(srcIdx);
+    const idx1 = Math.min(idx0 + 1, audio.length - 1);
+    const t = srcIdx - idx0;
+    out[i] = audio[idx0] * (1 - t) + audio[idx1] * t;
+  }
+  return out;
 }

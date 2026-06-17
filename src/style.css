@@ -664,6 +664,66 @@ body {
   cursor: not-allowed;
 }
 
+/* ─── Speed slider ──────────────────────────────────────────── */
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.speed-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 50px;
+}
+#speed-slider {
+  flex: 1;
+  min-width: 200px;
+  height: 4px;
+  appearance: none;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+#speed-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--bg-elevated);
+  transition: transform 0.1s;
+}
+#speed-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+#speed-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--bg-elevated);
+}
+.speed-value {
+  font-size: 0.85rem;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  min-width: 50px;
+  text-align: right;
+}
+.speed-hint {
+  width: 100%;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-style: italic;
+  margin-top: 2px;
+}
+
 /* ─── Job list ───────────────────────────────────────────── */
 .job-list {
   display: flex;

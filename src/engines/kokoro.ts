@@ -93,11 +93,12 @@ export class KokoroCustomEngine implements CustomEngine {
     }
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string): Promise<{ audio: Float32Array; samplingRate: number }> {
+  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }> {
     if (!this.tts) throw new Error('Kokoro model not loaded');
     const voice = voiceId ?? 'af_heart';
+    const speed = options?.speed ?? 1.0;
     // The kokoro-js API returns a `RawAudio` (audio Float32Array + sampling_rate).
-    const result = await this.tts.generate(text, { voice, speed: 1.0 });
+    const result = await this.tts.generate(text, { voice, speed });
     return {
       audio: result.audio as Float32Array,
       samplingRate: (result as any).sampling_rate ?? KOKORO_SAMPLE_RATE,
