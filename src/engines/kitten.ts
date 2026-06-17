@@ -226,8 +226,11 @@ export class KittenCustomEngine implements CustomEngine {
     }
     const phonemize = await getPhonemize();
     const voice = voiceId ?? 'expr-voice-2-m';
-    const voiceVec = this.voices[voice]?.[0]; // use first 256-dim frame
-    if (!voiceVec) throw new Error(`Unknown voice: ${voice}`);
+    const voiceArr = this.voices[voice];
+    if (!voiceArr) throw new Error(`Unknown voice: ${voice}`);
+    // The voice array is shape (400, 256) in row-major. We use the first
+    // 256-dim frame as the style vector (matches the reference demo).
+    const voiceVec = voiceArr.slice(0, 256);
 
     // Phonemize → wrap with $ boundaries → tokenize
     const phonemes = await phonemize(text, 'en-us');
@@ -245,7 +248,7 @@ export class KittenCustomEngine implements CustomEngine {
     const ort = await getOrt();
     const inputs = {
       input_ids: new ort.Tensor('int64', inputIdsBig, [1, inputIdsBig.length]),
-      style: new ort.Tensor('float32', new Float32Array(voiceVec), [1, 256]),
+      style: new ort.Tensor('float32', voiceVec, [1, 256]),
       speed: new ort.Tensor('float32', new Float32Array([1.0]), [1]),
     };
 
