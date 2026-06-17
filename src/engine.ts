@@ -34,21 +34,31 @@ export interface TTSModel {
    * integration registered via `registerCustomEngine`.
    */
   custom?: boolean;
+  /** ISO 639-1 language code (e.g. 'en', 'es', 'zh') or 'multi' for multilingual models. */
+  language?: string;
+  /** Approximate download size in MB — shown on the model card. */
+  sizeMB?: number;
+  /**
+   * Path within the HF repo to the model file. Required for custom
+   * models (Kokoro picks which ONNX variant to use; Kitten picks
+   * between nano/mini/micro). Defaults to the repo's standard file.
+   */
+  modelFile?: string;
 }
 
 export const MODELS: TTSModel[] = [
   {
     id: 'kokoro-82m',
-    name: 'Kokoro-82M',
+    name: 'Kokoro-82M (q8)',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    description: 'High-quality 82M-param TTS. 28 built-in voices. Powered by kokoro-js (xenova).',
+    modelFile: 'onnx/model_q8f16.onnx',
+    description: 'High-quality 82M TTS. 28 built-in voices. q8f16 quantized (~86MB).',
     category: 'premium',
     sampleRate: 24000,
     custom: true,
+    language: 'en',
+    sizeMB: 86,
     voices: [
-      // Populated at runtime from kokoro-js's KokoroTTS.voices
-      // (see src/engines/kokoro.ts). Hardcoded list below is used until
-      // the model is loaded.
       { id: 'af_heart',   name: 'Heart (en-us, Female)' },
       { id: 'af_bella',   name: 'Bella (en-us, Female)' },
       { id: 'am_michael', name: 'Michael (en-us, Male)' },
@@ -59,13 +69,25 @@ export const MODELS: TTSModel[] = [
     defaultVoiceId: 'af_heart',
   },
   {
-    id: 'mms-tts-eng',
-    name: 'MMS-TTS (English)',
-    modelId: 'Xenova/mms-tts-eng',
-    description: 'Meta MMS. Fast, compact, single voice.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
+    id: 'kokoro-82m-fp16',
+    name: 'Kokoro-82M (fp16)',
+    modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+    modelFile: 'onnx/model_fp16.onnx',
+    description: 'Kokoro-82M fp16 (~163MB). Higher quality than q8, larger download.',
+    category: 'premium',
+    sampleRate: 24000,
+    custom: true,
+    language: 'en',
+    sizeMB: 163,
+    voices: [
+      { id: 'af_heart',   name: 'Heart (en-us, Female)' },
+      { id: 'af_bella',   name: 'Bella (en-us, Female)' },
+      { id: 'am_michael', name: 'Michael (en-us, Male)' },
+      { id: 'am_adam',    name: 'Adam (en-us, Male)' },
+      { id: 'bf_emma',    name: 'Emma (en-gb, Female)' },
+      { id: 'bm_george',  name: 'George (en-gb, Male)' },
+    ],
+    defaultVoiceId: 'af_heart',
   },
   {
     id: 'speecht5',
@@ -74,9 +96,9 @@ export const MODELS: TTSModel[] = [
     description: 'Microsoft transformer-based TTS. Multiple voices via speaker embeddings.',
     category: 'balanced',
     sampleRate: 16000,
-    // SpeechT5 must use fp32 — the quantized variant produces garbled audio
-    // (huggingface/transformers.js#406).
     dtype: 'fp32',
+    language: 'en',
+    sizeMB: 330,
     voices: [
       {
         id: 'cmarctic',
@@ -87,20 +109,22 @@ export const MODELS: TTSModel[] = [
       {
         id: 'custom',
         name: 'Custom (paste URL)',
-        description: 'Provide your own 512-dim xvector .bin file URL. Generate one with the SpeechT5 reference script.',
-        speakerEmbeddings: '', // filled in at runtime by the UI
+        description: 'Provide your own 512-dim xvector .bin file URL.',
+        speakerEmbeddings: '',
       },
     ],
     defaultVoiceId: 'cmarctic',
   },
   {
-    id: 'kitten-nano',
-    name: 'Kitten TTS Nano',
-    modelId: 'KittenML/kitten-tts-nano-0.8-int8',
-    description: 'Tiny (~24MB) fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
-    category: 'fast',
+    id: 'kitten-mini',
+    name: 'Kitten TTS Mini (~78MB)',
+    modelId: 'KittenML/kitten-tts-mini-0.8',
+    description: 'Larger Kitten model, better quality. 8 voices.',
+    category: 'balanced',
     sampleRate: 24000,
     custom: true,
+    language: 'en',
+    sizeMB: 78,
     voices: [
       { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
       { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
@@ -114,50 +138,42 @@ export const MODELS: TTSModel[] = [
     defaultVoiceId: 'expr-voice-2-m',
   },
   {
-    id: 'mms-tts-spa',
-    name: 'MMS-TTS (Spanish)',
-    modelId: 'Xenova/mms-tts-spa',
-    description: 'Meta MMS for Spanish.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
+    id: 'kitten-nano',
+    name: 'Kitten TTS Nano (~24MB)',
+    modelId: 'KittenML/kitten-tts-nano-0.8-int8',
+    description: 'Tiny fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
+    category: 'fast',
+    sampleRate: 24000,
+    custom: true,
+    language: 'en',
+    sizeMB: 24,
+    voices: [
+      { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
+      { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
+      { id: 'expr-voice-3-m', name: 'Voice 3 (Male)' },
+      { id: 'expr-voice-3-f', name: 'Voice 3 (Female)' },
+      { id: 'expr-voice-4-m', name: 'Voice 4 (Male)' },
+      { id: 'expr-voice-4-f', name: 'Voice 4 (Female)' },
+      { id: 'expr-voice-5-m', name: 'Voice 5 (Male)' },
+      { id: 'expr-voice-5-f', name: 'Voice 5 (Female)' },
+    ],
+    defaultVoiceId: 'expr-voice-2-m',
   },
-  {
-    id: 'mms-tts-fra',
-    name: 'MMS-TTS (French)',
-    modelId: 'Xenova/mms-tts-fra',
-    description: 'Meta MMS for French.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
-  },
-  {
-    id: 'mms-tts-deu',
-    name: 'MMS-TTS (German)',
-    modelId: 'Xenova/mms-tts-deu',
-    description: 'Meta MMS for German.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
-  },
-  {
-    id: 'mms-tts-jpn',
-    name: 'MMS-TTS (Japanese)',
-    modelId: 'Xenova/mms-tts-jpn',
-    description: 'Meta MMS for Japanese.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
-  },
-  {
-    id: 'mms-tts-zho',
-    name: 'MMS-TTS (Chinese)',
-    modelId: 'Xenova/mms-tts-zho',
-    description: 'Meta MMS for Chinese.',
-    category: 'multilingual',
-    sampleRate: 16000,
-    dtype: 'q8',
-  },
+  // ── MMS-TTS — one model per language, q8 quantized ────────────────
+  { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-deu', name: 'MMS-TTS (German)',      modelId: 'Xenova/mms-tts-deu', description: 'Meta MMS for German.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'de', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-ita', name: 'MMS-TTS (Italian)',     modelId: 'Xenova/mms-tts-ita', description: 'Meta MMS for Italian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'it', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-por', name: 'MMS-TTS (Portuguese)',  modelId: 'Xenova/mms-tts-por', description: 'Meta MMS for Portuguese.',  category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pt', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-rus', name: 'MMS-TTS (Russian)',     modelId: 'Xenova/mms-tts-rus', description: 'Meta MMS for Russian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ru', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-jpn', name: 'MMS-TTS (Japanese)',    modelId: 'Xenova/mms-tts-jpn', description: 'Meta MMS for Japanese.',    category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ja', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-zho', name: 'MMS-TTS (Chinese)',     modelId: 'Xenova/mms-tts-zho', description: 'Meta MMS for Chinese.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'zh', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-kor', name: 'MMS-TTS (Korean)',      modelId: 'Xenova/mms-tts-kor', description: 'Meta MMS for Korean.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ko', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-hin', name: 'MMS-TTS (Hindi)',       modelId: 'Xenova/mms-tts-hin', description: 'Meta MMS for Hindi.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'hi', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-ara', name: 'MMS-TTS (Arabic)',      modelId: 'Xenova/mms-tts-ara', description: 'Meta MMS for Arabic.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ar', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-nld', name: 'MMS-TTS (Dutch)',       modelId: 'Xenova/mms-tts-nld', description: 'Meta MMS for Dutch.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'nl', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-pol', name: 'MMS-TTS (Polish)',      modelId: 'Xenova/mms-tts-pol', description: 'Meta MMS for Polish.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pl', sizeMB: 50, voices: [], defaultVoiceId: '' },
 ];
 
 // ─── Job queue ───────────────────────────────────────────────────

@@ -15,8 +15,11 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 // vector) for the `style` input. Better TTS would index into the bank by frame,
 // but that requires more API surface than this v1 supports.
 
-const MODEL_URL = 'https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/kitten_tts_nano_v0_8.onnx';
-const VOICES_URL = 'https://huggingface.co/KittenML/kitten-tts-nano-0.8-int8/resolve/main/voices.npz';
+const MODEL_URL_BASE = 'https://huggingface.co/KittenML/';
+// Default ONNX file within the repo. Overridden by model.modelFile per-entry.
+const DEFAULT_KITTEN_MODEL_FILE = 'kitten_tts_nano_v0_8.onnx';
+const VOICES_URL_BASE = 'https://huggingface.co/KittenML/';
+const VOICES_FILE = 'voices.npz';
 // Tokenizer (phoneme vocab) is mirrored from the original demo's bundled
 // file (balas-world/kitten-tts-web-demo). Served from /lib/ at runtime —
 // no external repo dependency, fully self-contained.
@@ -134,6 +137,67 @@ async function loadTokenizer(): Promise<TokenizerData> {
   return { vocab, vocabArray };
 }
 
+// ─── Fetch with diagnostics ─────────────────────────────────────
+// Wraps fetch() with:
+//   - 60s timeout (catches hung connections)
+//   - AbortController so user can cancel via model switching
+//   - On network error, throws a detailed message including URL, status,
+//     and the CORS preflight state — instead of the useless generic
+//     "Failed to fetch" that browsers throw on any opaque error
+async function fetchWithDiagnostics(
+  url: string,
+  label: string,
+  progressCallback?: (loaded: number, total: number) => void,
+  timeoutMs = 60_000,
+): Promise<ArrayBuffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let r: Response;
+  try {
+    r = await fetch(url, { signal: controller.signal, credentials: 'omit' });
+  } catch (err) {
+    clearTimeout(timer);
+    const e = err as Error;
+    if (e.name === 'AbortError') {
+      throw new Error(`${label} fetch timed out after ${timeoutMs / 1000}s (${url})`);
+    }
+    // CORS failures, network failures, and DNS failures all land here
+    // with the same generic message. We can't distinguish them from
+    // user JS, so we surface the URL and the original error.
+    throw new Error(
+      `${label} fetch failed for ${url}\n` +
+      `  Original error: ${e.message || e}\n` +
+      `  This is usually one of: (a) CORS preflight failed — the host must\n` +
+      `  serve Access-Control-Allow-Origin for the page origin, (b) the\n` +
+      `  network is unreachable, (c) the URL is wrong. Open DevTools →\n` +
+      `  Network tab and look for the actual response.`
+    );
+  }
+  clearTimeout(timer);
+  if (!r.ok) {
+    throw new Error(`${label} fetch returned HTTP ${r.status} (${r.statusText}) for ${url}`);
+  }
+  // Stream the body so we can report progress
+  if (!r.body) {
+    return r.arrayBuffer();
+  }
+  const total = Number(r.headers.get('content-length') ?? 0);
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (progressCallback && total) progressCallback(received, total);
+  }
+  const out = new Uint8Array(received);
+  let pos = 0;
+  for (const c of chunks) { out.set(c, pos); pos += c.length; }
+  return out.buffer;
+}
+
 // ─── Phonemizer (lazy + CDN-loaded) ──────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,29 +244,15 @@ export class KittenCustomEngine implements CustomEngine {
     const ort = await getOrt();
 
     // Load all assets in parallel
+    const modelFile = _model.modelFile ?? DEFAULT_KITTEN_MODEL_FILE;
+    const MODEL_URL = `${MODEL_URL_BASE}${_model.modelId}/resolve/main/${modelFile}`;
+    const VOICES_URL = `${VOICES_URL_BASE}${_model.modelId}/resolve/main/${VOICES_FILE}`;
     const [modelBuf, voicesBuf, tokenizer] = await Promise.all([
-      fetch(MODEL_URL).then(async r => {
-        if (!r.ok) throw new Error(`Model fetch failed: ${r.status}`);
-        const total = Number(r.headers.get('content-length') ?? 0);
-        const reader = r.body!.getReader();
-        const chunks: Uint8Array[] = [];
-        let received = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.length;
-          if (progressCallback && total) progressCallback(received, total);
-        }
-        const out = new Uint8Array(received);
-        let pos = 0;
-        for (const c of chunks) { out.set(c, pos); pos += c.length; }
-        return out.buffer;
-      }),
-      fetch(VOICES_URL).then(r => {
-        if (!r.ok) throw new Error(`Voices fetch failed: ${r.status}`);
-        return r.arrayBuffer();
-      }),
+      // Wrap fetch with explicit timeout + better error messages. The
+      // generic "Failed to fetch" from the browser is useless — surface
+      // the URL, the status (if any), and the CORS signal.
+      fetchWithDiagnostics(MODEL_URL, 'Model', progressCallback),
+      fetchWithDiagnostics(VOICES_URL, 'Voices'),
       loadTokenizer(),
     ]);
 

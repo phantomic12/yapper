@@ -43,6 +43,7 @@ let selectedModel: TTSModel = MODELS[0];
 let selectedVoiceId: string | undefined = MODELS[0].defaultVoiceId ?? MODELS[0].voices?.[0]?.id;
 let customEmbeddingUrl: string = '';
 let currentSpeed = 1.0;
+let currentLanguageFilter = 'all';
 let webgpuAvailable = false;
 let currentJobs: GenerationJob[] = [];
 
@@ -98,12 +99,34 @@ async function render() {
 
       <!-- Model Selection -->
       <div class="section-label">Choose a model</div>
+
+      <!-- Language filter -->
+      <div class="language-filter" id="language-filter">
+        <button class="lang-chip lang-chip--active" data-lang="all">All</button>
+        <button class="lang-chip" data-lang="en">English</button>
+        <button class="lang-chip" data-lang="es">Spanish</button>
+        <button class="lang-chip" data-lang="fr">French</button>
+        <button class="lang-chip" data-lang="de">German</button>
+        <button class="lang-chip" data-lang="it">Italian</button>
+        <button class="lang-chip" data-lang="pt">Portuguese</button>
+        <button class="lang-chip" data-lang="ru">Russian</button>
+        <button class="lang-chip" data-lang="ja">Japanese</button>
+        <button class="lang-chip" data-lang="zh">Chinese</button>
+        <button class="lang-chip" data-lang="ko">Korean</button>
+        <button class="lang-chip" data-lang="hi">Hindi</button>
+        <button class="lang-chip" data-lang="ar">Arabic</button>
+      </div>
+
       <div class="model-grid" id="model-grid">
         ${MODELS.map(m => `
-          <button class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}">
+          <button class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}">
             <div class="model-card__name">${m.name}</div>
             <div class="model-card__desc">${m.description}</div>
-            <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
+            <div class="model-card__meta">
+              ${m.sizeMB ? `<span class="model-card__size">~${m.sizeMB}MB</span>` : ''}
+              ${m.language && m.language !== 'en' ? `<span class="model-card__lang">${m.language.toUpperCase()}</span>` : ''}
+              <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
+            </div>
           </button>
         `).join('')}
       </div>
@@ -176,10 +199,24 @@ async function render() {
   `;
 
   renderVoiceSection();
+  renderLanguageFilter();
   bindEvents();
 }
 
 // ─── Voice section render ────────────────────────────────────────
+function renderLanguageFilter() {
+  document.querySelectorAll<HTMLButtonElement>('.lang-chip').forEach(chip => {
+    const lang = chip.dataset.lang!;
+    chip.classList.toggle('lang-chip--active', lang === currentLanguageFilter);
+  });
+  // Show/hide model cards based on filter
+  document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
+    const cardLang = card.dataset.language ?? 'en';
+    const visible = currentLanguageFilter === 'all' || cardLang === currentLanguageFilter;
+    card.style.display = visible ? '' : 'none';
+  });
+}
+
 function renderVoiceSection() {
   const section = document.getElementById('voice-section')!;
   const grid = document.getElementById('voice-grid')!;
@@ -401,6 +438,14 @@ function bindEvents() {
   speedSlider.addEventListener('input', () => {
     currentSpeed = parseFloat(speedSlider.value);
     speedValue.textContent = `${currentSpeed.toFixed(2)}x`;
+  });
+
+  // Language filter
+  document.querySelectorAll<HTMLButtonElement>('.lang-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      currentLanguageFilter = chip.dataset.lang!;
+      renderLanguageFilter();
+    });
   });
 }
 

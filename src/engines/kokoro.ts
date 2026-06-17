@@ -77,8 +77,10 @@ export class KokoroCustomEngine implements CustomEngine {
       const KokoroTTS = (mod as any).KokoroTTS;
 
       // The first call also downloads voices; track via progress callback.
-      this.tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+      const modelFile = _model.modelFile ?? 'onnx/model_q8f16.onnx';
+      this.tts = await KokoroTTS.from_pretrained(_model.modelId, {
         dtype: KOKORO_DTYPE,
+        modelFileName: modelFile,
         progress_callback: (data: any) => {
           if (data?.status === 'progress' && progressCallback) {
             progressCallback(data.loaded ?? 0, data.total ?? 1);
