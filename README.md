@@ -36,6 +36,8 @@
   - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, WebGPU-optimized
   - **SpeechT5** (~330 MB) — multi-voice via 512-dim xvector speaker embeddings
   - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
+- **Read documents aloud** — drop a PDF / DOCX / ODT / EPUB / text / image; text is extracted locally and chunked into the TTS queue. Scanned PDFs can use on-device OCR
+- **Lightweight on-device OCR** — Tesseract.js (LSTM English, self-hosted under `public/lib/tesseract/`, runs in a Web Worker)
 - **Non-blocking queue** — stack up multiple generations, page stays usable
 - **Voice selection** — pick from built-in voices per model, or supply a custom xvector for SpeechT5
 - **Document reader** — upload PDF, DOCX, ODT, EPUB, TXT or Markdown and listen in real time
@@ -61,7 +63,7 @@
 - [Transformers.js](https://huggingface.co/docs/transformers.js) — Hugging Face models in the browser
 - [ONNX Runtime Web](https://onnxruntime.ai) — WebGPU/WASM inference backend
 - [pdfjs-dist](https://github.com/mozilla/pdf.js), [mammoth](https://github.com/mwilliamson/mammoth.js), [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
-- [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR
+- [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR (self-hosted assets)
 - [Vite](https://vitejs.dev) — build tooling
 - TypeScript, vanilla CSS — no framework overhead
 
@@ -97,9 +99,20 @@ npm run build
 ## Privacy
 
 - All text-to-speech inference, document parsing and OCR run **entirely in your browser**
-- Model files and OCR training data are downloaded from public CDNs and cached locally
+- Model files are downloaded from [Hugging Face](https://huggingface.co) (public CDN) and cached locally
+- OCR WASM core and English traineddata ship under `public/lib/tesseract/` — no OCR CDN at runtime
 - **No analytics, no tracking, no server-side processing**
 - Your text inputs and uploaded files never leave your device
+
+## Document reading
+
+Drop a file into the upload zone, or click to browse. Supported formats:
+
+- **PDF** — text extracted per page via pdfjs-dist; pages with little/no text (scanned/image-only) auto-render to canvas and OCR via Tesseract
+- **TXT / Markdown / JSON / CSV** — read as text, Markdown emphasis stripped so TTS doesn't speak "asterisk asterisk"
+- **PNG / JPEG / WebP** — OCR via Tesseract
+
+Extracted text is split into ~1.5k-char sentence-aware chunks. Click **Read all** to queue every chunk, or **Read aloud** per chunk. Loading is one-shot — the OCR worker is reused across pages so the second page of a scanned PDF is essentially instant after the first.
 
 ## License
 

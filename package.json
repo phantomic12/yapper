@@ -2,7 +2,7 @@
   "name": "yapper",
   "version": "0.1.0",
   "type": "module",
-  "description": "Privacy-first browser TTS — all inference runs locally via WebGPU",
+  "description": "Privacy-first browser TTS \u2014 all inference runs locally via WebGPU",
   "license": "MIT",
   "scripts": {
     "postinstall": "node scripts/copy-pdf-worker.mjs",
@@ -38,7 +38,6 @@
     "@eslint/js": "^9.39.5",
     "@vitest/ui": "^4.1.10",
     "eslint": "^9.39.5",
-    "eslint-plugin-vue": "^10.10.0",
     "jsdom": "^29.1.1",
     "playwright": "^1.62.0",
     "typescript": "^6.0.0",

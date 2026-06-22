@@ -2,7 +2,6 @@ import { extractDocument, type ExtractedDocument } from './document-reader';
 import { DocumentReaderSession, prepareReaderData, type ReaderState, type HighlightInfo, type ReaderSentence } from './reader';
 import './style.css';
 import { TTSEngine, MODELS, detectWebGPU, LANGUAGE_NAMES, getSupportedLanguages, type TTSModel, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
-import { KokoroCustomEngine } from './engines/kokoro';
 import { WorkerBackedEngine } from './engines/worker-bridge';
 
 // ─── Note on Web Worker proxy ────────────────────────────────────
@@ -161,6 +160,19 @@ async function render() {
 
       <!-- Status -->
       <div id="status-container"></div>
+
+      <!-- Document Upload (PDF / text / image → OCR → chunks → TTS) -->
+      <div class="section-label">Or read a document</div>
+      <div class="doc-section" id="doc-section">
+        <label class="doc-drop" id="doc-drop" for="doc-file">
+          <input type="file" id="doc-file" accept=".pdf,.txt,.md,.markdown,application/pdf,text/*,image/png,image/jpeg,image/jpg,image/webp" hidden />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div class="doc-drop__title">Drop a PDF, text file, or image</div>
+          <div class="doc-drop__hint">or click to browse — .pdf, .txt, .md, .png, .jpg, .webp</div>
+        </label>
+        <div class="doc-status" id="doc-status"></div>
+        <div class="doc-result" id="doc-result"></div>
+      </div>
 
       <!-- Text Input -->
       <label class="section-label" for="text-input">Text to speak</label>

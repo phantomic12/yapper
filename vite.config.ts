@@ -105,7 +105,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@huggingface/transformers'],
+    // These pull in WASM + worker assets at runtime; pre-bundling breaks the
+    // dynamic import / ?url resolution paths they rely on.
+    exclude: ['@huggingface/transformers', 'tesseract.js', 'pdfjs-dist'],
   },
   publicDir: 'public',
 });
