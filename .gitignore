@@ -9,6 +9,10 @@ node_modules/
 # Build output
 dist/
 
+# Copied public assets
+public/pdf.worker.mjs
+public/pdf.worker.mjs.map
+
 # Editor
 .vscode/
 .idea/

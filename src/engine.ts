@@ -201,6 +201,10 @@ export interface GenerationJob {
   startedAt?: number;
   completedAt?: number;
   durationMs?: number;
+  /** If set, this job belongs to a document-reading session. */
+  readerSessionId?: string;
+  /** Order within that reading session. */
+  readerIndex?: number;
 }
 
 export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
@@ -210,6 +214,10 @@ export interface EngineEvents {
   onEngineStateChange?: (state: EngineState) => void;
   onLoadProgress?: (loaded: number, total: number, modelName: string) => void;
   onEngineError?: (message: string) => void;
+  /** Fired every time a job is mutated (status, progress, completion). */
+  onJobUpdate?: (job: GenerationJob) => void;
+  /** Fired once when a job reaches 'done'. */
+  onJobDone?: (job: GenerationJob) => void;
 }
 
 // ─── Custom-engine registry (Phase C hook) ───────────────────────
@@ -280,6 +288,13 @@ export class TTSEngine {
   private notifyJobs() {
     // Return a copy so consumers can't mutate internal state
     this.events.onJobsChange?.(this.jobs.slice());
+  }
+
+  private notifyJobUpdate(job: GenerationJob) {
+    this.events.onJobUpdate?.(job);
+    if (job.status === 'done') {
+      this.events.onJobDone?.(job);
+    }
   }
 
   // ─── Model loading ─────────────────────────────────────────────
@@ -359,7 +374,7 @@ export class TTSEngine {
   }
 
   // ─── Job queue ─────────────────────────────────────────────────
-  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string; speed?: number }): GenerationJob {
+  enqueue(text: string, options: { modelId: string; voiceId?: string; customSpeakerEmbeddings?: string; speed?: number; readerSessionId?: string; readerIndex?: number }): GenerationJob {
     const model = MODELS.find(m => m.id === options.modelId) ?? this.currentModel;
     if (!model) {
       throw new Error(`Unknown model: ${options.modelId}`);
@@ -378,6 +393,8 @@ export class TTSEngine {
       speed: options.speed ?? 1.0,
       status: 'pending',
       createdAt: Date.now(),
+      readerSessionId: options.readerSessionId,
+      readerIndex: options.readerIndex,
     };
     this.jobs.unshift(job); // newest at top
     this.notifyJobs();
@@ -393,6 +410,7 @@ export class TTSEngine {
       job.status = 'cancelled';
       job.completedAt = Date.now();
       // If this was the active job, the processQueue loop will see it on next tick
+      this.notifyJobUpdate(job);
       this.notifyJobs();
     }
   }
@@ -415,6 +433,7 @@ export class TTSEngine {
       this.processing = true;
       next.status = 'generating';
       next.startedAt = Date.now();
+      this.notifyJobUpdate(next);
       this.notifyJobs();
 
       try {
@@ -480,6 +499,7 @@ export class TTSEngine {
       }
 
       this.processing = false;
+      this.notifyJobUpdate(next);
       this.notifyJobs();
     }
   }

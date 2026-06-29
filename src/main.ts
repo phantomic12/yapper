@@ -1,3 +1,5 @@
+import { extractDocument, type ExtractedDocument, type LayoutBlock } from './document-reader';
+import { DocumentReaderSession, type ReaderState } from './reader';
 import './style.css';
 import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
@@ -46,6 +48,8 @@ let currentSpeed = 1.0;
 let currentLanguageFilter = 'all';
 let webgpuAvailable = false;
 let currentJobs: GenerationJob[] = [];
+let extractedDocument: ExtractedDocument | null = null;
+let readerSession: DocumentReaderSession | null = null;
 
 // ─── Render ──────────────────────────────────────────────────────
 async function render() {
@@ -92,34 +96,36 @@ async function render() {
       </header>
 
       <!-- GPU Status -->
-      <div class="gpu-status">
+      <div class="gpu-status" role="status" aria-live="polite">
         <div class="gpu-status__dot ${webgpuAvailable ? 'gpu-status__dot--on' : 'gpu-status__dot--off'}"></div>
         <span class="gpu-status__label">${webgpuAvailable ? 'WebGPU detected — GPU-accelerated inference' : 'WebGPU unavailable — using CPU fallback (WASM)'}</span>
       </div>
 
       <!-- Model Selection -->
-      <div class="section-label">Choose a model</div>
+      <label class="section-label" for="language-filter">Filter models by language</label>
 
       <!-- Language filter -->
-      <div class="language-filter" id="language-filter">
-        <button class="lang-chip lang-chip--active" data-lang="all">All</button>
-        <button class="lang-chip" data-lang="en">English</button>
-        <button class="lang-chip" data-lang="es">Spanish</button>
-        <button class="lang-chip" data-lang="fr">French</button>
-        <button class="lang-chip" data-lang="de">German</button>
-        <button class="lang-chip" data-lang="it">Italian</button>
-        <button class="lang-chip" data-lang="pt">Portuguese</button>
-        <button class="lang-chip" data-lang="ru">Russian</button>
-        <button class="lang-chip" data-lang="ja">Japanese</button>
-        <button class="lang-chip" data-lang="zh">Chinese</button>
-        <button class="lang-chip" data-lang="ko">Korean</button>
-        <button class="lang-chip" data-lang="hi">Hindi</button>
-        <button class="lang-chip" data-lang="ar">Arabic</button>
+      <div class="select-wrapper language-select-wrapper">
+        <select id="language-filter" class="lang-select" aria-label="Filter models by language">
+          <option value="all" selected>All languages</option>
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="it">Italian</option>
+          <option value="pt">Portuguese</option>
+          <option value="ru">Russian</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+          <option value="ko">Korean</option>
+          <option value="hi">Hindi</option>
+          <option value="ar">Arabic</option>
+        </select>
       </div>
 
-      <div class="model-grid" id="model-grid">
+      <div class="model-grid" id="model-grid" role="radiogroup" aria-label="Choose a TTS model">
         ${MODELS.map(m => `
-          <button class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}">
+          <button class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" aria-checked="${m.id === selectedModel.id}">
             <div class="model-card__name">${m.name}</div>
             <div class="model-card__desc">${m.description}</div>
             <div class="model-card__meta">
@@ -133,8 +139,8 @@ async function render() {
 
       <!-- Voice Selection (hidden if model has no voices) -->
       <div class="voice-section" id="voice-section" style="display:none">
-        <div class="section-label">Voice</div>
-        <div class="voice-grid" id="voice-grid"></div>
+        <div class="section-label" id="voice-section-label">Voice</div>
+        <div class="voice-grid" id="voice-grid" role="radiogroup" aria-labelledby="voice-section-label"></div>
         <div class="custom-voice-input" id="custom-voice-input" style="display:none">
           <input type="url" id="custom-voice-url" placeholder="https://example.com/your-speaker-embedding.bin" />
           <div class="custom-voice-hint">512-dim Float32 xvector. Generate one with the SpeechT5 reference script.</div>
@@ -155,6 +161,7 @@ async function render() {
       <div id="status-container"></div>
 
       <!-- Text Input -->
+      <label class="section-label" for="text-input">Text to speak</label>
       <div class="textarea-wrapper">
         <textarea
           class="textarea"
@@ -162,9 +169,58 @@ async function render() {
           placeholder="Type something to speak…"
           maxlength="2000"
           disabled
+          aria-describedby="char-count"
         >The future of text-to-speech is private, fast, and runs entirely in your browser. No cloud, no tracking, no compromise.</textarea>
-        <span class="char-count" id="char-count">0 / 2000</span>
+        <span class="char-count" id="char-count" aria-live="polite">0 / 2000</span>
       </div>
+
+      <!-- Document upload -->
+      <section class="document-section" id="document-section" aria-labelledby="document-heading" style="display:none">
+        <h2 class="section-label" id="document-heading">Read a document</h2>
+        <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
+          <input
+            type="file"
+            id="document-upload"
+            class="visually-hidden"
+            accept=".pdf,.docx,.odt,.epub,.txt,.md,.markdown"
+            aria-describedby="document-formats"
+          />
+          <label for="document-upload" class="document-drop__label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Drop a document here or click to upload</span>
+          </label>
+          <p class="document-formats" id="document-formats">PDF, DOCX, ODT, EPUB, TXT, MD. Max 25 MB.</p>
+        </div>
+
+        <div class="document-options" id="document-options" style="display:none">
+          <label class="switch">
+            <input type="checkbox" id="ocr-toggle" />
+            <span class="switch__track"></span>
+            <span class="switch__label">Use OCR for PDFs (experimental, slower)</span>
+          </label>
+          <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="document-preview" id="document-preview" style="display:none">
+          <label class="section-label" for="document-text">Extracted text</label>
+          <textarea id="document-text" class="textarea textarea--readonly" readonly rows="6" aria-describedby="document-text-hint"></textarea>
+          <p class="document-hint" id="document-text-hint">Review and edit the extracted text before reading.</p>
+          <div class="document-actions">
+            <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+              <span>Read aloud</span>
+            </button>
+            <button class="document-btn" id="pause-document-btn" type="button" style="display:none">Pause</button>
+            <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
+            <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+
+        <details class="layout-details" id="layout-details" style="display:none">
+          <summary>OCR layout blocks</summary>
+          <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
+        </details>
+      </section>
 
       <!-- Generate (creates a job — does NOT block) -->
       <div class="generate-row">
@@ -201,19 +257,19 @@ async function render() {
   renderVoiceSection();
   renderLanguageFilter();
   bindEvents();
+  updateDocumentSectionVisibility();
 }
 
 // ─── Voice section render ────────────────────────────────────────
 function renderLanguageFilter() {
-  document.querySelectorAll<HTMLButtonElement>('.lang-chip').forEach(chip => {
-    const lang = chip.dataset.lang!;
-    chip.classList.toggle('lang-chip--active', lang === currentLanguageFilter);
-  });
+  const select = document.getElementById('language-filter') as HTMLSelectElement;
+  if (select) select.value = currentLanguageFilter;
   // Show/hide model cards based on filter
   document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
     const cardLang = card.dataset.language ?? 'en';
     const visible = currentLanguageFilter === 'all' || cardLang === currentLanguageFilter;
     card.style.display = visible ? '' : 'none';
+    card.setAttribute('aria-hidden', String(!visible));
   });
 }
 
@@ -230,7 +286,7 @@ function renderVoiceSection() {
 
   section.style.display = '';
   grid.innerHTML = selectedModel.voices.map(v => `
-    <button class="voice-card ${v.id === selectedVoiceId ? 'voice-card--selected' : ''}" data-voice-id="${v.id}">
+    <button class="voice-card ${v.id === selectedVoiceId ? 'voice-card--selected' : ''}" data-voice-id="${v.id}" role="radio" aria-checked="${v.id === selectedVoiceId}">
       <div class="voice-card__name">${escapeHtml(v.name)}</div>
       ${v.description ? `<div class="voice-card__desc">${escapeHtml(v.description)}</div>` : ''}
     </button>
@@ -249,6 +305,17 @@ function renderVoiceSection() {
     card.addEventListener('click', () => {
       selectedVoiceId = card.dataset.voiceId;
       renderVoiceSection();
+    });
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = card.nextElementSibling as HTMLButtonElement | null;
+        next?.focus();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = card.previousElementSibling as HTMLButtonElement | null;
+        prev?.focus();
+      }
     });
   });
 }
@@ -359,21 +426,46 @@ function statusIconHtml(status: GenerationJob['status']): string {
 
 // ─── Event Binding ───────────────────────────────────────────────
 function bindEvents() {
-  // Model cards
+  // Bind model card clicks and keyboard nav
   document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
     card.addEventListener('click', () => {
       const modelId = card.dataset.modelId!;
       const newModel = MODELS.find(m => m.id === modelId);
       if (!newModel) return;
-      selectedModel = newModel;
-      // Reset voice selection to this model's default
-      selectedVoiceId = newModel.defaultVoiceId ?? newModel.voices?.[0]?.id;
-      customEmbeddingUrl = '';
-      document.querySelectorAll('.model-card').forEach(c => c.classList.remove('model-card--selected'));
-      card.classList.add('model-card--selected');
-      renderVoiceSection();
+      selectModel(newModel, card);
+    });
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        focusVisibleModelCard(card, 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        focusVisibleModelCard(card, -1);
+      }
     });
   });
+
+  function selectModel(newModel: TTSModel, card: HTMLElement) {
+    selectedModel = newModel;
+    // Reset voice selection to this model's default
+    selectedVoiceId = newModel.defaultVoiceId ?? newModel.voices?.[0]?.id;
+    customEmbeddingUrl = '';
+    document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(c => {
+      c.classList.remove('model-card--selected');
+      c.setAttribute('aria-checked', 'false');
+    });
+    card.classList.add('model-card--selected');
+    card.setAttribute('aria-checked', 'true');
+    renderVoiceSection();
+  }
+
+  function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1) {
+    const visible = Array.from(document.querySelectorAll<HTMLButtonElement>('.model-card'))
+      .filter(c => c.style.display !== 'none');
+    const idx = visible.indexOf(current as HTMLButtonElement);
+    const next = visible[idx + direction];
+    next?.focus();
+  }
 
   // Custom voice URL input
   const customUrlInput = document.getElementById('custom-voice-url') as HTMLInputElement;
@@ -385,12 +477,15 @@ function bindEvents() {
   document.getElementById('load-btn')!.addEventListener('click', async () => {
     const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
     const loadBtnLabel = document.getElementById('load-btn-label')!;
+    // Bring focus back if keyboard activated
+    loadBtn.focus();
     loadBtn.disabled = true;
     loadBtnLabel.textContent = 'Loading…';
     try {
       await engine.loadModel(selectedModel);
+      updateDocumentSectionVisibility();
     } catch (err) {
-      showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`);
+      showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`, true);
     } finally {
       loadBtn.disabled = false;
     }
@@ -441,12 +536,145 @@ function bindEvents() {
   });
 
   // Language filter
-  document.querySelectorAll<HTMLButtonElement>('.lang-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      currentLanguageFilter = chip.dataset.lang!;
-      renderLanguageFilter();
-    });
+  const langSelect = document.getElementById('language-filter') as HTMLSelectElement;
+  langSelect.addEventListener('change', () => {
+    currentLanguageFilter = langSelect.value;
+    renderLanguageFilter();
   });
+
+  // Document upload
+  bindDocumentEvents();
+}
+
+// ─── Document upload + reader ──────────────────────────────────────
+function bindDocumentEvents() {
+  const drop = document.getElementById('document-drop') as HTMLElement;
+  const input = document.getElementById('document-upload') as HTMLInputElement;
+  const ocrToggle = document.getElementById('ocr-toggle') as HTMLInputElement;
+  const documentProgress = document.getElementById('document-progress') as HTMLElement;
+  const options = document.getElementById('document-options') as HTMLElement;
+  const preview = document.getElementById('document-preview') as HTMLElement;
+  const documentText = document.getElementById('document-text') as HTMLTextAreaElement;
+  const readBtn = document.getElementById('read-document-btn') as HTMLButtonElement;
+  const pauseBtn = document.getElementById('pause-document-btn') as HTMLButtonElement;
+  const stopBtn = document.getElementById('stop-document-btn') as HTMLButtonElement;
+  const readerStatus = document.getElementById('reader-status') as HTMLElement;
+  const layoutDetails = document.getElementById('layout-details') as HTMLDetailsElement;
+  const layoutPre = document.getElementById('layout-pre') as HTMLPreElement;
+
+  function setProgress(msg: string) {
+    documentProgress.textContent = msg;
+  }
+
+  function handleFile(file: File) {
+    if (file.size > 25 * 1024 * 1024) {
+      showStatus('error', 'File is too large. Maximum size is 25 MB.');
+      return;
+    }
+    setProgress('Extracting text…');
+    const useOcr = ocrToggle.checked && file.name.toLowerCase().endsWith('.pdf');
+    extractDocument(file, { useOcr, onProgress: setProgress })
+      .then(doc => {
+        extractedDocument = doc;
+        documentText.value = doc.text;
+        preview.style.display = '';
+        options.style.display = '';
+        layoutDetails.style.display = doc.layoutBlocks && doc.layoutBlocks.length ? '' : 'none';
+        if (doc.layoutBlocks && doc.layoutBlocks.length) {
+          layoutPre.textContent = JSON.stringify(doc.layoutBlocks.slice(0, 50), null, 2)
+            + (doc.layoutBlocks.length > 50 ? '\n…' : '');
+        }
+        setProgress(`Loaded ${doc.name} · ${doc.text.length.toLocaleString()} chars`);
+        documentText.focus();
+      })
+      .catch(err => {
+        setProgress('');
+        showStatus('error', `Could not read document: ${err instanceof Error ? err.message : String(err)}`, true);
+      });
+  }
+
+  drop.addEventListener('click', () => input.click());
+  drop.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      input.click();
+    }
+  });
+
+  drop.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    drop.classList.add('document-drop--active');
+  });
+  drop.addEventListener('dragleave', () => drop.classList.remove('document-drop--active'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('document-drop--active');
+    const file = e.dataTransfer?.files[0];
+    if (file) handleFile(file);
+  });
+
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) handleFile(file);
+  });
+
+  function renderReaderState(state: ReaderState) {
+    readerStatus.textContent = `${state.currentIndex + 1}/${state.totalChunks}`;
+    if (state.status === 'playing') {
+      readBtn.style.display = 'none';
+      pauseBtn.style.display = '';
+      stopBtn.style.display = '';
+      pauseBtn.textContent = 'Pause';
+    } else if (state.status === 'paused') {
+      readBtn.style.display = 'none';
+      pauseBtn.style.display = '';
+      stopBtn.style.display = '';
+      pauseBtn.textContent = 'Resume';
+    } else if (state.status === 'finished') {
+      readBtn.style.display = '';
+      pauseBtn.style.display = 'none';
+      stopBtn.style.display = 'none';
+      readerStatus.textContent = 'Finished';
+    } else {
+      readBtn.style.display = '';
+      pauseBtn.style.display = 'none';
+      stopBtn.style.display = 'none';
+      readerStatus.textContent = '';
+    }
+  }
+
+  readBtn.addEventListener('click', () => {
+    const text = documentText.value.trim();
+    if (!text) return;
+    if (text.length > 20000) {
+      showStatus('error', 'Text is too long to read in one session. Paste a shorter excerpt.', true);
+      return;
+    }
+    readerSession?.stop();
+    readerSession = new DocumentReaderSession(engine, text, {
+      speed: currentSpeed,
+      onStateChange: renderReaderState,
+    });
+    readerSession.start();
+  });
+
+  pauseBtn.addEventListener('click', () => {
+    if (!readerSession) return;
+    if (readerSession.getState().status === 'playing') readerSession.pause();
+    else readerSession.resume();
+  });
+
+  stopBtn.addEventListener('click', () => {
+    readerSession?.stop();
+  });
+}
+
+function updateDocumentSectionVisibility() {
+  const section = document.getElementById('document-section') as HTMLElement;
+  const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
+  const canRead = engine && engine.getEngineState() === 'ready';
+  section.style.display = canRead ? '' : 'none';
+  loadBtn.setAttribute('aria-expanded', String(canRead));
 }
 
 // ─── Engine state handlers ───────────────────────────────────────
@@ -483,6 +711,7 @@ function handleEngineStateChange(state: EngineState) {
       textInput.disabled = false;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
+      updateDocumentSectionVisibility();
       showStatus('success', `${current?.name} is ready. Type something and hit Generate (or queue several).`);
       break;
     }
@@ -511,13 +740,13 @@ function handleEngineError(msg: string) {
   showStatus('error', msg);
 }
 
-function showStatus(type: 'success' | 'error', message: string) {
+function showStatus(type: 'success' | 'error', message: string, assertive = false) {
   const container = document.getElementById('status-container')!;
   const icon = type === 'success'
-    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
-    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
 
-  container.innerHTML = `<div class="status-banner status-banner--${type}">${icon}<span>${message}</span></div>`;
+  container.innerHTML = `<div class="status-banner status-banner--${type}" role="${assertive ? 'alert' : 'status'}" aria-live="${assertive ? 'assertive' : 'polite'}">${icon}<span>${message}</span></div>`;
 }
 
 // ─── Utilities ───────────────────────────────────────────────────
@@ -530,5 +759,5 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// ─── Boot ────────────────────────────────────────────────────────
+// ─── Boot ───────────────────────────────────────────────────────
 render();
