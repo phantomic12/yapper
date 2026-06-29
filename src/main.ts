@@ -175,7 +175,7 @@ async function render() {
       </div>
 
       <!-- Document upload -->
-      <section class="document-section" id="document-section" aria-labelledby="document-heading" style="display:none">
+      <section class="document-section" id="document-section" aria-labelledby="document-heading">
         <h2 class="section-label" id="document-heading">Read a document</h2>
         <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
           <input
@@ -190,6 +190,10 @@ async function render() {
             <span>Drop a document here or click to upload</span>
           </label>
           <p class="document-formats" id="document-formats">PDF, DOCX, ODT, EPUB, TXT, MD. Max 25 MB.</p>
+        </div>
+
+        <div class="document-need-model" id="document-need-model">
+          <p>📄 Upload a document to preview the extracted text. Load a model above to have Yapper read it aloud.</p>
         </div>
 
         <div class="document-options" id="document-options" style="display:none">
@@ -670,11 +674,12 @@ function bindDocumentEvents() {
 }
 
 function updateDocumentSectionVisibility() {
-  const section = document.getElementById('document-section') as HTMLElement;
-  const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
+  const needModel = document.getElementById('document-need-model') as HTMLElement;
+  const readBtn = document.getElementById('read-document-btn') as HTMLButtonElement;
   const canRead = engine && engine.getEngineState() === 'ready';
-  section.style.display = canRead ? '' : 'none';
-  loadBtn.setAttribute('aria-expanded', String(canRead));
+  if (needModel) needModel.style.display = canRead ? 'none' : '';
+  readBtn.disabled = !canRead;
+  readBtn.title = canRead ? 'Read extracted text aloud' : 'Load a model above before reading';
 }
 
 // ─── Engine state handlers ───────────────────────────────────────
@@ -694,6 +699,7 @@ function handleEngineStateChange(state: EngineState) {
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
       loadBtnLabel.textContent = 'Download & Load Model';
+      updateDocumentSectionVisibility();
       break;
 
     case 'loading':
@@ -722,6 +728,7 @@ function handleEngineStateChange(state: EngineState) {
       generateBtn.disabled = true;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
+      updateDocumentSectionVisibility();
       break;
   }
 }
