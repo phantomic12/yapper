@@ -1049,8 +1049,12 @@ body {
 .reader-sentence:hover {
   background: var(--bg-hover);
 }
+.reader-sentence--past {
+  background: var(--bg-surface);
+  color: var(--text-dim);
+}
 .reader-active-sentence {
-  background: rgba(99, 102, 241, 0.18);
+  background: rgba(99, 102, 241, 0.22);
 }
 .reader-word {
   border-radius: 2px;
@@ -1060,11 +1064,85 @@ body {
   background: var(--accent);
   color: #fff;
   font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.12);
 }
 .reader-view:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
+
+/* Full-screen reader overlay */
+.reader-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+}
+.reader-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.reader-overlay__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.reader-overlay__header-controls {
+  display: flex;
+  gap: 8px;
+}
+.reader-overlay__status {
+  padding: 8px 20px 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.reader-overlay__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px max(20px, calc((100vw - 760px) / 2));
+  font-size: clamp(1rem, 2.2vw, 1.35rem);
+  line-height: 1.8;
+  background: var(--bg);
+  color: var(--text);
+}
+.reader-overlay__content .reader-paragraph {
+  margin-bottom: 1.2em;
+}
+.reader-overlay__legend {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 12px 20px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.reader-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.reader-legend::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-sm);
+}
+.reader-legend--past::before { background: var(--bg-surface); border: 1px solid var(--border); }
+.reader-legend--active::before { background: var(--accent); }
+.reader-legend--future::before { background: transparent; border: 1px solid var(--border); }
 
 .document-options { margin: 16px 0; }
 .document-progress {

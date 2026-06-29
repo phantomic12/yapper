@@ -225,8 +225,8 @@ async function render() {
           <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
         </details>
       </section>
+    </div>
 
-      <!-- Generate (creates a job — does NOT block) -->
       <div class="generate-row">
         <button class="generate-btn" id="generate-btn" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
@@ -255,6 +255,27 @@ async function render() {
           <a href="https://github.com/phantomic12/yapper" target="_blank" rel="noopener">Source</a>
         </p>
       </footer>
+    </div>
+
+    <!-- Full-screen reader overlay -->
+    <div class="reader-overlay" id="reader-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="reader-overlay-title">
+      <div class="reader-overlay__header">
+        <h2 class="reader-overlay__title" id="reader-overlay-title">Reading document</h2>
+        <div class="reader-overlay__header-controls">
+          <button class="document-btn" id="reader-overlay-pause" type="button">Pause</button>
+          <button class="document-btn" id="reader-overlay-stop" type="button">Stop</button>
+          <button class="document-btn" id="reader-overlay-close" type="button" aria-label="Close reader">Close</button>
+        </div>
+      </div>
+      <div class="reader-overlay__status" id="reader-overlay-status-wrapper">
+        <span class="reader-status" id="reader-overlay-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="reader-overlay__content" id="reader-overlay-content" role="region" aria-label="Document text" tabindex="0"></div>
+      <div class="reader-overlay__legend" aria-hidden="true">
+        <span class="reader-legend reader-legend--past">Read</span>
+        <span class="reader-legend reader-legend--active">Current</span>
+        <span class="reader-legend reader-legend--future">Upcoming</span>
+      </div>
     </div>
   `;
 
@@ -563,15 +584,34 @@ function bindDocumentEvents() {
   const pauseBtn = document.getElementById('pause-document-btn') as HTMLButtonElement;
   const stopBtn = document.getElementById('stop-document-btn') as HTMLButtonElement;
   const readerStatus = document.getElementById('reader-status') as HTMLElement;
+  const readerOverlay = document.getElementById('reader-overlay') as HTMLElement;
+  const readerOverlayContent = document.getElementById('reader-overlay-content') as HTMLElement;
+  const readerOverlayStatus = document.getElementById('reader-overlay-status') as HTMLElement;
+  const readerOverlayPause = document.getElementById('reader-overlay-pause') as HTMLButtonElement;
+  const readerOverlayStop = document.getElementById('reader-overlay-stop') as HTMLButtonElement;
+  const readerOverlayClose = document.getElementById('reader-overlay-close') as HTMLButtonElement;
   const layoutDetails = document.getElementById('layout-details') as HTMLDetailsElement;
   const layoutPre = document.getElementById('layout-pre') as HTMLPreElement;
+
+  function openReaderOverlay() {
+    if (readerOverlay.style.display === 'none') {
+      readerOverlay.style.display = '';
+      readerOverlayStatus.textContent = readerStatus.textContent;
+      document.body.style.overflow = 'hidden';
+      readerOverlayClose.focus();
+    }
+  }
+  function closeReaderOverlay() {
+    readerOverlay.style.display = 'none';
+    document.body.style.overflow = '';
+  }
 
   function setProgress(msg: string) {
     documentProgress.textContent = msg;
   }
 
-  function renderReaderView(text: string) {
-    readerView.innerHTML = '';
+  function renderReaderContent(target: HTMLElement, text: string) {
+    target.innerHTML = '';
     const { sentences } = prepareReaderData(text, 300);
     const sentenceByPara = new Map<number, ReaderSentence[]>();
     for (const s of sentences) {
@@ -587,22 +627,37 @@ function bindDocumentEvents() {
         const sentenceSpan = document.createElement('span');
         sentenceSpan.className = 'reader-sentence';
         sentenceSpan.dataset.sentenceIndex = String(sentence.globalIndex);
+        sentenceSpan.dataset.chunkIndex = String(sentence.globalIndex); // placeholder, updated later
         for (let w = 0; w < sentence.words.length; w++) {
           const wordSpan = document.createElement('span');
           wordSpan.className = 'reader-word';
           wordSpan.dataset.wordIndex = String(w);
           wordSpan.textContent = sentence.words[w];
           sentenceSpan.appendChild(wordSpan);
-          if (w < sentence.words.length - 1) {
-            sentenceSpan.appendChild(document.createTextNode(' '));
-          }
+          if (w < sentence.words.length - 1) sentenceSpan.appendChild(document.createTextNode(' '));
         }
         p.appendChild(sentenceSpan);
         p.appendChild(document.createTextNode(' '));
       }
-      readerView.appendChild(p);
+      target.appendChild(p);
     }
-    return Array.from(readerView.querySelectorAll('.reader-sentence'));
+    return Array.from(target.querySelectorAll('.reader-sentence'));
+  }
+
+  function renderReaderView(text: string) {
+    return renderReaderContent(readerView, text);
+  }
+
+  function renderOverlay(text: string) {
+    return renderReaderContent(readerOverlayContent, text);
+  }
+
+  function findOverlaySentence(globalIndex: number): HTMLElement | null {
+    return readerOverlayContent.querySelector(`[data-sentence-index="${globalIndex}"]`) as HTMLElement | null;
+  }
+
+  function findOverlayWord(sentence: HTMLElement, wordIndex: number): HTMLElement | null {
+    return sentence.querySelector(`[data-word-index="${wordIndex}"]`) as HTMLElement | null;
   }
 
   function handleFile(file: File) {
@@ -658,15 +713,24 @@ function bindDocumentEvents() {
   });
 
   let lastHighlightedWord: { sentence: number; word: number } | null = null;
+  let activeSentenceElement: HTMLElement | null = null;
 
   function clearHighlight() {
-    if (lastHighlightedWord) {
-      const prevSentence = readerView.querySelector(`[data-sentence-index="${lastHighlightedWord.sentence}"]`);
-      prevSentence?.classList.remove('reader-active-sentence');
-      const prevWord = prevSentence?.querySelector(`[data-word-index="${lastHighlightedWord.word}"]`);
-      prevWord?.classList.remove('reader-active-word');
+    if (activeSentenceElement) {
+      activeSentenceElement.classList.remove('reader-active-sentence');
+      activeSentenceElement.querySelector('.reader-active-word')?.classList.remove('reader-active-word');
     }
+    activeSentenceElement = null;
     lastHighlightedWord = null;
+    // Reset all past-state markers in overlay / inline view
+    document.querySelectorAll('.reader-sentence--past').forEach(el => {
+      el.classList.remove('reader-sentence--past');
+    });
+  }
+
+  function markSentencePast(globalIndex: number) {
+    const el = findOverlaySentence(globalIndex) ?? readerView.querySelector(`[data-sentence-index="${globalIndex}"]`);
+    if (el) el.classList.add('reader-sentence--past');
   }
 
   function applyHighlight(info: HighlightInfo) {
@@ -677,10 +741,20 @@ function bindDocumentEvents() {
     ) {
       return;
     }
-    clearHighlight();
-    const sentence = readerView.querySelector(`[data-sentence-index="${info.sentenceIndex}"]`);
+    const sentence = findOverlaySentence(info.sentenceIndex) ?? readerView.querySelector(`[data-sentence-index="${info.sentenceIndex}"]`);
     if (!sentence) return;
+
+    if (lastHighlightedWord && lastHighlightedWord.sentence !== info.sentenceIndex) {
+      markSentencePast(lastHighlightedWord.sentence);
+    }
+
+    if (activeSentenceElement && activeSentenceElement !== sentence) {
+      activeSentenceElement.classList.remove('reader-active-sentence');
+    }
+    activeSentenceElement?.querySelector('.reader-active-word')?.classList.remove('reader-active-word');
+
     sentence.classList.add('reader-active-sentence');
+    activeSentenceElement = sentence as HTMLElement;
     const word = sentence.querySelector(`[data-word-index="${info.wordIndex}"]`);
     word?.classList.add('reader-active-word');
     lastHighlightedWord = { sentence: info.sentenceIndex, word: info.wordIndex };
@@ -693,11 +767,14 @@ function bindDocumentEvents() {
       statusText += ` · buffered ${state.bufferedIndex + 1}/${state.totalChunks}`;
     }
     readerStatus.textContent = statusText;
+    readerOverlayStatus.textContent = statusText;
+    readerOverlayPause.textContent = state.status === 'playing' ? 'Pause' : 'Resume';
     if (state.status === 'playing') {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
       stopBtn.style.display = '';
       pauseBtn.textContent = 'Pause';
+      openReaderOverlay();
     } else if (state.status === 'paused') {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
@@ -708,12 +785,14 @@ function bindDocumentEvents() {
       pauseBtn.style.display = 'none';
       stopBtn.style.display = 'none';
       readerStatus.textContent = 'Finished';
+      readerOverlayStatus.textContent = 'Finished';
       clearHighlight();
     } else {
       readBtn.style.display = '';
       pauseBtn.style.display = 'none';
       stopBtn.style.display = 'none';
       readerStatus.textContent = '';
+      readerOverlayStatus.textContent = '';
       clearHighlight();
     }
   }
@@ -727,6 +806,7 @@ function bindDocumentEvents() {
     }
     readerSession?.stop();
     clearHighlight();
+    renderOverlay(text);
     readerSession = new DocumentReaderSession(engine, text, {
       chunkSize: 300,
       lookahead: 2,
@@ -746,6 +826,30 @@ function bindDocumentEvents() {
   stopBtn.addEventListener('click', () => {
     readerSession?.stop();
     clearHighlight();
+    closeReaderOverlay();
+  });
+
+  readerOverlayPause.addEventListener('click', () => {
+    if (!readerSession) return;
+    if (readerSession.getState().status === 'playing') readerSession.pause();
+    else readerSession.resume();
+  });
+  readerOverlayStop.addEventListener('click', () => {
+    readerSession?.stop();
+    clearHighlight();
+    closeReaderOverlay();
+  });
+  readerOverlayClose.addEventListener('click', () => {
+    readerSession?.stop();
+    clearHighlight();
+    closeReaderOverlay();
+  });
+  readerOverlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      readerSession?.stop();
+      clearHighlight();
+      closeReaderOverlay();
+    }
   });
 }
 

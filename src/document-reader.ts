@@ -3,8 +3,11 @@ import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import Tesseract from 'tesseract.js';
 
 // PDF.js worker must be told where its worker script is. In Vite we copy the
-// worker to public/ and point the path at runtime.
-const PDFJS_WORKER_PATH = '/pdf.worker.mjs';
+// worker to public/ and reference it relative to the served page so it works on
+// GitHub Pages subpaths as well as at the domain root.
+function getPdfWorkerPath(): string {
+  return new URL('pdf.worker.mjs', window.location.href).href;
+}
 
 export interface ExtractedDocument {
   /** Plain text extracted from the document. */
@@ -88,7 +91,7 @@ function readArrayBuffer(file: File): Promise<ArrayBuffer> {
 
 async function extractPdf(file: File, options: ExtractOptions): Promise<ExtractedDocument> {
   if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_PATH;
+    pdfjs.GlobalWorkerOptions.workerSrc = getPdfWorkerPath();
   }
 
   const buffer = await readArrayBuffer(file);
