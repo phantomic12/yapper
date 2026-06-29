@@ -1025,6 +1025,48 @@ body {
 }
 .document-need-model p { margin: 0; }
 .document-options { margin: 16px 0; }
+
+.reader-view {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin-top: 8px;
+}
+.reader-paragraph {
+  margin: 0 0 0.8em 0;
+}
+.reader-paragraph:last-child { margin-bottom: 0; }
+.reader-sentence {
+  border-radius: var(--radius-sm);
+  transition: background 0.1s ease;
+}
+.reader-sentence:hover {
+  background: var(--bg-hover);
+}
+.reader-active-sentence {
+  background: rgba(99, 102, 241, 0.18);
+}
+.reader-word {
+  border-radius: 2px;
+  transition: background 0.05s ease;
+}
+.reader-active-word {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.reader-view:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.document-options { margin: 16px 0; }
 .document-progress {
   margin-top: 10px;
   font-size: 0.78rem;

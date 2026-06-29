@@ -1,5 +1,5 @@
 import { extractDocument, type ExtractedDocument, type LayoutBlock } from './document-reader';
-import { DocumentReaderSession, type ReaderState } from './reader';
+import { DocumentReaderSession, prepareReaderData, type ReaderState, type HighlightInfo, type ReaderSentence } from './reader';
 import './style.css';
 import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
@@ -206,9 +206,6 @@ async function render() {
         </div>
 
         <div class="document-preview" id="document-preview" style="display:none">
-          <label class="section-label" for="document-text">Extracted text</label>
-          <textarea id="document-text" class="textarea textarea--readonly" readonly rows="6" aria-describedby="document-text-hint"></textarea>
-          <p class="document-hint" id="document-text-hint">Review and edit the extracted text before reading.</p>
           <div class="document-actions">
             <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
@@ -218,6 +215,9 @@ async function render() {
             <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
             <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
           </div>
+          <label class="section-label" for="document-reader-view">Extracted text</label>
+          <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
+          <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
         </div>
 
         <details class="layout-details" id="layout-details" style="display:none">
@@ -558,7 +558,7 @@ function bindDocumentEvents() {
   const documentProgress = document.getElementById('document-progress') as HTMLElement;
   const options = document.getElementById('document-options') as HTMLElement;
   const preview = document.getElementById('document-preview') as HTMLElement;
-  const documentText = document.getElementById('document-text') as HTMLTextAreaElement;
+  const readerView = document.getElementById('document-reader-view') as HTMLElement;
   const readBtn = document.getElementById('read-document-btn') as HTMLButtonElement;
   const pauseBtn = document.getElementById('pause-document-btn') as HTMLButtonElement;
   const stopBtn = document.getElementById('stop-document-btn') as HTMLButtonElement;
@@ -568,6 +568,41 @@ function bindDocumentEvents() {
 
   function setProgress(msg: string) {
     documentProgress.textContent = msg;
+  }
+
+  function renderReaderView(text: string) {
+    readerView.innerHTML = '';
+    const { sentences } = prepareReaderData(text, 300);
+    const sentenceByPara = new Map<number, ReaderSentence[]>();
+    for (const s of sentences) {
+      const list = sentenceByPara.get(s.paragraphIndex) ?? [];
+      list.push(s);
+      sentenceByPara.set(s.paragraphIndex, list);
+    }
+    const paragraphIndices = Array.from(sentenceByPara.keys()).sort((a, b) => a - b);
+    for (const pIdx of paragraphIndices) {
+      const p = document.createElement('p');
+      p.className = 'reader-paragraph';
+      for (const sentence of sentenceByPara.get(pIdx)!) {
+        const sentenceSpan = document.createElement('span');
+        sentenceSpan.className = 'reader-sentence';
+        sentenceSpan.dataset.sentenceIndex = String(sentence.globalIndex);
+        for (let w = 0; w < sentence.words.length; w++) {
+          const wordSpan = document.createElement('span');
+          wordSpan.className = 'reader-word';
+          wordSpan.dataset.wordIndex = String(w);
+          wordSpan.textContent = sentence.words[w];
+          sentenceSpan.appendChild(wordSpan);
+          if (w < sentence.words.length - 1) {
+            sentenceSpan.appendChild(document.createTextNode(' '));
+          }
+        }
+        p.appendChild(sentenceSpan);
+        p.appendChild(document.createTextNode(' '));
+      }
+      readerView.appendChild(p);
+    }
+    return Array.from(readerView.querySelectorAll('.reader-sentence'));
   }
 
   function handleFile(file: File) {
@@ -580,7 +615,7 @@ function bindDocumentEvents() {
     extractDocument(file, { useOcr, onProgress: setProgress })
       .then(doc => {
         extractedDocument = doc;
-        documentText.value = doc.text;
+        renderReaderView(doc.text);
         preview.style.display = '';
         options.style.display = '';
         layoutDetails.style.display = doc.layoutBlocks && doc.layoutBlocks.length ? '' : 'none';
@@ -589,7 +624,7 @@ function bindDocumentEvents() {
             + (doc.layoutBlocks.length > 50 ? '\n…' : '');
         }
         setProgress(`Loaded ${doc.name} · ${doc.text.length.toLocaleString()} chars`);
-        documentText.focus();
+        readerView.focus();
       })
       .catch(err => {
         setProgress('');
@@ -622,8 +657,42 @@ function bindDocumentEvents() {
     if (file) handleFile(file);
   });
 
+  let lastHighlightedWord: { sentence: number; word: number } | null = null;
+
+  function clearHighlight() {
+    if (lastHighlightedWord) {
+      const prevSentence = readerView.querySelector(`[data-sentence-index="${lastHighlightedWord.sentence}"]`);
+      prevSentence?.classList.remove('reader-active-sentence');
+      const prevWord = prevSentence?.querySelector(`[data-word-index="${lastHighlightedWord.word}"]`);
+      prevWord?.classList.remove('reader-active-word');
+    }
+    lastHighlightedWord = null;
+  }
+
+  function applyHighlight(info: HighlightInfo) {
+    if (
+      lastHighlightedWord &&
+      lastHighlightedWord.sentence === info.sentenceIndex &&
+      lastHighlightedWord.word === info.wordIndex
+    ) {
+      return;
+    }
+    clearHighlight();
+    const sentence = readerView.querySelector(`[data-sentence-index="${info.sentenceIndex}"]`);
+    if (!sentence) return;
+    sentence.classList.add('reader-active-sentence');
+    const word = sentence.querySelector(`[data-word-index="${info.wordIndex}"]`);
+    word?.classList.add('reader-active-word');
+    lastHighlightedWord = { sentence: info.sentenceIndex, word: info.wordIndex };
+    word?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   function renderReaderState(state: ReaderState) {
-    readerStatus.textContent = `${state.currentIndex + 1}/${state.totalChunks}`;
+    let statusText = `${state.currentIndex + 1}/${state.totalChunks}`;
+    if (state.totalChunks > 1 && state.bufferedIndex >= 0) {
+      statusText += ` · buffered ${state.bufferedIndex + 1}/${state.totalChunks}`;
+    }
+    readerStatus.textContent = statusText;
     if (state.status === 'playing') {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
@@ -639,25 +708,31 @@ function bindDocumentEvents() {
       pauseBtn.style.display = 'none';
       stopBtn.style.display = 'none';
       readerStatus.textContent = 'Finished';
+      clearHighlight();
     } else {
       readBtn.style.display = '';
       pauseBtn.style.display = 'none';
       stopBtn.style.display = 'none';
       readerStatus.textContent = '';
+      clearHighlight();
     }
   }
 
   readBtn.addEventListener('click', () => {
-    const text = documentText.value.trim();
+    const text = extractedDocument?.text?.trim();
     if (!text) return;
     if (text.length > 20000) {
       showStatus('error', 'Text is too long to read in one session. Paste a shorter excerpt.', true);
       return;
     }
     readerSession?.stop();
+    clearHighlight();
     readerSession = new DocumentReaderSession(engine, text, {
+      chunkSize: 300,
+      lookahead: 2,
       speed: currentSpeed,
       onStateChange: renderReaderState,
+      onHighlight: applyHighlight,
     });
     readerSession.start();
   });
@@ -670,6 +745,7 @@ function bindDocumentEvents() {
 
   stopBtn.addEventListener('click', () => {
     readerSession?.stop();
+    clearHighlight();
   });
 }
 
