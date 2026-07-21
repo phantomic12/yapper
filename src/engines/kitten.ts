@@ -284,9 +284,12 @@ export class KittenCustomEngine implements CustomEngine {
     this.voices = parseNpz(voicesBuf);
     this.tokenizer = tokenizer;
 
-    // Create ONNX session
+    // Create ONNX session. Prefer WebGPU when available — the 78MB kitten-mini
+    // download is more amortized when inference runs on the GPU. WebGPU
+    // is only listed first so ORT-web selects it when supported; if it's
+    // absent or fails, ORT-web transparently falls back to wasm.
     this.session = await ort.InferenceSession.create(modelBuf, {
-      executionProviders: ['wasm'],
+      executionProviders: ['webgpu', 'wasm'],
       // Graph optimization can change numerics for some models; 'basic' is safer
       graphOptimizationLevel: 'basic',
     });
