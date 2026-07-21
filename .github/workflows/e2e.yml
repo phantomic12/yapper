@@ -1,0 +1,91 @@
+name: e2e
+
+# Runs the Playwright/CDP end-to-end test against a live Chrome. Heavier
+# than ci.yml (which only runs unit tests + build) — only fires on push
+# to main and on manual dispatch so PR feedback stays fast.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Node deps
+        run: npm ci
+
+      - name: Install Python deps for e2e_test.py
+        run: pip install websocket-client
+
+      - name: Build the production bundle
+        run: npm run build
+
+      - name: Serve dist/ on a local port
+        # http-server is small and zero-config; we just need to host the
+        # built SPA so the e2e script can load it.
+        run: |
+          npm install --no-save http-server
+          nohup npx http-server dist -p 5173 -s > /tmp/http-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:5173/ > /dev/null && break
+            sleep 1
+          done
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Launch Chrome with remote debugging
+        run: |
+          mkdir -p /tmp/chrome-profile
+          nohup google-chrome \
+            --no-sandbox \
+            --disable-gpu \
+            --headless=new \
+            --remote-debugging-port=9222 \
+            --remote-debugging-address=0.0.0.0 \
+            --user-data-dir=/tmp/chrome-profile \
+            about:blank > /tmp/chrome.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9222/json/version > /dev/null && break
+            sleep 1
+          done
+
+      - name: Run e2e tests
+        env:
+          YAPPER_CDP: http://127.0.0.1:9222
+          YAPPER_URL: http://localhost:5173
+          YAPPER_JUNIT: junit-e2e.xml
+        run: python e2e_test.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: /tmp/yapper-shots/
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-e2e
+          path: junit-e2e.xml

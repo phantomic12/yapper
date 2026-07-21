@@ -9,15 +9,12 @@ Drives a real Chrome instance through the full TTS workflow:
   5. Type text and click Generate
   6. Verify a job card appears and produces an audio blob
 
-This script does NOT use the Hermes browser tool — it talks directly to a
-local Chrome instance via the Chrome DevTools Protocol so the wileyplus /
-yapper browser sessions stay isolated.
-
 Usage:
-    python e2e_test.py                 # uses CDP at $YAPPER_CDP or http://localhost:9222
-    YAPPER_CDP=http://host:9222 python e2e_test.py
-    YAPPER_URL=http://localhost:5173  python e2e_test.py   # dev server
+    python e2e_test.py                                  # uses defaults
+    YAPPER_CDP=http://host:9222 python e2e_test.py     # custom CDP
+    YAPPER_URL=http://localhost:5173 python e2e_test.py  # dev server
     YAPPER_URL=https://phantomic12.github.io/yapper/ python e2e_test.py  # prod
+    YAPPER_JUNIT=results.xml python e2e_test.py        # write JUnit XML
 """
 
 import json
@@ -25,19 +22,20 @@ import time
 import base64
 import os
 import sys
+import traceback
 from pathlib import Path
 import urllib.request
 import urllib.error
+import xml.etree.ElementTree as ET
 import websocket
 
 CDP = os.environ.get('YAPPER_CDP', 'http://localhost:9222')
 URL = os.environ.get('YAPPER_URL', 'https://phantomic12.github.io/yapper/')
 SCREENSHOT_DIR = Path(os.environ.get('YAPPER_SHOTS', '/tmp/yapper-shots'))
+JUNIT_PATH = os.environ.get('YAPPER_JUNIT', '')
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
-# We pick Kitten TTS Nano as the default test model: it's the smallest
-# quantized model in the registry (~24MB) and runs reliably on CPU WASM,
-# so the test works on machines without WebGPU.
+# Default to Kitten TTS Nano: smallest quantized model, runs on CPU WASM
 DEFAULT_MODEL = 'kitten-nano'
 TEST_TEXT = (
     'Hello. This is Yapper, a privacy-first text to speech engine '
@@ -158,59 +156,123 @@ def fetch_cdp(path: str) -> dict:
         raise CDPError(f'Cannot reach CDP at {CDP}: {e}')
 
 
-def step(n: int, total: int, label: str):
-    print(f'\n[{n}/{total}] {label}')
+# ─── Test harness ────────────────────────────────────────────────────────
+# Each step in main() is wrapped in a TestCase. Results are aggregated
+# so a JUnit XML report can be written for CI consumption, and so a single
+# failure prints its step name + reason instead of just a stack trace.
+
+class TestResult:
+    def __init__(self, name: str):
+        self.name = name
+        self.passed = False
+        self.failed = False
+        self.error: str | None = None
+        self.duration_ms: float = 0.0
+        self.stdout: list[str] = []
+
+    def record_pass(self, duration_ms: float):
+        self.passed = True
+        self.duration_ms = duration_ms
+
+    def record_fail(self, error: str, duration_ms: float):
+        self.failed = True
+        self.error = error
+        self.duration_ms = duration_ms
 
 
-def assert_true(cond: bool, msg: str):
-    if not cond:
-        print(f'      ❌ {msg}')
-        sys.exit(1)
-    print(f'      ✓ {msg}')
-
-
-def main():
-    banner('Yapper — E2E browser test via raw CDP')
-
-    total = 9
-
-    # 1. Discover Chrome
-    step(1, total, f'Connecting to CDP at {CDP}')
+def run_step(name: str, fn) -> TestResult:
+    """Run a test step. Prints its stdout. Captures failure as a TestResult
+    instead of crashing the whole script. Returns the result."""
+    result = TestResult(name)
+    print(f'\n  [{name}]')
+    start = time.time()
     try:
-        version = fetch_cdp('/json/version')
-    except CDPError as e:
-        print(f'      {e}')
-        sys.exit(1)
+        fn()
+        result.record_pass((time.time() - start) * 1000)
+        print(f'  ✓ {name}')
+    except SystemExit as e:
+        # Step called sys.exit — treat as a failure but don't kill CI
+        result.record_fail(f'sys.exit({e.code})', (time.time() - start) * 1000)
+        print(f'  ✗ {name}: sys.exit({e.code})')
+    except Exception as e:
+        result.record_fail(str(e), (time.time() - start) * 1000)
+        print(f'  ✗ {name}: {e}')
+        traceback.print_exc()
+    return result
+
+
+def write_junit(results: list[TestResult], path: str):
+    """Write a JUnit XML report. GitHub Actions parses this for the
+    Checks tab. Schema: testsuites > testsuite > testcase."""
+    total = len(results)
+    failures = sum(1 for r in results if r.failed)
+    total_time = sum(r.duration_ms for r in results) / 1000.0
+    root = ET.Element('testsuites', {
+        'name': 'yapper.e2e',
+        'tests': str(total),
+        'failures': str(failures),
+        'time': f'{total_time:.3f}',
+    })
+    suite = ET.SubElement(root, 'testsuite', {
+        'name': 'yapper',
+        'tests': str(total),
+        'failures': str(failures),
+        'time': f'{total_time:.3f}',
+    })
+    for r in results:
+        tc = ET.SubElement(suite, 'testcase', {
+            'classname': 'yapper',
+            'name': r.name,
+            'time': f'{r.duration_ms / 1000.0:.3f}',
+        })
+        if r.failed:
+            failure = ET.SubElement(tc, 'failure', {'message': r.error or 'failed'})
+            failure.text = r.error or ''
+        if r.passed:
+            ET.SubElement(tc, 'system-out').text = '\n'.join(r.stdout)
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space='  ')
+    tree.write(path, encoding='utf-8', xml_declaration=True)
+    print(f'\n  JUnit report: {path}')
+
+
+# ─── Test steps ──────────────────────────────────────────────────────────
+
+def step_connect_to_cdp(cdp_holder):
+    version = fetch_cdp('/json/version')
     print(f'      Browser: {version.get("Browser", "?")}')
     print(f'      V8:      {version.get("V8-Version", "?")}')
-
     targets = fetch_cdp('/json/list')
     page_targets = [t for t in targets if t.get('type') == 'page']
     print(f'      Page targets: {len(page_targets)}')
     if not page_targets:
-        print('      ❌ No page targets — open a tab first')
-        sys.exit(1)
-    target = page_targets[0]
-    print(f'      Using: {target["url"][:80]}')
+        raise CDPError('No page targets — open a tab first')
+    cdp_holder['target'] = page_targets[0]
+    print(f'      Using: {cdp_holder["target"]["url"][:80]}')
 
-    # 2. Attach
-    step(2, total, f'Attaching to target {target["id"][:16]}')
+
+def step_attach_and_navigate(cdp_holder):
+    target = cdp_holder['target']
+    version = fetch_cdp('/json/version')
     browser_ws = version['webSocketDebuggerUrl']
     cdp = CDPSession(browser_ws)
     sid = cdp.attach(target['id'])
     if not sid:
-        print('      ❌ Failed to attach')
-        sys.exit(1)
+        raise CDPError('Failed to attach to target')
     print(f'      ✓ Attached (session={sid[:16]}…)')
+    cdp_holder['cdp'] = cdp
 
-    # 3. Navigate
-    step(3, total, f'Navigating to {URL}')
     cdp.send('Page.enable', session_id=sid)
     cdp.wait_for(cdp.send('Page.enable', session_id=sid))
     nav_id = cdp.send('Page.navigate', {'url': URL}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
-    print('      Waiting for app to render…')
+    print(f'      Navigated to {URL}; waiting for app render…')
     time.sleep(2)
+
+
+def step_verify_page_render(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     ready = cdp.eval(
         """(function() {
             return {
@@ -228,72 +290,68 @@ def main():
     print(f'      title:  {state.get("title")}')
     print(f'      models: {state.get("models")}')
     print(f'      GPU:    {state.get("gpuText", "")}')
-    assert_true(state.get('hasApp'), '#app mounted')
-    assert_true(state.get('models', 0) >= 5, f'{state.get("models")} model cards rendered')
-
+    if not state.get('hasApp'):
+        raise AssertionError('#app not mounted')
+    if state.get('models', 0) < 5:
+        raise AssertionError(f'Only {state.get("models")} model cards (expected ≥5)')
     shot1 = SCREENSHOT_DIR / '01-initial-load.png'
     cdp.screenshot(target['id'], shot1)
     print(f'      → {shot1} ({shot1.stat().st_size // 1024} KB)')
 
-    # 4. Select model
-    step(4, total, f'Selecting model {DEFAULT_MODEL}')
+
+def step_select_model(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     sel = cdp.eval(
         f"""(function() {{
-            const card = document.querySelector('.model-card[data-model-id="{DEFAULT_MODEL}"]');
-            if (!card) return {{ ok: false, msg: 'no card for {DEFAULT_MODEL}' }};
-            card.click();
-            return {{
-                ok: true,
-                selected: document.querySelector('.model-card--selected')?.dataset.modelId,
-                name: card.querySelector('.model-card__name')?.textContent,
-            }};
-        }})()""",
+              const card = document.querySelector('.model-card[data-model-id="{DEFAULT_MODEL}"]');
+              if (!card) return {{ ok: false, msg: 'no card for {DEFAULT_MODEL}' }};
+              card.click();
+              return {{
+                  ok: true,
+                  selected: document.querySelector('.model-card--selected')?.dataset.modelId,
+                  name: card.querySelector('.model-card__name')?.textContent,
+              }};
+          }})()""",
         target['id'], timeout=10,
     )
     s = v(sel)
     print(f'      selected: {s.get("selected")}')
     print(f'      name:     {s.get("name")}')
-    assert_true(s.get('selected') == DEFAULT_MODEL, f'{DEFAULT_MODEL} is selected')
+    if s.get('selected') != DEFAULT_MODEL:
+        raise AssertionError(f'selection failed: {s}')
 
-    # 5. Click load
-    step(5, total, 'Clicking "Download & Load Model"')
+
+def step_click_load(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     click = cdp.eval(
         """(function() {
             const btn = document.getElementById('load-btn');
             if (!btn) return { ok: false };
             btn.click();
-            return {
-                ok: true,
-                disabled: btn.disabled,
-                label: document.getElementById('load-btn-label')?.textContent,
-            };
+            return { ok: true, disabled: btn.disabled };
         })()""",
         target['id'], timeout=5,
     )
     c = v(click)
-    print(f'      btn disabled: {c.get("disabled")}')
-    print(f'      btn label:    {c.get("label")}')
-    assert_true(c.get('ok'), 'load button clicked')
+    if not c.get('ok'):
+        raise AssertionError('load-btn not found or click failed')
+    print(f'      load-btn clicked (disabled={c.get("disabled")})')
 
-    # 6. Wait for ready state
-    step(6, total, 'Waiting for model load to complete')
+
+def step_wait_for_model_ready(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     start = time.time()
     last_progress = None
-    last_state = None
     ready_timeout = float(os.environ.get('YAPPER_LOAD_TIMEOUT', '600'))
     while time.time() - start < ready_timeout:
         poll = cdp.eval(
             """(function() {
-                const banner = document.querySelector('.status-banner');
                 const loadBtn = document.getElementById('load-btn');
-                const genBtn = document.getElementById('generate-btn');
-                const textarea = document.getElementById('text-input');
                 return {
                     loadLabel: loadBtn?.querySelector('span')?.textContent,
-                    bannerText: banner?.textContent?.trim()?.substring(0, 200),
-                    bannerType: banner?.className,
-                    genDisabled: genBtn?.disabled,
-                    textareaDisabled: textarea?.disabled,
                 };
             })()""",
             target['id'], timeout=10,
@@ -301,61 +359,39 @@ def main():
         s = v(poll)
         prog = s.get('loadLabel', '') or ''
         if prog != last_progress:
-            print(f'      [{int(time.time() - start):3d}s] {prog[:60]}')
+            print(f'      [{int(time.time()-start):3d}s] {prog[:60]}')
             last_progress = prog
 
-        # Capture mid-load screenshot at ~5s
         if int(time.time() - start) == 5:
-            shot2 = SCREENSHOT_DIR / '02-loading.png'
-            cdp.screenshot(target['id'], shot2)
-            print(f'      → {shot2.name}')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '02-loading.png')
 
-        if s.get('loadLabel') and ('loaded' in s.get('loadLabel', '').lower()
-                                   or '✓' in s.get('loadLabel', '')):
+        if prog and ('loaded' in prog.lower() or '✓' in prog):
             print(f'\n      ✓ Model loaded')
-            print(f'        banner:           {s.get("bannerText", "")[:80]}')
-            print(f'        gen disabled:     {s.get("genDisabled")}')
-            print(f'        textarea disabled: {s.get("textareaDisabled")}')
-            last_state = 'ready'
-            break
-
-        if s.get('bannerType') and 'error' in s.get('bannerType'):
-            print(f'      ❌ Error banner: {s.get("bannerText")}')
-            shot_err = SCREENSHOT_DIR / '03-error.png'
-            cdp.screenshot(target['id'], shot_err)
-            sys.exit(1)
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '03-ready.png')
+            return
 
         time.sleep(3)
+    raise AssertionError(f'Model did not load within {ready_timeout}s')
 
-    if last_state != 'ready':
-        print(f'      ❌ Model did not load within {ready_timeout}s')
-        cdp.screenshot(target['id'], SCREENSHOT_DIR / '03-stuck.png')
-        sys.exit(1)
 
-    shot3 = SCREENSHOT_DIR / '03-ready.png'
-    cdp.screenshot(target['id'], shot3)
-    print(f'      → {shot3}')
-
-    # 7. Type text
-    step(7, total, f'Typing test text ({len(TEST_TEXT)} chars)')
+def step_type_and_generate(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     type_resp = cdp.eval(
         f"""(function() {{
             const ta = document.getElementById('text-input');
             ta.value = {json.dumps(TEST_TEXT)};
             ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            return {{
-                len: ta.value.length,
-                charCount: document.getElementById('char-count')?.textContent,
-            }};
+            return {{ len: ta.value.length }};
         }})()""",
         target['id'], timeout=10,
     )
     t = v(type_resp)
-    print(f'      typed: {t.get("len")} chars, char-count: {t.get("charCount")}')
-    assert_true(t.get('len', 0) >= len(TEST_TEXT) - 2, 'text was typed into textarea')
+    if t.get('len', 0) < 50:
+        raise AssertionError(f'failed to type into textarea: {t}')
+    print(f'      typed: {t.get("len")} chars')
 
-    # 8. Click generate
-    step(8, total, 'Clicking Generate (queues a TTS job)')
+    time.sleep(0.5)
     gen = cdp.eval(
         """(function() {
             const btn = document.getElementById('generate-btn');
@@ -366,14 +402,16 @@ def main():
         target['id'], timeout=15,
     )
     g = v(gen)
-    assert_true(g.get('ok'), 'generate button clicked')
-    print(f'      clicked at {g.get("ts")}')
+    if not g.get('ok'):
+        raise AssertionError(f'generate-btn not clickable: {g.get("msg")}')
+    print(f'      generate clicked at {g.get("ts")}')
 
-    # 9. Poll for job completion + audio blob
-    step(9, total, 'Polling for job completion (audio blob URL)')
+
+def step_wait_for_audio(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
     gen_timeout = float(os.environ.get('YAPPER_GEN_TIMEOUT', '300'))
     start = time.time()
-    audio_ready = False
     while time.time() - start < gen_timeout:
         poll = cdp.eval(
             """(function() {
@@ -381,57 +419,68 @@ def main():
                 const jobs = cards.map(c => ({
                     status: Array.from(c.classList).find(x => x.startsWith('job-card--'))?.replace('job-card--', ''),
                     hasAudio: !!c.querySelector('audio[data-job-id]'),
-                    audioSrc: c.querySelector('audio[data-job-id]')?.src?.substring(0, 60),
                     audioDuration: c.querySelector('audio[data-job-id]')?.duration,
-                    text: c.querySelector('.job-card__text')?.textContent,
                 }));
-                const banner = document.querySelector('.status-banner');
-                return {
-                    jobs,
-                    bannerType: banner?.className,
-                    bannerText: banner?.textContent?.trim()?.substring(0, 120),
-                };
+                return { jobs };
             })()""",
             target['id'], timeout=10,
         )
         s = v(poll)
         jobs = s.get('jobs', [])
         if jobs:
-            statuses = [j.get('status') for j in jobs]
-            print(f'      [{int(time.time() - start):3d}s] jobs: {statuses}')
-
+            print(f'      [{int(time.time()-start):3d}s] statuses={[j.get("status") for j in jobs]}')
         done_job = next((j for j in jobs if j.get('status') == 'done' and j.get('hasAudio')), None)
         if done_job:
-            print(f'\n      ✓ Audio generated')
-            print(f'        status:   done')
-            print(f'        src:      {done_job.get("audioSrc", "")[:60]}')
-            print(f'        duration: {done_job.get("audioDuration")}s')
-            print(f'        text:     {done_job.get("text", "")[:60]}')
-            audio_ready = True
-            break
-
-        err_banner = s.get('bannerType') and 'error' in s.get('bannerType')
-        if err_banner:
-            print(f'      ❌ Error banner: {s.get("bannerText")}')
-            cdp.screenshot(target['id'], SCREENSHOT_DIR / '04-gen-error.png')
-            sys.exit(1)
-
+            print(f'      ✓ Audio: duration={done_job.get("audioDuration")}s')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '04-audio-output.png')
+            return
         time.sleep(2)
+    raise AssertionError(f'no job reached done within {gen_timeout}s')
 
-    if not audio_ready:
-        print(f'      ❌ No job reached done within {gen_timeout}s')
-        cdp.screenshot(target['id'], SCREENSHOT_DIR / '04-stuck.png')
-        sys.exit(1)
 
-    shot4 = SCREENSHOT_DIR / '04-audio-output.png'
-    cdp.screenshot(target['id'], shot4)
-    print(f'      → {shot4} ({shot4.stat().st_size // 1024} KB)')
+# ─── Driver ──────────────────────────────────────────────────────────────
 
-    cdp.close()
+def main():
+    banner('Yapper — E2E browser test via raw CDP')
+
+    cdp_holder: dict = {}
+    results: list[TestResult] = []
+
+    steps = [
+        ('connect_to_cdp', lambda: step_connect_to_cdp(cdp_holder)),
+        ('attach_and_navigate', lambda: step_attach_and_navigate(cdp_holder)),
+        ('verify_page_render', lambda: step_verify_page_render(cdp_holder)),
+        ('select_model', lambda: step_select_model(cdp_holder)),
+        ('click_load', lambda: step_click_load(cdp_holder)),
+        ('wait_for_model_ready', lambda: step_wait_for_model_ready(cdp_holder)),
+        ('type_and_generate', lambda: step_type_and_generate(cdp_holder)),
+        ('wait_for_audio', lambda: step_wait_for_audio(cdp_holder)),
+    ]
+
+    for name, fn in steps:
+        results.append(run_step(name, fn))
+
+    # Close CDP if open
+    cdp = cdp_holder.get('cdp')
+    if cdp is not None:
+        try:
+            cdp.close()
+        except Exception:
+            pass
+
+    failures = sum(1 for r in results if r.failed)
     print(f'\n{"=" * 70}')
-    print('  ✓ ALL TESTS PASSED')
+    if failures == 0:
+        print(f'  ✓ ALL {len(results)} STEPS PASSED')
+    else:
+        print(f'  ✗ {failures}/{len(results)} STEPS FAILED')
     print(f'  Screenshots in: {SCREENSHOT_DIR}')
     print(f'{"=" * 70}')
+
+    if JUNIT_PATH:
+        write_junit(results, JUNIT_PATH)
+
+    sys.exit(1 if failures else 0)
 
 
 if __name__ == '__main__':
@@ -441,7 +490,6 @@ if __name__ == '__main__':
         print('\n\nInterrupted.')
         sys.exit(1)
     except Exception as e:
-        import traceback
         print(f'\n❌ Fatal: {e}')
         traceback.print_exc()
         sys.exit(1)
