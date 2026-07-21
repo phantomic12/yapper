@@ -294,7 +294,7 @@ export class KittenCustomEngine implements CustomEngine {
     return { sampleRate: this.sampleRate };
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }> {
+  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
     if (!this.session || !this.tokenizer) {
       throw new Error('Kitten model not loaded');
     }
@@ -351,7 +351,12 @@ export class KittenCustomEngine implements CustomEngine {
 
   dispose(): void {
     if (this.session) {
-      try { this.session.release(); } catch {}
+      try {
+        this.session.release();
+      } catch {
+        // Release can throw if the session was already torn down (e.g.
+        // ORT WASM crashed). Swallow because dispose is best-effort.
+      }
       this.session = null;
     }
     this.voices = {};

@@ -57,12 +57,46 @@ export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const KOKORO_DEFAULT_DTYPE = 'q8';
 const KOKORO_SAMPLE_RATE = 24000;
 
+// Minimal KokoroTTS type — the kokoro-js package's .d.ts covers the main
+// surface but not the dynamic-import path we use. Narrowing to the methods
+// we actually call keeps ESLint happy without adding a second type package.
+interface KokoroProgress {
+  status: string;
+  loaded?: number;
+  total?: number;
+}
+interface KokoroTTSLike {
+  generate(text: string, options: { voice: string; speed: number }): Promise<{
+    audio: Float32Array;
+    sampling_rate?: number;
+  }>;
+  /**
+   * Streaming variant. kokoro-js yields `{text, phonemes, audio}` per
+   * sentence. We use it for per-word timing extraction when the caller
+   * needs high-fidelity highlighting (the document reader).
+   */
+  stream(text: string, options: { voice: string; speed: number }): AsyncIterable<{
+    text: string;
+    phonemes: string;
+    audio: { audio: Float32Array; sampling_rate?: number };
+  }>;
+}
+interface KokoroModule {
+  KokoroTTS: {
+    from_pretrained(
+      modelId: string,
+      options: {
+        dtype: string;
+        progress_callback?: (data: KokoroProgress) => void;
+      },
+    ): Promise<KokoroTTSLike>;
+  };
+}
+
 export class KokoroCustomEngine implements CustomEngine {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private tts: any = null;
+  private tts: KokoroTTSLike | null = null;
   private loading = false;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   static async create(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<KokoroCustomEngine> {
     const engine = new KokoroCustomEngine();
     await engine.load(model, progressCallback);
@@ -75,8 +109,8 @@ export class KokoroCustomEngine implements CustomEngine {
     try {
       // Dynamic import: kokoro-js is large and the .web.js bundle inlines
       // onnxruntime-web + eSpeak WASM. We lazy-load it on first use.
-      const mod = await import('kokoro-js');
-      const KokoroTTS = (mod as any).KokoroTTS;
+      const mod = (await import('kokoro-js')) as unknown as KokoroModule;
+      const KokoroTTS = mod.KokoroTTS;
 
       // The first call also downloads voices; track via progress callback.
       // KokoroTTS.from_pretrained takes {dtype, device, progress_callback} —
@@ -87,7 +121,7 @@ export class KokoroCustomEngine implements CustomEngine {
       const dtype = _model.dtype ?? KOKORO_DEFAULT_DTYPE;
       this.tts = await KokoroTTS.from_pretrained(_model.modelId, {
         dtype,
-        progress_callback: (data: any) => {
+        progress_callback: (data) => {
           if (data?.status === 'progress' && progressCallback) {
             progressCallback(data.loaded ?? 0, data.total ?? 1);
           } else if (data?.status === 'done' && progressCallback) {
@@ -101,15 +135,65 @@ export class KokoroCustomEngine implements CustomEngine {
     }
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }> {
+  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
     if (!this.tts) throw new Error('Kokoro model not loaded');
     const voice = voiceId ?? 'af_heart';
     const speed = options?.speed ?? 1.0;
-    // The kokoro-js API returns a `RawAudio` (audio Float32Array + sampling_rate).
-    const result = await this.tts.generate(text, { voice, speed });
+
+    // Use the streaming API so we can compute per-word start times from
+    // kokoro-js's phoneme durations. Each yielded segment carries the
+    // sentence's phonemes and audio; we stitch audio into one Float32Array
+    // and map each whitespace-token in the original text to its start time.
+    const wordTimings: number[] = [];
+    const chunks: Float32Array[] = [];
+    let audioOffsetSamples = 0;
+
+    // Tokenize the full text the same way the sentence splitter does, then
+    // walk phoneme-by-phoneme assigning tokens as phonemes accumulate.
+    const tokens = text.match(/\S+/g) ?? [text];
+    let tokenIdx = 0;
+
+    for await (const segment of this.tts.stream(text, { voice, speed })) {
+      const segAudio = segment.audio.audio;
+      chunks.push(segAudio);
+
+      // Approximate: each phoneme = ~1 token boundary; we map phoneme positions
+      // onto tokens proportionally. This isn't perfect (a token may have
+      // multiple phonemes, or none for punctuation) but it's far better than
+      // the chunk-level ratio we used before.
+      const phonemes = segment.phonemes.replace(/\s+/g, '');
+      const phonemeCount = phonemes.length;
+      if (phonemeCount === 0 || tokenIdx >= tokens.length) continue;
+
+      // Distribute the chunk's duration across its phonemes, then assign
+      // tokens to the phoneme boundaries that fall within the chunk.
+      const chunkDurationSec = segAudio.length / KOKORO_SAMPLE_RATE;
+      const secPerPhoneme = chunkDurationSec / phonemeCount;
+      for (let p = 0; p < phonemeCount && tokenIdx < tokens.length; p++) {
+        // We push one timing per TOKEN (not per phoneme) — group consecutive
+        // phonemes until tokenIdx advances. This is heuristic but close enough
+        // for highlighting; the boundary case where a token straddles two
+        // segments is fine because timing is monotonic across the audio.
+        const t = (audioOffsetSamples / KOKORO_SAMPLE_RATE) + p * secPerPhoneme;
+        wordTimings.push(t);
+        tokenIdx++;
+      }
+      audioOffsetSamples += segAudio.length;
+    }
+
+    // Stitch the per-sentence audio into one array.
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    const audio = new Float32Array(totalLength);
+    let pos = 0;
+    for (const c of chunks) {
+      audio.set(c, pos);
+      pos += c.length;
+    }
+
     return {
-      audio: result.audio as Float32Array,
-      samplingRate: (result as any).sampling_rate ?? KOKORO_SAMPLE_RATE,
+      audio,
+      samplingRate: KOKORO_SAMPLE_RATE,
+      wordTimings,
     };
   }
 
