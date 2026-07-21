@@ -343,6 +343,72 @@ function renderVoiceSection() {
 }
 
 // ─── Job list render ─────────────────────────────────────────────
+//
+// Each job card carries a stable `data-job-id` we can use as a key.
+// `renderJobList` diffs the desired DOM against the current one:
+//   * cards for jobs that still exist are patched in-place (status class,
+//     body contents) so we don't tear down their audio element or
+//     re-attach button listeners on every state transition
+//   * cards for new jobs are appended
+//   * cards for removed jobs are detached
+// Without this, every job state change rewrites the entire list, which
+// is O(n²) for n jobs and resets <audio> elements (losing playback
+// position whenever a sibling job updates).
+
+interface JobCardDom {
+  card: HTMLElement;
+  body: HTMLElement;
+  statusSpan: HTMLElement;
+}
+
+function getCardDom(jobId: string): JobCardDom | null {
+  const card = document.querySelector<HTMLElement>(`.job-card[data-job-id="${CSS.escape(jobId)}"]`);
+  if (!card) return null;
+  const statusSpan = card.querySelector<HTMLElement>('.job-card__status')!;
+  const body = card.querySelector<HTMLElement>('.job-card__body')!;
+  return { card, body, statusSpan };
+}
+
+function patchCardStatus(statusSpan: HTMLElement, card: HTMLElement, status: GenerationJob['status']) {
+  card.classList.remove('job-card--pending', 'job-card--generating', 'job-card--done', 'job-card--error', 'job-card--cancelled');
+  card.classList.add(`job-card--${status}`);
+  statusSpan.innerHTML = statusIconHtml(status);
+}
+
+function wireCardButtons(card: HTMLElement, list: HTMLElement) {
+  // Click listeners are wired once per card. Using a flag prevents us
+  // from re-attaching the same listener on every render.
+  if (card.dataset.wired === 'true') return;
+  card.dataset.wired = 'true';
+
+  const cancelBtn = card.querySelector<HTMLButtonElement>('[data-action="cancel"]');
+  cancelBtn?.addEventListener('click', () => {
+    const id = card.dataset.jobId!;
+    engine.cancel(id);
+  });
+
+  const downloadBtn = card.querySelector<HTMLButtonElement>('[data-action="download"]');
+  downloadBtn?.addEventListener('click', () => {
+    const id = card.dataset.jobId!;
+    const job = currentJobs.find(j => j.id === id);
+    if (!job?.url) return;
+    const a = document.createElement('a');
+    a.href = job.url;
+    a.download = `yapper-${id}-${Date.now()}.wav`;
+    a.click();
+  });
+
+  const audio = card.querySelector<HTMLAudioElement>('audio[data-job-id]');
+  if (audio) {
+    audio.addEventListener('play', () => {
+      // Pause sibling audios when one starts.
+      list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(other => {
+        if (other !== audio && !other.paused) other.pause();
+      });
+    });
+  }
+}
+
 function renderJobList() {
   const list = document.getElementById('job-list')!;
   const label = document.getElementById('queue-label')!;
@@ -359,54 +425,64 @@ function renderJobList() {
   const hasFinished = currentJobs.some(j => j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
   clearBtn.disabled = !hasFinished;
 
-  list.innerHTML = currentJobs.map(job => renderJobCard(job)).join('');
-
-  // Wire up the buttons
-  list.querySelectorAll<HTMLButtonElement>('[data-action="cancel"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.jobId!;
-      engine.cancel(id);
-    });
-  });
-  list.querySelectorAll<HTMLButtonElement>('[data-action="download"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.jobId!;
-      const job = currentJobs.find(j => j.id === id);
-      if (!job?.url) return;
-      const a = document.createElement('a');
-      a.href = job.url;
-      a.download = `yapper-${id}-${Date.now()}.wav`;
-      a.click();
-    });
-  });
-  list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(audio => {
-    audio.addEventListener('play', () => {
-      // Pause other audios when one starts
-      list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(other => {
-        if (other !== audio && !other.paused) other.pause();
-      });
-    });
+  // Diff against existing DOM.
+  const seen = new Set<string>();
+  for (const job of currentJobs) {
+    seen.add(job.id);
+    const existing = getCardDom(job.id);
+    if (existing) {
+      // In-place patch: update status class + body if changed.
+      const newStatusClass = `job-card--${job.status}`;
+      if (!existing.card.classList.contains(newStatusClass)) {
+        patchCardStatus(existing.statusSpan, existing.card, job.status);
+      }
+      const desiredBody = renderJobCardBody(job);
+      if (existing.body.innerHTML !== desiredBody) {
+        existing.body.innerHTML = desiredBody;
+        // Re-wire any buttons/audio that appeared in the new body.
+        wireCardButtons(existing.card, list);
+      }
+    } else {
+      // New card: build and insert.
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderJobCard(job);
+      const card = tmp.firstElementChild as HTMLElement;
+      list.appendChild(card);
+      wireCardButtons(card, list);
+    }
+  }
+  // Remove cards whose jobs are gone.
+  list.querySelectorAll<HTMLElement>('.job-card').forEach(card => {
+    const id = card.dataset.jobId;
+    if (id && !seen.has(id)) card.remove();
   });
 }
 
-function renderJobCard(job: GenerationJob): string {
+function renderJobCardHeader(job: GenerationJob): string {
   const statusIcon = statusIconHtml(job.status);
   const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
   const speedLabel = job.speed !== 1.0 ? ` · ${job.speed.toFixed(2)}x` : '';
   const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
+  const cancellable = job.status === 'pending' || job.status === 'generating';
+  return `
+    <div class="job-card__header">
+      <span class="job-card__status">${statusIcon}</span>
+      <span class="job-card__meta-line">${escapeHtml(job.modelName)}${voiceLabel}${speedLabel}</span>
+      ${cancellable ? `<button class="job-card__cancel" data-action="cancel" data-job-id="${job.id}" title="Cancel">×</button>` : ''}
+    </div>
+    <div class="job-card__text">"${escapeHtml(textPreview)}"</div>`;
+}
 
-  let body = '';
+function renderJobCardBody(job: GenerationJob): string {
   switch (job.status) {
     case 'pending':
-      body = `<div class="job-card__hint">Waiting in queue…</div>`;
-      break;
+      return `<div class="job-card__hint">Waiting in queue…</div>`;
     case 'generating': {
       const elapsed = job.startedAt ? Math.round((Date.now() - job.startedAt) / 100) / 10 : 0;
-      body = `<div class="job-card__hint">Generating… ${elapsed}s</div>`;
-      break;
+      return `<div class="job-card__hint">Generating… ${elapsed}s</div>`;
     }
     case 'done':
-      body = `
+      return `
         <audio controls preload="metadata" data-job-id="${job.id}" src="${job.url}"></audio>
         <div class="job-card__actions">
           <button class="job-card__btn" data-action="download" data-job-id="${job.id}">
@@ -415,25 +491,18 @@ function renderJobCard(job: GenerationJob): string {
           </button>
           <span class="job-card__meta">${((job.durationMs ?? 0) / 1000).toFixed(1)}s · ${job.audio && job.sampleRate ? Math.floor(job.audio.length / job.sampleRate) : 0}s audio</span>
         </div>`;
-      break;
     case 'error':
-      body = `<div class="job-card__error">${escapeHtml(job.error ?? 'Unknown error')}</div>`;
-      break;
+      return `<div class="job-card__error">${escapeHtml(job.error ?? 'Unknown error')}</div>`;
     case 'cancelled':
-      body = `<div class="job-card__hint">Cancelled</div>`;
-      break;
+      return `<div class="job-card__hint">Cancelled</div>`;
   }
+}
 
-  const cancellable = job.status === 'pending' || job.status === 'generating';
+function renderJobCard(job: GenerationJob): string {
   return `
-    <div class="job-card job-card--${job.status}">
-      <div class="job-card__header">
-        <span class="job-card__status">${statusIcon}</span>
-        <span class="job-card__meta-line">${escapeHtml(job.modelName)}${voiceLabel}${speedLabel}</span>
-        ${cancellable ? `<button class="job-card__cancel" data-action="cancel" data-job-id="${job.id}" title="Cancel">×</button>` : ''}
-      </div>
-      <div class="job-card__text">"${escapeHtml(textPreview)}"</div>
-      <div class="job-card__body">${body}</div>
+    <div class="job-card job-card--${job.status}" data-job-id="${job.id}">
+      ${renderJobCardHeader(job)}
+      <div class="job-card__body">${renderJobCardBody(job)}</div>
     </div>`;
 }
 
@@ -762,7 +831,12 @@ function bindDocumentEvents() {
     }
     readerStatus.textContent = statusText;
     readerOverlayStatus.textContent = statusText;
-    readerOverlayPause.textContent = state.status === 'playing' ? 'Pause' : 'Resume';
+    readerOverlayPause.textContent =
+      state.status === 'playing'
+        ? 'Pause'
+        : state.needsUserGesture
+          ? 'Click to play'
+          : 'Resume';
     if (state.status === 'playing') {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
@@ -773,7 +847,10 @@ function bindDocumentEvents() {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
       stopBtn.style.display = '';
-      pauseBtn.textContent = 'Resume';
+      // If the browser blocked autoplay, the pause button is the user's
+      // path forward. Label it accordingly so they know what clicking
+      // will do.
+      pauseBtn.textContent = state.needsUserGesture ? 'Click to play' : 'Resume';
     } else if (state.status === 'finished') {
       readBtn.style.display = '';
       pauseBtn.style.display = 'none';
@@ -813,8 +890,15 @@ function bindDocumentEvents() {
 
   pauseBtn.addEventListener('click', () => {
     if (!readerSession) return;
-    if (readerSession.getState().status === 'playing') readerSession.pause();
-    else readerSession.resume();
+    // resumeAfterGesture is a no-op if not in needsUserGesture state, so
+    // it's safe to call from any click. This avoids a class of bugs where
+    // resume() from a click that wasn't user-initiated (e.g. programmatic
+    // .click() from another handler) silently fails again.
+    if (readerSession.getState().status === 'playing') {
+      readerSession.pause();
+    } else {
+      readerSession.resumeAfterGesture();
+    }
   });
 
   stopBtn.addEventListener('click', () => {
@@ -825,8 +909,11 @@ function bindDocumentEvents() {
 
   readerOverlayPause.addEventListener('click', () => {
     if (!readerSession) return;
-    if (readerSession.getState().status === 'playing') readerSession.pause();
-    else readerSession.resume();
+    if (readerSession.getState().status === 'playing') {
+      readerSession.pause();
+    } else {
+      readerSession.resumeAfterGesture();
+    }
   });
   readerOverlayStop.addEventListener('click', () => {
     readerSession?.stop();
@@ -866,47 +953,48 @@ function handleEngineStateChange(state: EngineState) {
   const progressText = document.getElementById('progress-text')!;
 
   switch (state) {
-    case 'idle':
-      loadBtn.disabled = false;
-      generateBtn.disabled = true;
-      textInput.disabled = true;
-      progressBar.classList.remove('progress-bar--visible');
-      progressText.classList.remove('progress-text--visible');
-      loadBtnLabel.textContent = 'Download & Load Model';
-      updateDocumentSectionVisibility();
-      break;
+      case 'idle':
+        loadBtn.disabled = false;
+        generateBtn.disabled = true;
+        textInput.disabled = true;
+        progressBar.classList.remove('progress-bar--visible');
+        progressText.classList.remove('progress-text--visible');
+        loadBtnLabel.textContent = 'Download & Load Model';
+        break;
 
-    case 'loading':
-      loadBtn.disabled = true;
-      loadBtnLabel.textContent = 'Loading…';
-      progressBar.classList.add('progress-bar--visible');
-      progressText.classList.add('progress-text--visible');
-      break;
+      case 'loading':
+        loadBtn.disabled = true;
+        loadBtnLabel.textContent = 'Loading…';
+        progressBar.classList.add('progress-bar--visible');
+        progressText.classList.add('progress-text--visible');
+        break;
 
-    case 'ready': {
-      const current = engine.getCurrentModel();
-      loadBtn.disabled = false;
-      loadBtnLabel.textContent = `✓ ${current?.name ?? 'Model'} loaded`;
-      generateBtn.disabled = false;
-      textInput.disabled = false;
-      progressBar.classList.remove('progress-bar--visible');
-      progressText.classList.remove('progress-text--visible');
-      updateDocumentSectionVisibility();
-      showStatus('success', `${current?.name} is ready. Type something and hit Generate (or queue several).`);
-      break;
+      case 'ready': {
+        const current = engine.getCurrentModel();
+        loadBtn.disabled = false;
+        loadBtnLabel.textContent = `✓ ${current?.name ?? 'Model'} loaded`;
+        generateBtn.disabled = false;
+        textInput.disabled = false;
+        progressBar.classList.remove('progress-bar--visible');
+        progressText.classList.remove('progress-text--visible');
+        showStatus('success', `${current?.name} is ready. Type something and hit Generate (or queue several).`);
+        break;
+      }
+
+      case 'error':
+        loadBtn.disabled = false;
+        loadBtnLabel.textContent = 'Download & Load Model';
+        generateBtn.disabled = true;
+        textInput.disabled = true;
+        progressBar.classList.remove('progress-bar--visible');
+        progressText.classList.remove('progress-text--visible');
+        break;
     }
-
-    case 'error':
-      loadBtn.disabled = false;
-      loadBtnLabel.textContent = 'Download & Load Model';
-      generateBtn.disabled = true;
-      progressBar.classList.remove('progress-bar--visible');
-      progressText.classList.remove('progress-text--visible');
-      updateDocumentSectionVisibility();
-      break;
+    // Document section visibility is derived purely from engine state, so
+    // we update it once per state change instead of duplicating the call
+    // in every branch above.
+    updateDocumentSectionVisibility();
   }
-}
-
 function handleLoadProgress(loaded: number, total: number, modelName: string) {
   const fill = document.getElementById('progress-fill')!;
   const text = document.getElementById('progress-text')!;

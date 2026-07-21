@@ -30,6 +30,12 @@ export interface ReaderState {
   bufferedIndex: number;
   status: 'idle' | 'playing' | 'paused' | 'finished';
   error?: string;
+  /**
+   * Set to true when the browser refused to autoplay because no user
+   * gesture was present. The UI surfaces a "Click to play" button and
+   * the next user click on the document triggers `play()` again.
+   */
+  needsUserGesture?: boolean;
 }
 
 export interface HighlightInfo {
@@ -138,10 +144,21 @@ export class DocumentReaderSession {
   /** Resume from the current chunk. */
   resume() {
     if (this.state.status === 'finished') return;
-    this.setState({ isPlaying: true, status: 'playing' });
+    this.setState({ isPlaying: true, status: 'playing', needsUserGesture: undefined });
     this.ensureBuffered(Math.min(this.state.currentIndex + this.options.lookahead! - 1, this.chunks.length - 1));
     this.tryPlayNext();
     this.scheduleHighlightLoop();
+  }
+
+  /**
+   * Resume playback when the browser blocked autoplay. Call this from a
+   * real user-gesture handler (click, keypress) so the resulting
+   * `audio.play()` is permitted. No-op if already playing.
+   */
+  resumeAfterGesture() {
+    if (this.state.needsUserGesture) {
+      this.resume();
+    }
   }
 
   /** Stop and tear everything down. */
@@ -229,7 +246,19 @@ export class DocumentReaderSession {
       this.audio.playbackRate = this.options.speed ?? 1;
     }
     this.audio.play().catch(err => {
-      this.setState({ error: `Playback failed: ${err.message}`, status: 'paused', isPlaying: false });
+      // Browsers throw NotAllowedError when play() is called outside a
+      // user-gesture handler. We surface a "Click to play" CTA in that
+      // case instead of silently failing. Other errors (decode failure,
+      // missing source, etc.) keep the generic message.
+      const isGestureRequired = err?.name === 'NotAllowedError';
+      this.setState({
+        error: isGestureRequired
+          ? 'Browser blocked autoplay. Click play to continue.'
+          : `Playback failed: ${err.message}`,
+        status: 'paused',
+        isPlaying: false,
+        needsUserGesture: isGestureRequired || undefined,
+      });
       this.cancelHighlightLoop();
     });
     this.updateHighlight();
