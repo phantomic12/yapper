@@ -1,44 +1,69 @@
 """
 Yapper — End-to-end browser test via raw CDP.
 
-Drives a fresh Chrome instance (on gravebuster, port 9335) through the full
-TTS workflow: load page → detect WebGPU → select model → load model → generate
-speech → verify audio is produced.
+Drives a real Chrome instance through the full TTS workflow:
+  1. Load the page
+  2. Confirm model grid renders
+  3. Pick a small model (Kitten TTS Nano, ~24MB, fast on CPU)
+  4. Click "Download & Load Model" and wait for ready state
+  5. Type text and click Generate
+  6. Verify a job card appears and produces an audio blob
 
-This script does NOT use the Hermes browser tool — it talks directly to the
-the yapper-test CDP at http://100.93.66.35:9335, keeping the wileyplus session
-on 9333 completely untouched.
+This script does NOT use the Hermes browser tool — it talks directly to a
+local Chrome instance via the Chrome DevTools Protocol so the wileyplus /
+yapper browser sessions stay isolated.
+
+Usage:
+    python e2e_test.py                 # uses CDP at $YAPPER_CDP or http://localhost:9222
+    YAPPER_CDP=http://host:9222 python e2e_test.py
+    YAPPER_URL=http://localhost:5173  python e2e_test.py   # dev server
+    YAPPER_URL=https://phantomic12.github.io/yapper/ python e2e_test.py  # prod
 """
 
 import json
 import time
 import base64
+import os
 import sys
 from pathlib import Path
 import urllib.request
+import urllib.error
 import websocket
 
-CDP = "http://100.93.66.35:9335"
-SCREENSHOT_DIR = Path("/tmp/yapper-shots")
+CDP = os.environ.get('YAPPER_CDP', 'http://localhost:9222')
+URL = os.environ.get('YAPPER_URL', 'https://phantomic12.github.io/yapper/')
+SCREENSHOT_DIR = Path(os.environ.get('YAPPER_SHOTS', '/tmp/yapper-shots'))
 SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+# We pick Kitten TTS Nano as the default test model: it's the smallest
+# quantized model in the registry (~24MB) and runs reliably on CPU WASM,
+# so the test works on machines without WebGPU.
+DEFAULT_MODEL = 'kitten-nano'
+TEST_TEXT = (
+    'Hello. This is Yapper, a privacy-first text to speech engine '
+    'running entirely in your browser. Mr. Smith approves.'
+)
+
+
+class CDPError(RuntimeError):
+    pass
 
 
 class CDPSession:
-    def __init__(self, browser_ws_url):
+    def __init__(self, browser_ws_url: str):
         self.ws = websocket.create_connection(browser_ws_url, timeout=30)
         self._msg_id = 0
-        self._sessions = {}  # targetId -> sessionId
+        self._sessions: dict[str, str] = {}
 
-    def send(self, method, params=None, session_id=None, target_id=None):
+    def send(self, method: str, params=None, session_id=None):
         self._msg_id += 1
-        msg = {"id": self._msg_id, "method": method, "params": params or {}}
+        msg = {'id': self._msg_id, 'method': method, 'params': params or {}}
         if session_id:
-            msg["sessionId"] = session_id
+            msg['sessionId'] = session_id
         self.ws.send(json.dumps(msg))
         return self._msg_id
 
-    def wait_for(self, msg_id, timeout=30, debug=False):
-        """Wait for a specific response ID, filtering out events from other sources."""
+    def wait_for(self, msg_id: int, timeout: float = 30.0, debug: bool = False):
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -50,33 +75,31 @@ class CDPSession:
                     resp = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if resp.get("id") == msg_id:
+                if resp.get('id') == msg_id:
                     return resp
                 if debug:
-                    # Show what other events we're seeing
-                    method = resp.get("method", "")
+                    method = resp.get('method', '')
                     if method:
-                        print(f"        [event] {method}", flush=True)
+                        print(f'        [event] {method}', flush=True)
             except websocket.WebSocketTimeoutException:
                 continue
             except Exception:
                 continue
         return None
 
-    def attach(self, target_id):
-        """Attach to a target, return sessionId."""
-        msg_id = self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+    def attach(self, target_id: str) -> str | None:
+        msg_id = self.send('Target.attachToTarget', {'targetId': target_id, 'flatten': True})
         for _ in range(50):
             try:
                 self.ws.settimeout(1)
                 resp = json.loads(self.ws.recv())
-                if resp.get("id") == msg_id:
-                    sid = resp.get("result", {}).get("sessionId")
-                    self._sessions[target_id] = sid
-                    return sid
-                # Might also arrive as a Target.attachedToTarget event
-                if resp.get("method") == "Target.attachedToTarget":
-                    sid = resp.get("params", {}).get("sessionId")
+                if resp.get('id') == msg_id:
+                    sid = resp.get('result', {}).get('sessionId')
+                    if sid:
+                        self._sessions[target_id] = sid
+                        return sid
+                if resp.get('method') == 'Target.attachedToTarget':
+                    sid = resp.get('params', {}).get('sessionId')
                     if sid:
                         self._sessions[target_id] = sid
                         return sid
@@ -84,32 +107,31 @@ class CDPSession:
                 continue
         return None
 
-    def eval(self, expr, target_id, return_by_value=True, timeout=30):
+    def eval(self, expr: str, target_id: str, timeout: float = 30.0):
         sid = self._sessions.get(target_id)
         if not sid:
-            raise RuntimeError("Not attached to target")
+            raise CDPError('Not attached to target')
         msg_id = self.send(
-            "Runtime.evaluate",
-            {"expression": expr, "returnByValue": return_by_value, "awaitPromise": False},
+            'Runtime.evaluate',
+            {'expression': expr, 'returnByValue': True, 'awaitPromise': False},
             session_id=sid,
         )
         return self.wait_for(msg_id, timeout=timeout)
 
-    def screenshot(self, target_id, path, clip=None):
+    def screenshot(self, target_id: str, path: Path) -> bool:
         sid = self._sessions.get(target_id)
         if not sid:
-            raise RuntimeError("Not attached to target")
-        params = {"format": "png"}
-        if clip:
-            params["clip"] = clip
-        else:
-            params["captureBeyondViewport"] = True
-        msg_id = self.send("Page.captureScreenshot", params, session_id=sid)
+            raise CDPError('Not attached to target')
+        msg_id = self.send(
+            'Page.captureScreenshot',
+            {'format': 'png', 'captureBeyondViewport': True},
+            session_id=sid,
+        )
         resp = self.wait_for(msg_id, timeout=30)
-        if resp and "result" in resp:
-            data = resp["result"].get("data", "")
+        if resp and 'result' in resp:
+            data = resp['result'].get('data', '')
             if data:
-                Path(path).write_bytes(base64.b64decode(data))
+                path.write_bytes(base64.b64decode(data))
                 return True
         return False
 
@@ -117,347 +139,309 @@ class CDPSession:
         self.ws.close()
 
 
-def get_targets():
-    with urllib.request.urlopen(f"{CDP}/json/list") as r:
-        return json.loads(r.read())
-
-
-def v(resp):
-    """Get the .value from a CDP Runtime.evaluate response, handling None safely."""
+def v(resp) -> dict:
+    """Extract `.value` from a Runtime.evaluate response."""
     if not resp:
         return {}
-    return resp.get("result", {}).get("result", {}).get("value", {}) or {}
+    return resp.get('result', {}).get('result', {}).get('value') or {}
 
 
-def get_browser_ws():
-    with urllib.request.urlopen(f"{CDP}/json/version") as r:
-        return json.loads(r.read())["webSocketDebuggerUrl"]
+def banner(label: str):
+    print(f'\n{"=" * 70}\n  {label}\n{"=" * 70}')
 
 
-def banner(label):
-    print(f"\n{'='*70}\n  {label}\n{'='*70}")
+def fetch_cdp(path: str) -> dict:
+    try:
+        with urllib.request.urlopen(f'{CDP}{path}') as r:
+            return json.loads(r.read())
+    except (urllib.error.URLError, ConnectionError) as e:
+        raise CDPError(f'Cannot reach CDP at {CDP}: {e}')
+
+
+def step(n: int, total: int, label: str):
+    print(f'\n[{n}/{total}] {label}')
+
+
+def assert_true(cond: bool, msg: str):
+    if not cond:
+        print(f'      ❌ {msg}')
+        sys.exit(1)
+    print(f'      ✓ {msg}')
 
 
 def main():
-    banner("Yapper — E2E browser test via raw CDP")
+    banner('Yapper — E2E browser test via raw CDP')
 
-    # 1. Discover browser
-    print(f"\n[1/9] Connecting to CDP at {CDP}")
-    version = json.loads(urllib.request.urlopen(f"{CDP}/json/version").read())
-    print(f"      Browser: {version['Browser']}")
-    print(f"      V8:      {version['V8-Version']}")
+    total = 9
 
-    targets = get_targets()
-    page_targets = [t for t in targets if t["type"] == "page"]
-    print(f"      Page targets: {len(page_targets)}")
-    for t in page_targets:
-        print(f"        - {t['id'][:16]}...  {t['url'][:80]}")
+    # 1. Discover Chrome
+    step(1, total, f'Connecting to CDP at {CDP}')
+    try:
+        version = fetch_cdp('/json/version')
+    except CDPError as e:
+        print(f'      {e}')
+        sys.exit(1)
+    print(f'      Browser: {version.get("Browser", "?")}')
+    print(f'      V8:      {version.get("V8-Version", "?")}')
 
-    # Use the first page target
+    targets = fetch_cdp('/json/list')
+    page_targets = [t for t in targets if t.get('type') == 'page']
+    print(f'      Page targets: {len(page_targets)}')
+    if not page_targets:
+        print('      ❌ No page targets — open a tab first')
+        sys.exit(1)
     target = page_targets[0]
+    print(f'      Using: {target["url"][:80]}')
 
     # 2. Attach
-    print(f"\n[2/9] Attaching to target {target['id'][:16]}...")
-    browser_ws = get_browser_ws()
+    step(2, total, f'Attaching to target {target["id"][:16]}')
+    browser_ws = version['webSocketDebuggerUrl']
     cdp = CDPSession(browser_ws)
-    sid = cdp.attach(target["id"])
+    sid = cdp.attach(target['id'])
     if not sid:
-        print("      ❌ Failed to attach")
+        print('      ❌ Failed to attach')
         sys.exit(1)
-    print(f"      ✓ Attached, sessionId={sid[:16]}...")
+    print(f'      ✓ Attached (session={sid[:16]}…)')
 
-    # 3. Navigate to yapper
-    print(f"\n[3/9] Navigating to https://phantomic12.github.io/yapper/")
-    nav_id = cdp.send("Page.enable", session_id=sid)
-    cdp.wait_for(nav_id)
-    nav_id = cdp.send("Page.navigate", {"url": "https://phantomic12.github.io/yapper/"}, session_id=sid)
+    # 3. Navigate
+    step(3, total, f'Navigating to {URL}')
+    cdp.send('Page.enable', session_id=sid)
+    cdp.wait_for(cdp.send('Page.enable', session_id=sid))
+    nav_id = cdp.send('Page.navigate', {'url': URL}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
-    print("      ✓ Navigated, waiting for page load...")
-
-    # Wait for app to render
-    time.sleep(3)
-    ready_resp = cdp.eval(
+    print('      Waiting for app to render…')
+    time.sleep(2)
+    ready = cdp.eval(
         """(function() {
             return {
                 title: document.title,
                 hasApp: !!document.getElementById('app'),
                 appChildren: document.getElementById('app')?.children.length || 0,
                 models: document.querySelectorAll('.model-card').length,
-                textareaDisabled: document.getElementById('text-input')?.disabled,
                 loadBtnExists: !!document.getElementById('load-btn'),
-                gpuDot: document.querySelector('.gpu-status__dot')?.className,
-                gpuText: document.querySelector('.gpu-status__label')?.textContent,
-                hasModels: window.MODELS ? 'check_js' : 'no_global'
+                gpuText: document.querySelector('.gpu-status__label')?.textContent?.trim(),
             };
         })()""",
-        target["id"], timeout=10,
+        target['id'], timeout=10,
     )
-    state = v(ready_resp)
-    print(f"      title:  {state.get('title')}")
-    print(f"      models: {state.get('models')}")
-    print(f"      GPU:    {state.get('gpuText', '').strip()}")
-    print(f"      dot:    {state.get('gpuDot', '')}")
-    print(f"      textarea disabled: {state.get('textareaDisabled')}")
-    print(f"      load btn exists:   {state.get('loadBtnExists')}")
+    state = v(ready)
+    print(f'      title:  {state.get("title")}')
+    print(f'      models: {state.get("models")}')
+    print(f'      GPU:    {state.get("gpuText", "")}')
+    assert_true(state.get('hasApp'), '#app mounted')
+    assert_true(state.get('models', 0) >= 5, f'{state.get("models")} model cards rendered')
 
-    if not state.get("hasApp") or state.get("models", 0) < 5:
-        print("      ❌ Page didn't render properly")
-        sys.exit(1)
-    print("      ✓ Page rendered, model grid populated")
+    shot1 = SCREENSHOT_DIR / '01-initial-load.png'
+    cdp.screenshot(target['id'], shot1)
+    print(f'      → {shot1} ({shot1.stat().st_size // 1024} KB)')
 
-    # 4. Screenshot the initial UI
-    print(f"\n[4/9] Screenshot: initial UI")
-    shot1 = SCREENSHOT_DIR / "01-initial-load.png"
-    cdp.screenshot(target["id"], shot1)
-    print(f"      → {shot1} ({shot1.stat().st_size // 1024} KB)")
-
-    # 5. Select MMS-TTS English (default; SpeechT5 requires speaker embeddings)
-    print(f"\n[5/9] Selecting MMS-TTS English model (default)")
-    sel_resp = cdp.eval(
-        """(function() {
-              const card = document.querySelector('.model-card[data-model-id="mms-tts-eng"]');
-              if (!card) return { ok: false, msg: 'no mms-tts-eng card' };
-              card.click();
-              return {
-                  ok: true,
-                  selected: document.querySelector('.model-card--selected')?.dataset.modelId,
-                  name: card.querySelector('.model-card__name')?.textContent
-              };
-          })()""",
-        target["id"], timeout=10,
+    # 4. Select model
+    step(4, total, f'Selecting model {DEFAULT_MODEL}')
+    sel = cdp.eval(
+        f"""(function() {{
+            const card = document.querySelector('.model-card[data-model-id="{DEFAULT_MODEL}"]');
+            if (!card) return {{ ok: false, msg: 'no card for {DEFAULT_MODEL}' }};
+            card.click();
+            return {{
+                ok: true,
+                selected: document.querySelector('.model-card--selected')?.dataset.modelId,
+                name: card.querySelector('.model-card__name')?.textContent,
+            }};
+        }})()""",
+        target['id'], timeout=10,
     )
-    sel = v(sel_resp)
-    print(f"      selected: {sel.get('selected')}")
-    print(f"      name:     {sel.get('name')}")
-    if sel.get("selected") != "mms-tts-eng":
-        print(f"      ❌ Failed to select model: sel={sel}")
-        sys.exit(1)
-    print("      ✓ Model selected")
+    s = v(sel)
+    print(f'      selected: {s.get("selected")}')
+    print(f'      name:     {s.get("name")}')
+    assert_true(s.get('selected') == DEFAULT_MODEL, f'{DEFAULT_MODEL} is selected')
 
-    # 6. Click "Download & Load Model"
-    print(f"\n[6/9] Clicking 'Download & Load Model' button")
-    print("      (this will download the model from HuggingFace — may take a while)")
-    click_resp = cdp.eval(
+    # 5. Click load
+    step(5, total, 'Clicking "Download & Load Model"')
+    click = cdp.eval(
         """(function() {
             const btn = document.getElementById('load-btn');
             if (!btn) return { ok: false };
             btn.click();
             return {
                 ok: true,
-                state: btn.disabled,
-                text: btn.querySelector('span')?.textContent
+                disabled: btn.disabled,
+                label: document.getElementById('load-btn-label')?.textContent,
             };
         })()""",
-        target["id"], timeout=5,
+        target['id'], timeout=5,
     )
-    click = v(click_resp)
-    print(f"      btn.disabled: {click.get('state')}")
-    print(f"      btn text:     {click.get('text')}")
-    if not click.get("state"):
-        print("      ⚠ Button not disabled, may not have triggered")
-    print("      ✓ Click sent, polling state...")
+    c = v(click)
+    print(f'      btn disabled: {c.get("disabled")}')
+    print(f'      btn label:    {c.get("label")}')
+    assert_true(c.get('ok'), 'load button clicked')
 
-    # 7. Poll state during load
-    print(f"\n[7/9] Polling engine state (waiting for model load)")
+    # 6. Wait for ready state
+    step(6, total, 'Waiting for model load to complete')
     start = time.time()
+    last_progress = None
     last_state = None
-    last_progress_text = None
-    while time.time() - start < 600:  # 10 minute max
+    ready_timeout = float(os.environ.get('YAPPER_LOAD_TIMEOUT', '600'))
+    while time.time() - start < ready_timeout:
         poll = cdp.eval(
             """(function() {
                 const banner = document.querySelector('.status-banner');
-                const progress = document.getElementById('progress-text');
                 const loadBtn = document.getElementById('load-btn');
                 const genBtn = document.getElementById('generate-btn');
                 const textarea = document.getElementById('text-input');
                 return {
-                    banner: banner ? banner.textContent.trim().substring(0, 200) : null,
-                    bannerType: banner ? banner.className : null,
-                    progress: progress ? progress.textContent : null,
-                    loadText: loadBtn?.querySelector('span')?.textContent,
+                    loadLabel: loadBtn?.querySelector('span')?.textContent,
+                    bannerText: banner?.textContent?.trim()?.substring(0, 200),
+                    bannerType: banner?.className,
                     genDisabled: genBtn?.disabled,
                     textareaDisabled: textarea?.disabled,
-                    progressVisible: document.getElementById('progress-bar')?.classList.contains('progress-bar--visible')
                 };
             })()""",
-            target["id"], timeout=10,
+            target['id'], timeout=10,
         )
         s = v(poll)
+        prog = s.get('loadLabel', '') or ''
+        if prog != last_progress:
+            print(f'      [{int(time.time() - start):3d}s] {prog[:60]}')
+            last_progress = prog
 
-        # Build a one-line summary
-        progress_str = s.get("progress", "")[:50] if s.get("progress") else ""
-        if progress_str != last_progress_text:
-            print(f"      [{int(time.time()-start):3d}s] {progress_str}")
-            last_progress_text = progress_str
-
-        # Capture mid-load screenshot
+        # Capture mid-load screenshot at ~5s
         if int(time.time() - start) == 5:
-            shot2 = SCREENSHOT_DIR / "02-loading.png"
-            cdp.screenshot(target["id"], shot2)
-            print(f"      → screenshot saved: {shot2.name}")
+            shot2 = SCREENSHOT_DIR / '02-loading.png'
+            cdp.screenshot(target['id'], shot2)
+            print(f'      → {shot2.name}')
 
-        # Check for success
-        if s.get("loadText") and ("loaded" in s.get("loadText", "").lower() or "✓" in s.get("loadText", "")):
-            print(f"\n      ✓ Model loaded!")
-            print(f"        banner:  {s.get('banner', '')[:80]}")
-            print(f"        gen disabled: {s.get('genDisabled')}")
-            print(f"        textarea disabled: {s.get('textareaDisabled')}")
-            last_state = "ready"
+        if s.get('loadLabel') and ('loaded' in s.get('loadLabel', '').lower()
+                                   or '✓' in s.get('loadLabel', '')):
+            print(f'\n      ✓ Model loaded')
+            print(f'        banner:           {s.get("bannerText", "")[:80]}')
+            print(f'        gen disabled:     {s.get("genDisabled")}')
+            print(f'        textarea disabled: {s.get("textareaDisabled")}')
+            last_state = 'ready'
             break
 
-        if s.get("bannerType") and "error" in s.get("bannerType"):
-            print(f"      ❌ Error banner: {s.get('banner')}")
-            shot_err = SCREENSHOT_DIR / "03-error.png"
-            cdp.screenshot(target["id"], shot_err)
-            print(f"      → screenshot saved: {shot_err.name}")
+        if s.get('bannerType') and 'error' in s.get('bannerType'):
+            print(f'      ❌ Error banner: {s.get("bannerText")}')
+            shot_err = SCREENSHOT_DIR / '03-error.png'
+            cdp.screenshot(target['id'], shot_err)
             sys.exit(1)
 
         time.sleep(3)
 
-    if last_state != "ready":
-        print(f"      ❌ Model did not load within timeout. Last progress: {last_progress_text}")
-        shot_stuck = SCREENSHOT_DIR / "03-stuck.png"
-        cdp.screenshot(target["id"], shot_stuck)
+    if last_state != 'ready':
+        print(f'      ❌ Model did not load within {ready_timeout}s')
+        cdp.screenshot(target['id'], SCREENSHOT_DIR / '03-stuck.png')
         sys.exit(1)
 
-    # 8. Screenshot ready state
-    print(f"\n[8/9] Screenshot: ready state")
-    shot3 = SCREENSHOT_DIR / "03-ready.png"
-    cdp.screenshot(target["id"], shot3)
-    print(f"      → {shot3} ({shot3.stat().st_size // 1024} KB)")
+    shot3 = SCREENSHOT_DIR / '03-ready.png'
+    cdp.screenshot(target['id'], shot3)
+    print(f'      → {shot3}')
 
-    # 9. Generate speech
-    print(f"\n[9/9] Typing text and generating speech")
-    TEST_TEXT = "Hello! This is Yapper, a privacy-first text to speech engine running entirely in your browser."
+    # 7. Type text
+    step(7, total, f'Typing test text ({len(TEST_TEXT)} chars)')
     type_resp = cdp.eval(
         f"""(function() {{
             const ta = document.getElementById('text-input');
             ta.value = {json.dumps(TEST_TEXT)};
             ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            return {{ len: ta.value.length }};
+            return {{
+                len: ta.value.length,
+                charCount: document.getElementById('char-count')?.textContent,
+            }};
         }})()""",
-        target["id"], timeout=10,
+        target['id'], timeout=10,
     )
     t = v(type_resp)
-    print(f"      typed: {t.get('len')} chars")
-    if t.get("len", 0) < 50:
-        print(f"      ⚠ type_resp was: {type_resp}")
-        sys.exit(1)
+    print(f'      typed: {t.get("len")} chars, char-count: {t.get("charCount")}')
+    assert_true(t.get('len', 0) >= len(TEST_TEXT) - 2, 'text was typed into textarea')
 
-    # Click generate (sync — returns immediately; generation happens async)
-    # First sleep briefly to let any pending events drain
-    time.sleep(0.5)
-    click_resp = cdp.eval(
+    # 8. Click generate
+    step(8, total, 'Clicking Generate (queues a TTS job)')
+    gen = cdp.eval(
         """(function() {
             const btn = document.getElementById('generate-btn');
             if (btn.disabled) return { ok: false, msg: 'btn disabled' };
             btn.click();
-            return { ok: true, time: Date.now() };
+            return { ok: true, ts: Date.now() };
         })()""",
-        target["id"], timeout=15,
+        target['id'], timeout=15,
     )
-    cr = v(click_resp)
-    if not cr.get("ok"):
-        print(f"      ❌ Generate button not clickable: {cr.get('msg')}")
-        sys.exit(1)
-    print(f"      ✓ Generate clicked, polling for audio...")
+    g = v(gen)
+    assert_true(g.get('ok'), 'generate button clicked')
+    print(f'      clicked at {g.get("ts")}')
 
-    # Poll for audio
-    print("      Polling for audio output (up to 5 minutes)...")
+    # 9. Poll for job completion + audio blob
+    step(9, total, 'Polling for job completion (audio blob URL)')
+    gen_timeout = float(os.environ.get('YAPPER_GEN_TIMEOUT', '300'))
     start = time.time()
     audio_ready = False
-    while time.time() - start < 300:
+    while time.time() - start < gen_timeout:
         poll = cdp.eval(
             """(function() {
-                const player = document.getElementById('player');
-                const audio = document.getElementById('audio-element');
-                const genBtn = document.getElementById('generate-btn');
+                const cards = Array.from(document.querySelectorAll('.job-card'));
+                const jobs = cards.map(c => ({
+                    status: Array.from(c.classList).find(x => x.startsWith('job-card--'))?.replace('job-card--', ''),
+                    hasAudio: !!c.querySelector('audio[data-job-id]'),
+                    audioSrc: c.querySelector('audio[data-job-id]')?.src?.substring(0, 60),
+                    audioDuration: c.querySelector('audio[data-job-id]')?.duration,
+                    text: c.querySelector('.job-card__text')?.textContent,
+                }));
                 const banner = document.querySelector('.status-banner');
                 return {
-                    playerVisible: player?.classList.contains('player--visible'),
-                    audioSrc: audio?.src?.substring(0, 50),
-                    audioDuration: audio?.duration,
-                    audioReadyState: audio?.readyState,
-                    genDisabled: genBtn?.disabled,
-                    banner: banner?.textContent?.trim()?.substring(0, 100),
-                    bannerType: banner?.className
+                    jobs,
+                    bannerType: banner?.className,
+                    bannerText: banner?.textContent?.trim()?.substring(0, 120),
                 };
             })()""",
-            target["id"], timeout=10,
+            target['id'], timeout=10,
         )
         s = v(poll)
-        if s.get("playerVisible") and s.get("audioSrc"):
-            print(f"      ✓ Audio generated!")
-            print(f"        src:          {s.get('audioSrc')[:50]}")
-            print(f"        duration:     {s.get('audioDuration')}s")
-            print(f"        readyState:   {s.get('audioReadyState')}")
+        jobs = s.get('jobs', [])
+        if jobs:
+            statuses = [j.get('status') for j in jobs]
+            print(f'      [{int(time.time() - start):3d}s] jobs: {statuses}')
+
+        done_job = next((j for j in jobs if j.get('status') == 'done' and j.get('hasAudio')), None)
+        if done_job:
+            print(f'\n      ✓ Audio generated')
+            print(f'        status:   done')
+            print(f'        src:      {done_job.get("audioSrc", "")[:60]}')
+            print(f'        duration: {done_job.get("audioDuration")}s')
+            print(f'        text:     {done_job.get("text", "")[:60]}')
             audio_ready = True
             break
-        if s.get("bannerType") and "error" in s.get("bannerType"):
-            print(f"      ❌ Error: {s.get('banner')}")
-            shot_err = SCREENSHOT_DIR / "04-gen-error.png"
-            cdp.screenshot(target["id"], shot_err)
+
+        err_banner = s.get('bannerType') and 'error' in s.get('bannerType')
+        if err_banner:
+            print(f'      ❌ Error banner: {s.get("bannerText")}')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '04-gen-error.png')
             sys.exit(1)
+
         time.sleep(2)
 
     if not audio_ready:
-        print(f"      ❌ Audio did not appear within timeout")
-        shot_stuck = SCREENSHOT_DIR / "04-stuck.png"
-        cdp.screenshot(target["id"], shot_stuck)
+        print(f'      ❌ No job reached done within {gen_timeout}s')
+        cdp.screenshot(target['id'], SCREENSHOT_DIR / '04-stuck.png')
         sys.exit(1)
 
-    # Final screenshot
-    print(f"\n[final] Screenshot: audio output visible")
-    shot4 = SCREENSHOT_DIR / "04-audio-output.png"
-    cdp.screenshot(target["id"], shot4)
-    print(f"      → {shot4} ({shot4.stat().st_size // 1024} KB)")
-
-    # Check console for errors
-    print(f"\n[bonus] Checking for console errors")
-    cdp.send("Runtime.enable", session_id=sid)
-    cdp.send("Log.enable", session_id=sid)
-    # Drain any pending events
-    cdp.ws.settimeout(1)
-    try:
-        while True:
-            cdp.ws.recv()
-    except websocket.WebSocketTimeoutException:
-        pass
-
-    # Check audio duration with a fresh eval
-    final = cdp.eval(
-        """(function() {
-            const audio = document.getElementById('audio-element');
-            const genBtn = document.getElementById('generate-btn');
-            return {
-                duration: audio?.duration,
-                paused: audio?.paused,
-                src: audio?.src?.startsWith('blob:'),
-                genBtnEnabled: !genBtn?.disabled
-            };
-        })()""",
-        target["id"], timeout=5,
-    )
-    f = v(final)
-    print(f"      audio src:   {'blob: ✓' if f.get('src') else 'not a blob'}")
-    print(f"      duration:    {f.get('duration')}s")
-    print(f"      gen enabled: {f.get('genBtnEnabled')}")
+    shot4 = SCREENSHOT_DIR / '04-audio-output.png'
+    cdp.screenshot(target['id'], shot4)
+    print(f'      → {shot4} ({shot4.stat().st_size // 1024} KB)')
 
     cdp.close()
-    print(f"\n{'='*70}")
-    print(f"  ✓ ALL TESTS PASSED")
-    print(f"  Screenshots in: {SCREENSHOT_DIR}")
-    print(f"{'='*70}")
+    print(f'\n{"=" * 70}')
+    print('  ✓ ALL TESTS PASSED')
+    print(f'  Screenshots in: {SCREENSHOT_DIR}')
+    print(f'{"=" * 70}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\nInterrupted.")
+        print('\n\nInterrupted.')
         sys.exit(1)
     except Exception as e:
         import traceback
-        print(f"\n❌ Fatal error: {e}")
+        print(f'\n❌ Fatal: {e}')
         traceback.print_exc()
         sys.exit(1)
