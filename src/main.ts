@@ -112,11 +112,8 @@ async function render() {
           <option value="es">Spanish</option>
           <option value="fr">French</option>
           <option value="de">German</option>
-          <option value="it">Italian</option>
           <option value="pt">Portuguese</option>
           <option value="ru">Russian</option>
-          <option value="ja">Japanese</option>
-          <option value="zh">Chinese</option>
           <option value="ko">Korean</option>
           <option value="hi">Hindi</option>
           <option value="ar">Arabic</option>
@@ -415,7 +412,7 @@ function renderJobCard(job: GenerationJob): string {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Download WAV
           </button>
-          <span class="job-card__meta">${((job.durationMs ?? 0) / 1000).toFixed(1)}s · ${((job.audio?.length ?? 0) / (job.sampleRate ?? 1) | 0)}s audio</span>
+          <span class="job-card__meta">${((job.durationMs ?? 0) / 1000).toFixed(1)}s · ${job.audio && job.sampleRate ? Math.floor(job.audio.length / job.sampleRate) : 0}s audio</span>
         </div>`;
       break;
     case 'error':
@@ -933,7 +930,7 @@ function showStatus(type: 'success' | 'error', message: string, assertive = fals
     ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
 
-  container.innerHTML = `<div class="status-banner status-banner--${type}" role="${assertive ? 'alert' : 'status'}" aria-live="${assertive ? 'assertive' : 'polite'}">${icon}<span>${message}</span></div>`;
+  container.innerHTML = `<div class="status-banner status-banner--${type}" role="${assertive ? 'alert' : 'status'}" aria-live="${assertive ? 'assertive' : 'polite'}">${icon}<span>${escapeHtml(message)}</span></div>`;
 }
 
 // ─── Utilities ───────────────────────────────────────────────────

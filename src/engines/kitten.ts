@@ -16,7 +16,10 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 // but that requires more API surface than this v1 supports.
 
 const MODEL_URL_BASE = 'https://huggingface.co/KittenML/';
-// Default ONNX file within the repo. Overridden by model.modelFile per-entry.
+// Default ONNX file within the repo. Overridden by model.modelFile per-entry,
+// because each Kitten release ships its model under a different filename
+// (e.g. `kitten_tts_nano_v0_8.onnx` vs `kitten_tts_mini_v0_8.onnx`). Using the
+// wrong filename for a given repo silently 404s at download time.
 const DEFAULT_KITTEN_MODEL_FILE = 'kitten_tts_nano_v0_8.onnx';
 const VOICES_URL_BASE = 'https://huggingface.co/KittenML/';
 const VOICES_FILE = 'voices.npz';
@@ -61,7 +64,11 @@ interface NpyArray {
   data: Float32Array;
 }
 
-function parseNpy(buffer: ArrayBuffer): NpyArray {
+/**
+ * Parse a NumPy `.npy` file (single array, little-endian, no fortran order).
+ * Exported for unit testing; the production code path is parseNpz().
+ */
+export function parseNpy(buffer: ArrayBuffer): NpyArray {
   const view = new DataView(buffer);
   // Magic: \x93NUMPY (6 bytes: 93 4E 55 4D 50 59)
   if (view.getUint8(0) !== 0x93 || view.getUint8(1) !== 0x4E ||
@@ -84,36 +91,53 @@ function parseNpy(buffer: ArrayBuffer): NpyArray {
 
   // Parse dict for {'descr': '<f4', 'fortran_order': False, 'shape': (400, 256), }
   const descrMatch = header.match(/'descr'\s*:\s*'([^']+)'/);
-  const shapeMatch = header.match(/\(\s*((?:\d+,\s*)*\d+)?\s*\)/);
+  // Accepts "(N,)", "(N, M)", "()", or anything with comma-separated ints.
+  // The previous regex required a trailing digit which rejected NumPy's
+  // canonical 1D shape "(N,)".
+  const shapeMatch = header.match(/\(\s*((?:\d+\s*,\s*)*\d*)\s*\)/);
   if (!descrMatch || descrMatch[1] !== '<f4') {
     throw new Error(`Only float32 (<f4) .npy supported, got: ${descrMatch?.[1]}`);
   }
   const shapeStr = shapeMatch?.[1] ?? '';
-  const shape = shapeStr.trim() === '' ? [1] : shapeStr.split(',').map(s => parseInt(s.trim(), 10));
+  const shape = shapeStr.trim() === ''
+    ? [1]
+    : shapeStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+  const samplesLen = shape.reduce((acc, n) => acc * n, 1);
   const dataOffset = headerOffset + headerLen;
-  // For non-fortran, data is row-major
-  const data = new Float32Array(buffer, dataOffset);
+  // Float32Array requires a 4-byte-aligned offset. NumPy's v1 header
+  // padding to a 64-byte boundary normally guarantees alignment, but
+  // a v2/v3 header or a malformed file might not — copy into a fresh
+  // aligned ArrayBuffer to be safe.
+  const byteLength = samplesLen * 4;
+  const copy = new ArrayBuffer(byteLength);
+  new Uint8Array(copy).set(new Uint8Array(buffer, dataOffset, byteLength));
+  const data = new Float32Array(copy);
   return { shape, data };
 }
 
-function parseNpz(buffer: ArrayBuffer): Record<string, Float32Array> {
+/**
+ * Parse a NumPy `.npz` archive (a zip of `.npy` files) into a map of
+ * `{name → row-major Float32Array}`. Exported for unit testing.
+ */
+export function parseNpz(buffer: ArrayBuffer): Record<string, Float32Array> {
   // Use fflate's unzipSync for the .npz (which is a zip of .npy files)
   const files = unzipSync(new Uint8Array(buffer));
   const result: Record<string, Float32Array> = {};
   for (const [name, content] of Object.entries(files)) {
     if (!name.endsWith('.npy')) continue;
     const key = name.replace(/\.npy$/, '');
-    // Copy into a standalone ArrayBuffer (floating a slice may give misaligned data)
+    // fflate returns a Uint8Array view onto a shared backing buffer. The
+    // `.byteLength` of that view reflects only the slice, but the underlying
+    // .buffer is the full archive — copying through a Uint8Array slice
+    // preserves correct bounds.
     const ab = new ArrayBuffer(content.byteLength);
     new Uint8Array(ab).set(content);
-    const { shape, data } = parseNpy(ab);
-    if (shape.length === 2) {
-      // Flatten to a single Float32Array (row-major). For Kitten, each voice is
-      // (400, 256); we only use the first 256-dim row at generation time.
-      result[key] = data;
-    } else {
-      result[key] = data;
-    }
+    const { data } = parseNpy(ab);
+    // parseNpy always returns a single row-major Float32Array regardless of
+    // dimensionality; downstream consumers slice as needed (e.g. Kitten
+    // voices are (400, 256) and we read the first 256 floats as the style
+    // vector).
+    result[key] = data;
   }
   return result;
 }

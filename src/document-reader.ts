@@ -1,6 +1,8 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import Tesseract from 'tesseract.js';
+import { getMimeType, getFileExtension } from './document-types';
+export { getMimeType, getFileExtension } from './document-types';
 
 // PDF.js worker must be told where its worker script is. In Vite we copy the
 // worker to public/ and reference it relative to the served page so it works on
@@ -39,7 +41,7 @@ export interface ExtractOptions {
 }
 
 export async function extractDocument(file: File, options: ExtractOptions = {}): Promise<ExtractedDocument> {
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const ext = getFileExtension(file.name);
   const mime = getMimeType(ext, file.type);
   options.onProgress?.(`Reading ${ext.toUpperCase()} file…`);
 
@@ -60,14 +62,8 @@ export async function extractDocument(file: File, options: ExtractOptions = {}):
   }
 }
 
-function getMimeType(ext: string, fallback: string): string {
-  if (ext === 'pdf') return 'application/pdf';
-  if (ext === 'docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  if (ext === 'odt') return 'application/vnd.oasis.opendocument.text';
-  if (ext === 'epub') return 'application/epub+zip';
-  if (['txt', 'md', 'markdown'].includes(ext)) return ext === 'md' || ext === 'markdown' ? 'text/markdown' : 'text/plain';
-  return fallback;
-}
+// (getMimeType and getFileExtension moved to ./document-types so they can be
+//  unit-tested without pulling pdfjs/tesseract into the test bundle.)
 
 function readTextFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

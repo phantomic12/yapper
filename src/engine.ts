@@ -49,12 +49,13 @@ export interface TTSModel {
 export const MODELS: TTSModel[] = [
   {
     id: 'kokoro-82m',
-    name: 'Kokoro-82M (q8)',
+    name: 'Kokoro-82M (q8f16)',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
     modelFile: 'onnx/model_q8f16.onnx',
     description: 'High-quality 82M TTS. 28 built-in voices. q8f16 quantized (~86MB).',
     category: 'premium',
     sampleRate: 24000,
+    dtype: 'q8',
     custom: true,
     language: 'en',
     sizeMB: 86,
@@ -76,6 +77,7 @@ export const MODELS: TTSModel[] = [
     description: 'Kokoro-82M fp16 (~163MB). Higher quality than q8, larger download.',
     category: 'premium',
     sampleRate: 24000,
+    dtype: 'fp16',
     custom: true,
     language: 'en',
     sizeMB: 163,
@@ -119,6 +121,7 @@ export const MODELS: TTSModel[] = [
     id: 'kitten-mini',
     name: 'Kitten TTS Mini (~78MB)',
     modelId: 'KittenML/kitten-tts-mini-0.8',
+    modelFile: 'kitten_tts_mini_v0_8.onnx',
     description: 'Larger Kitten model, better quality. 8 voices.',
     category: 'balanced',
     sampleRate: 24000,
@@ -159,21 +162,18 @@ export const MODELS: TTSModel[] = [
     ],
     defaultVoiceId: 'expr-voice-2-m',
   },
-  // ── MMS-TTS — one model per language, q8 quantized ────────────────
+  // ── MMS-TTS — one model per language, q8 quantized. We only list
+  //    languages for which Xenova actually published a repo. Missing
+  //    languages (ita/jpn/zho/nld/pol) returned 401 on the HF API.
   { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-deu', name: 'MMS-TTS (German)',      modelId: 'Xenova/mms-tts-deu', description: 'Meta MMS for German.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'de', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-ita', name: 'MMS-TTS (Italian)',     modelId: 'Xenova/mms-tts-ita', description: 'Meta MMS for Italian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'it', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-por', name: 'MMS-TTS (Portuguese)',  modelId: 'Xenova/mms-tts-por', description: 'Meta MMS for Portuguese.',  category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pt', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-rus', name: 'MMS-TTS (Russian)',     modelId: 'Xenova/mms-tts-rus', description: 'Meta MMS for Russian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ru', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-jpn', name: 'MMS-TTS (Japanese)',    modelId: 'Xenova/mms-tts-jpn', description: 'Meta MMS for Japanese.',    category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ja', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-zho', name: 'MMS-TTS (Chinese)',     modelId: 'Xenova/mms-tts-zho', description: 'Meta MMS for Chinese.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'zh', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-kor', name: 'MMS-TTS (Korean)',      modelId: 'Xenova/mms-tts-kor', description: 'Meta MMS for Korean.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ko', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-hin', name: 'MMS-TTS (Hindi)',       modelId: 'Xenova/mms-tts-hin', description: 'Meta MMS for Hindi.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'hi', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-ara', name: 'MMS-TTS (Arabic)',      modelId: 'Xenova/mms-tts-ara', description: 'Meta MMS for Arabic.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ar', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-nld', name: 'MMS-TTS (Dutch)',       modelId: 'Xenova/mms-tts-nld', description: 'Meta MMS for Dutch.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'nl', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-pol', name: 'MMS-TTS (Polish)',      modelId: 'Xenova/mms-tts-pol', description: 'Meta MMS for Polish.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pl', sizeMB: 50, voices: [], defaultVoiceId: '' },
 ];
 
 // ─── Job queue ───────────────────────────────────────────────────
@@ -299,7 +299,14 @@ export class TTSEngine {
 
   // ─── Model loading ─────────────────────────────────────────────
   async loadModel(model: TTSModel): Promise<void> {
-    if (this.currentModel?.modelId === model.modelId && (this.pipe || customEngines.has(model.modelId))) {
+    // Treat a model as already loaded only when *all* identity fields match.
+    // Two Kokoro entries share modelId but differ in modelFile / dtype, so
+    // a plain modelId check would silently skip the second variant's load.
+    const sameModel = this.currentModel
+      && this.currentModel.modelId === model.modelId
+      && (this.currentModel.modelFile ?? '') === (model.modelFile ?? '')
+      && (this.currentModel.dtype ?? 'q8') === (model.dtype ?? 'q8');
+    if (sameModel && (this.pipe || customEngines.has(model.modelId))) {
       this.setEngineState('ready');
       return;
     }
@@ -416,6 +423,16 @@ export class TTSEngine {
   }
 
   clearFinished(): void {
+    // Revoke blob URLs of finished jobs so we don't leak memory. The user
+    // keeps the active ones (pending/generating) so playback continues.
+    for (const job of this.jobs) {
+      if (job.url && (job.status === 'done' || job.status === 'error' || job.status === 'cancelled')) {
+        URL.revokeObjectURL(job.url);
+        job.url = undefined;
+        job.blob = undefined;
+        job.audio = undefined;
+      }
+    }
     this.jobs = this.jobs.filter(j => j.status === 'pending' || j.status === 'generating');
     this.notifyJobs();
   }

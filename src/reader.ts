@@ -317,6 +317,25 @@ export function prepareReaderData(text: string, maxChars: number = 300): Prepare
   return { sentences, chunks };
 }
 
+/** Common English abbreviations and titles that end with a period but
+ *  should NOT be treated as sentence terminators. Matching is case-sensitive
+ *  on the first letter so we don't accidentally swallow normal words
+ *  ("dog." still splits correctly even though "DOG." would not).
+ *  Match whole tokens — `Mr` matches `Mr.` but not `Mrs.` is handled by
+ *  ordering: longer prefixes first. */
+const ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'mx', 'dr', 'prof', 'sr', 'jr', 'st', 'ave', 'blvd',
+  'co', 'corp', 'inc', 'ltd', 'llc', 'plc', 'govt',
+  'vs', 'etc', 'eg', 'ie', 'cf', 'al', 'pp',
+  'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec',
+  'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
+  'no', 'vol', 'pp', 'ed', 'eds', 'trans', 'rev',
+]);
+
+function isAbbreviation(token: string): boolean {
+  return ABBREVIATIONS.has(token.replace(/\.+$/, '').toLowerCase());
+}
+
 function segmentSentences(text: string): ReaderSentence[] {
   const paragraphs = text.split(/\n\s*\n/);
   let globalIndex = 0;
@@ -326,13 +345,30 @@ function segmentSentences(text: string): ReaderSentence[] {
     const raw = paragraphs[paragraphIndex].trim();
     if (!raw) continue;
 
-    // Split after sentence-ending punctuation (including common CJK marks).
-    const parts = raw.split(/(?<=[.!?。！？…]+(?:['"”’)]?)\s*)/);
+    // Split on sentence-ending punctuation followed by a capital letter /
+    // CJK char / opening quote / end-of-paragraph. We exclude periods that
+    // follow a known abbreviation token (Mr., Dr., etc.) by pre-passing with
+    // a placeholder.
+    const PROTECTED = '\u0001';
+    let protectedText = raw;
+    // Protect abbreviations like "Mr." / "U.S." by replacing their dot with
+    // a placeholder, then restoring it after splitting. The lookahead must
+    // include digits (dates: "Jan. 5, 2024"), CJK chars (mixed-script text),
+    // and opening quotes (dialogue).
+    protectedText = protectedText.replace(
+      /\b([A-Za-z]+)\.(?=\s+(?:[A-Z0-9]|[一-鿿]|[぀-ヿ]|[가-힯]|['"‘“]))/g,
+      (match, word: string) => {
+        if (isAbbreviation(word)) return `${word}${PROTECTED}`;
+        return match;
+      },
+    );
+
+    const parts = protectedText.split(/(?<=[.!?。！？…]+(?:['"”’)]?)\s*)/);
     for (const part of parts) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const words = trimmed.match(/\S+/g) ?? [trimmed];
-      sentences.push({ text: trimmed, words, globalIndex, paragraphIndex });
+      const restored = part.replace(new RegExp(PROTECTED, 'g'), '.').trim();
+      if (!restored) continue;
+      const words = restored.match(/\S+/g) ?? [restored];
+      sentences.push({ text: restored, words, globalIndex, paragraphIndex });
       globalIndex++;
     }
   }

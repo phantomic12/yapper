@@ -51,8 +51,10 @@ export const KOKORO_VOICES: Voice[] = Object.entries(VOICE_META).map(([id, meta]
 }));
 
 export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
-// q8 keeps the model ~86MB. fp32 is 325MB and overkill for browser TTS.
-const KOKORO_DTYPE = 'q8';
+// Default to q8 for the smallest download (~86MB). The actual dtype is taken
+// from the selected TTSModel entry so users can opt into fp16 (163MB) from the
+// model grid.
+const KOKORO_DEFAULT_DTYPE = 'q8';
 const KOKORO_SAMPLE_RATE = 24000;
 
 export class KokoroCustomEngine implements CustomEngine {
@@ -77,10 +79,14 @@ export class KokoroCustomEngine implements CustomEngine {
       const KokoroTTS = (mod as any).KokoroTTS;
 
       // The first call also downloads voices; track via progress callback.
-      const modelFile = _model.modelFile ?? 'onnx/model_q8f16.onnx';
+      // KokoroTTS.from_pretrained takes {dtype, device, progress_callback} —
+      // it picks the matching onnx file from the repo (e.g. dtype 'fp16'
+      // resolves to `onnx/model_fp16.onnx`). We pass the user-selected dtype
+      // from the TTSModel entry so the fp16 Kokoro card actually downloads
+      // the fp16 file (~163MB) instead of silently falling back to q8.
+      const dtype = _model.dtype ?? KOKORO_DEFAULT_DTYPE;
       this.tts = await KokoroTTS.from_pretrained(_model.modelId, {
-        dtype: KOKORO_DTYPE,
-        modelFileName: modelFile,
+        dtype,
         progress_callback: (data: any) => {
           if (data?.status === 'progress' && progressCallback) {
             progressCallback(data.loaded ?? 0, data.total ?? 1);
