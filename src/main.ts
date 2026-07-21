@@ -1,7 +1,7 @@
-import { extractDocument, type ExtractedDocument, type LayoutBlock } from './document-reader';
+import { extractDocument, type ExtractedDocument } from './document-reader';
 import { DocumentReaderSession, prepareReaderData, type ReaderState, type HighlightInfo, type ReaderSentence } from './reader';
 import './style.css';
-import { TTSEngine, MODELS, detectWebGPU, float32ToWav, type TTSModel, type Voice, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
+import { TTSEngine, MODELS, detectWebGPU, type TTSModel, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
 import { KittenCustomEngine } from './engines/kitten';
 
@@ -390,7 +390,7 @@ function renderJobList() {
 }
 
 function renderJobCard(job: GenerationJob): string {
-  let statusIcon = statusIconHtml(job.status);
+  const statusIcon = statusIconHtml(job.status);
   const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
   const speedLabel = job.speed !== 1.0 ? ` · ${job.speed.toFixed(2)}x` : '';
   const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
@@ -400,10 +400,11 @@ function renderJobCard(job: GenerationJob): string {
     case 'pending':
       body = `<div class="job-card__hint">Waiting in queue…</div>`;
       break;
-    case 'generating':
+    case 'generating': {
       const elapsed = job.startedAt ? Math.round((Date.now() - job.startedAt) / 100) / 10 : 0;
       body = `<div class="job-card__hint">Generating… ${elapsed}s</div>`;
       break;
+    }
     case 'done':
       body = `
         <audio controls preload="metadata" data-job-id="${job.id}" src="${job.url}"></audio>
@@ -529,7 +530,7 @@ function bindEvents() {
     if (!text) return;
 
     // For SpeechT5, ensure we have a valid speaker embedding
-    let voiceId = selectedVoiceId;
+    const voiceId = selectedVoiceId;
     const isCustom = selectedModel.id === 'speecht5' && voiceId === 'custom';
     if (isCustom && !customEmbeddingUrl) {
       showStatus('error', 'Custom voice: paste a speaker embedding URL first.');
@@ -651,10 +652,6 @@ function bindDocumentEvents() {
 
   function findOverlaySentence(globalIndex: number): HTMLElement | null {
     return readerOverlayContent.querySelector(`[data-sentence-index="${globalIndex}"]`) as HTMLElement | null;
-  }
-
-  function findOverlayWord(sentence: HTMLElement, wordIndex: number): HTMLElement | null {
-    return sentence.querySelector(`[data-word-index="${wordIndex}"]`) as HTMLElement | null;
   }
 
   function handleFile(file: File) {

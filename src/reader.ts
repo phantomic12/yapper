@@ -68,8 +68,8 @@ export class DocumentReaderSession {
   private audio: HTMLAudioElement;
   private state: ReaderState;
   private options: ReaderOptions;
-  private onDone?: (job: GenerationJob) => void;
-  private onUpdate?: (job: GenerationJob) => void;
+  /** Unsubscribers returned from engine.on(); called on stop()/destroy. */
+  private unsubscribes: Array<() => void> = [];
   private highlightRaf?: number;
 
   constructor(engine: TTSEngine, fullText: string, options: ReaderOptions = {}) {
@@ -158,26 +158,18 @@ export class DocumentReaderSession {
   }
 
   private subscribe() {
-    const parent = this.engine as any;
-    this.onDone = (job: GenerationJob) => this.handleJobDone(job);
-    this.onUpdate = (job: GenerationJob) => this.handleJobUpdate(job);
-    parent.events = parent.events ?? {};
-    parent.events.onJobDone = this.chain(parent.events.onJobDone, this.onDone);
-    parent.events.onJobUpdate = this.chain(parent.events.onJobUpdate, this.onUpdate);
+    // Use the typed emitter API instead of monkey-patching engine.events.
+    // The returned unsubscribe fn is captured so stop()/destroy can release
+    // the listener without affecting other consumers.
+    this.unsubscribes.push(
+      this.engine.on('jobDone', (job) => this.handleJobDone(job)),
+      this.engine.on('jobUpdate', (job) => this.handleJobUpdate(job)),
+    );
   }
 
   private unsubscribe() {
-    const parent = this.engine as any;
-    if (!parent.events) return;
-    if (parent.events.onJobDone === this.onDone) parent.events.onJobDone = undefined;
-    if (parent.events.onJobUpdate === this.onUpdate) parent.events.onJobUpdate = undefined;
-  }
-
-  private chain<T>(existing: ((x: T) => void) | undefined, next: (x: T) => void): (x: T) => void {
-    return (x: T) => {
-      existing?.(x);
-      next(x);
-    };
+    for (const u of this.unsubscribes) u();
+    this.unsubscribes = [];
   }
 
   private handleJobUpdate(job: GenerationJob) {
@@ -250,7 +242,7 @@ export class DocumentReaderSession {
     this.tryPlayNext();
   }
 
-  private handleAudioError(e: Event) {
+  private handleAudioError(_e: Event) {
     this.setState({ error: 'Audio player error', status: 'paused', isPlaying: false });
     this.cancelHighlightLoop();
   }
@@ -285,8 +277,12 @@ export class DocumentReaderSession {
     const totalWords = chunk.sentences.reduce((sum, s) => sum + s.words.length, 0);
     if (totalWords === 0) return;
 
-    const ratio = Math.min(1, Math.max(0, this.audio.currentTime / this.audio.duration));
-    const targetWord = Math.min(Math.floor(ratio * totalWords), totalWords - 1);
+    const targetWord = pickHighlightedWord(
+      totalWords,
+      this.audio.currentTime,
+      this.audio.duration,
+      chunk.job?.wordTimings,
+    );
 
     let remaining = targetWord;
     for (const sentence of chunk.sentences) {
@@ -308,6 +304,45 @@ export class DocumentReaderSession {
 export interface PreparedReaderData {
   sentences: ReaderSentence[];
   chunks: ReaderChunk[];
+}
+
+/**
+ * Resolve which word should be highlighted given a current time and an
+ * optional per-word timing array. Exported so the highlight math can be
+ * unit-tested without instantiating an Audio element.
+ *
+ * @param totalWords       number of whitespace tokens in the chunk
+ * @param currentTime      the playing audio's currentTime, in seconds
+ * @param chunkDuration    the audio's total duration, in seconds
+ * @param wordTimings      optional per-word start times, in seconds. When
+ *                         present, the latest word whose start ≤ currentTime
+ *                         is highlighted; otherwise the chunk-position ratio
+ *                         is used.
+ */
+export function pickHighlightedWord(
+  totalWords: number,
+  currentTime: number,
+  chunkDuration: number,
+  wordTimings?: number[],
+): number {
+  if (totalWords <= 0) return 0;
+  // Treat NaN / Infinity / negative time as "not started yet" — the audio
+  // element can report these before metadata loads. Returning 0 keeps the
+  // highlight on the first word rather than producing NaN downstream.
+  const safeTime = Number.isFinite(currentTime) && currentTime > 0 ? currentTime : 0;
+  if (wordTimings && wordTimings.length >= totalWords) {
+    let lo = 0;
+    let hi = totalWords - 1;
+    let best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (wordTimings[mid] <= safeTime) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return best;
+  }
+  const ratio = Math.min(1, Math.max(0, safeTime / Math.max(chunkDuration, 1e-6)));
+  return Math.min(Math.floor(ratio * totalWords), totalWords - 1);
 }
 
 /** Splits raw text into sentences and reading-order chunks. */

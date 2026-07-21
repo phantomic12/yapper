@@ -44,6 +44,22 @@ describe('float32ToWav', () => {
     expect(view.getInt16(48, true)).toBe(0);
   });
 
+  it('rounds peak values instead of truncating (avoids 3dB loss near ±1)', async () => {
+    // Quantization is asymmetric on the 0x8000 / 0x7FFF boundary because
+    // the positive side has one fewer representable value. Without
+    // Math.round the prior implementation truncated to ±32765/32766.
+    // 0.99998 * 0x7FFF = 32766.34  → rounds to 32766
+    // -0.99998 * 0x8000 = -32766.66 → rounds to -32767
+    // For ±1.0 the result is exactly ±32767 / -32768.
+    const samples = new Float32Array([-0.99998, 0.99998, 1.0, -1.0]);
+    const blob = float32ToWav(samples, 16000);
+    const view = new DataView(await blob.arrayBuffer());
+    expect(view.getInt16(44, true)).toBe(-32767);  // rounded
+    expect(view.getInt16(46, true)).toBe(32766);   // rounded
+    expect(view.getInt16(48, true)).toBe(32767);   // exact peak
+    expect(view.getInt16(50, true)).toBe(-32768);  // exact negative peak
+  });
+
   it('handles an empty buffer', async () => {
     const blob = float32ToWav(new Float32Array(0), 16000);
     const buf = await blob.arrayBuffer();

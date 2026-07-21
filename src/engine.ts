@@ -1,4 +1,5 @@
 import { pipeline } from '@huggingface/transformers';
+import { EventEmitter } from './events';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -205,10 +206,38 @@ export interface GenerationJob {
   readerSessionId?: string;
   /** Order within that reading session. */
   readerIndex?: number;
+  /**
+   * Per-word start times in seconds, relative to the start of this job's
+   * audio. Same length as the number of words in `text` after splitting
+   * on whitespace. Populated by engines that expose phoneme durations
+   * (e.g. kokoro-js via `stream()`); engines that don't (kitten, MMS)
+   * leave this undefined and the reader falls back to chunk-level
+   * position-ratio highlighting.
+   */
+  wordTimings?: number[];
 }
 
 export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
 
+/**
+ * Typed event surface. Consumers should prefer the `on()`/`off()` methods
+ * on TTSEngine over mutating a callback bag directly. The legacy
+ * `EngineEvents` callback map is still accepted by the constructor for
+ * backward compatibility but new code should use `on()`.
+ *
+ * Declared as a type alias with a string index signature so it satisfies
+ * `EventEmitter`'s generic constraint.
+ */
+export type EngineEventMap = {
+  jobsChange: (jobs: GenerationJob[]) => void;
+  engineStateChange: (state: EngineState) => void;
+  loadProgress: (loaded: number, total: number, modelName: string) => void;
+  engineError: (message: string) => void;
+  jobUpdate: (job: GenerationJob) => void;
+  jobDone: (job: GenerationJob) => void;
+} & Record<string, (...args: unknown[]) => void>;
+
+/** @deprecated Use `on('jobsChange', fn)` etc. instead. */
 export interface EngineEvents {
   onJobsChange?: (jobs: GenerationJob[]) => void;
   onEngineStateChange?: (state: EngineState) => void;
@@ -226,7 +255,7 @@ export interface EngineEvents {
 // receives the raw job and returns a Float32Array + sample rate.
 export interface CustomEngine {
   load(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }>;
-  generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number }>;
+  generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }>;
   dispose(): void;
 }
 
@@ -244,7 +273,12 @@ export function unregisterCustomEngine(modelId: string): void {
 export async function detectWebGPU(): Promise<boolean> {
   if (!('gpu' in navigator)) return false;
   try {
-    const adapter = await (navigator as any).gpu.requestAdapter();
+    // Cast to the WebGPU-augmented Navigator defined in lib.dom.d.ts.
+    // This avoids `as any` while staying compatible across TS versions
+    // where the WebGPU types may be partial.
+    const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    if (!gpu) return false;
+    const adapter = await gpu.requestAdapter();
     return !!adapter;
   } catch {
     return false;
@@ -252,7 +286,7 @@ export async function detectWebGPU(): Promise<boolean> {
 }
 
 // ─── TTS Engine ──────────────────────────────────────────────────
-export class TTSEngine {
+export class TTSEngine extends EventEmitter<EngineEventMap> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private pipe: any = null;
   private currentModel: TTSModel | null = null;
@@ -260,17 +294,27 @@ export class TTSEngine {
   private engineState: EngineState = 'idle';
   private jobs: GenerationJob[] = [];
   private processing = false;
-  private events: EngineEvents;
   private nextJobId = 1;
+  /** Single-flight: when non-null, a load is in progress and concurrent
+   *  loadModel() calls should await this promise instead of starting over. */
+  private loadingPromise: Promise<void> | null = null;
 
   constructor(events: EngineEvents = {}) {
-    this.events = events;
+    super();
+    // Bridge the deprecated callback-bag API to the new emitter so existing
+    // callers keep working without modification.
+    if (events.onJobsChange) this.on('jobsChange', events.onJobsChange);
+    if (events.onEngineStateChange) this.on('engineStateChange', events.onEngineStateChange);
+    if (events.onLoadProgress) this.on('loadProgress', events.onLoadProgress);
+    if (events.onEngineError) this.on('engineError', events.onEngineError);
+    if (events.onJobUpdate) this.on('jobUpdate', events.onJobUpdate);
+    if (events.onJobDone) this.on('jobDone', events.onJobDone);
   }
 
   // ─── State ──────────────────────────────────────────────────────
   private setEngineState(state: EngineState) {
     this.engineState = state;
-    this.events.onEngineStateChange?.(state);
+    this.emit('engineStateChange', state);
   }
 
   getEngineState(): EngineState {
@@ -287,13 +331,13 @@ export class TTSEngine {
 
   private notifyJobs() {
     // Return a copy so consumers can't mutate internal state
-    this.events.onJobsChange?.(this.jobs.slice());
+    this.emit('jobsChange', this.jobs.slice());
   }
 
   private notifyJobUpdate(job: GenerationJob) {
-    this.events.onJobUpdate?.(job);
+    this.emit('jobUpdate', job);
     if (job.status === 'done') {
-      this.events.onJobDone?.(job);
+      this.emit('jobDone', job);
     }
   }
 
@@ -309,6 +353,15 @@ export class TTSEngine {
     if (sameModel && (this.pipe || customEngines.has(model.modelId))) {
       this.setEngineState('ready');
       return;
+    }
+
+    // Single-flight guard: if a load is already in progress, wait for it
+    // instead of starting a second concurrent load. Without this, two
+    // rapid clicks on "Load Model" race: each call disposes the other's
+    // pipe mid-init and the slower one overwrites `currentModel` with
+    // its stale result.
+    if (this.loadingPromise) {
+      return this.loadingPromise;
     }
 
     // If we're mid-generation on a different model, let it finish but cancel
@@ -333,8 +386,17 @@ export class TTSEngine {
     }
 
     this.setEngineState('loading');
-    this.events.onLoadProgress?.(0, 1, model.name);
+    this.emit('loadProgress', 0, 1, model.name);
 
+    this.loadingPromise = this.doLoad(model);
+    try {
+      await this.loadingPromise;
+    } finally {
+      this.loadingPromise = null;
+    }
+  }
+
+  private async doLoad(model: TTSModel): Promise<void> {
     try {
       if (model.custom) {
         const custom = customEngines.get(model.modelId);
@@ -342,24 +404,32 @@ export class TTSEngine {
           throw new Error(`No custom engine registered for model ${model.modelId}`);
         }
         const { sampleRate } = await custom.load(model, (loaded, total) => {
-          this.events.onLoadProgress?.(loaded, total, model.name);
+          this.emit('loadProgress', loaded, total, model.name);
         });
         this.currentSampleRate = sampleRate;
       } else {
         // Wait for in-flight job on a different model to finish first
         // (we just disposed the old pipe; jobs in flight will error out gracefully
         //  because they use the old pipe reference — handled in processQueue)
+        // Transformers.js doesn't export a proper ProgressInfo type, so we
+        // narrow the callback param with a structural type that matches the
+        // subset of fields the engine actually reads.
+        interface LoadProgress {
+          status: string;
+          loaded?: number;
+          total?: number;
+        }
         const newPipe = await pipeline('text-to-speech', model.modelId, {
           dtype: model.dtype ?? 'q8',
-          progress_callback: (progress: any) => {
+          progress_callback: (progress: LoadProgress) => {
             if (progress.status === 'progress') {
-              this.events.onLoadProgress?.(
+              this.emit('loadProgress',
                 progress.loaded ?? 0,
                 progress.total ?? 1,
-                model.name
+                model.name,
               );
             } else if (progress.status === 'done') {
-              this.events.onLoadProgress?.(1, 1, model.name);
+              this.emit('loadProgress', 1, 1, model.name);
             }
           },
         });
@@ -374,7 +444,7 @@ export class TTSEngine {
       this.processQueue();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.events.onEngineError?.(`Load failed: ${msg}`);
+      this.emit('engineError', `Load failed: ${msg}`);
       this.setEngineState('error');
       throw err;
     }
@@ -468,8 +538,14 @@ export class TTSEngine {
           const result = await custom.generate(model, next.voiceId, next.text, { speed: next.speed });
           audio = result.audio;
           samplingRate = result.samplingRate;
+          // Engines that expose per-word start times (e.g. kokoro-js via
+          // `stream()`) populate this so the document reader can highlight
+          // accurately across chunk boundaries.
+          if (result.wordTimings) {
+            next.wordTimings = result.wordTimings;
+          }
         } else {
-          const callOptions: any = {};
+          const callOptions: Record<string, unknown> = {};
           // Priority: job-level custom URL > voice's static URL > model's default voice URL
           const embeddingUrl = next.customSpeakerEmbeddings
             ?? voice?.speakerEmbeddings
@@ -532,6 +608,9 @@ export class TTSEngine {
       if (job.url) URL.revokeObjectURL(job.url);
     }
     this.jobs = [];
+    // Detach every listener so an engine destroyed mid-session doesn't keep
+    // its consumers alive (and vice versa).
+    this.removeAllListeners();
     this.setEngineState('idle');
   }
 }
@@ -569,7 +648,10 @@ export function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
   const offset = 44;
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    // Math.round prevents the truncation bias of `s * 0x7FFF` for values
+    // very close to ±1. Without it, -0.99998 maps to -32766 instead of
+    // -32767, costing ~3 dB of dynamic range on quiet peaks.
+    view.setInt16(offset + i * 2, s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7FFF), true);
   }
 
   return new Blob([buffer], { type: 'audio/wav' });
