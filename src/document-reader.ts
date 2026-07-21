@@ -1,8 +1,8 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import Tesseract from 'tesseract.js';
-import { getMimeType, getFileExtension } from './document-types';
-export { getMimeType, getFileExtension } from './document-types';
+import { getMimeType, getFileExtension, MAX_PDF_PAGES } from './document-types';
+export { getMimeType, getFileExtension, MAX_PDF_PAGES } from './document-types';
 
 // PDF.js worker must be told where its worker script is. In Vite we copy the
 // worker to public/ and reference it relative to the served page so it works on
@@ -38,12 +38,28 @@ export interface ExtractOptions {
   ocrLang?: string;
   /** Optional progress callback for large documents. */
   onProgress?: (message: string) => void;
+  /**
+   * Maximum PDF pages to extract. Defaults to 500. A 1000-page PDF can OOM
+   * the browser tab because pdfjs holds every page's content stream in
+   * memory until the loop finishes. Callers can override when they know the
+   * document is small (e.g. tests) by passing a lower number.
+   */
+  maxPdfPages?: number;
 }
 
 export async function extractDocument(file: File, options: ExtractOptions = {}): Promise<ExtractedDocument> {
   const ext = getFileExtension(file.name);
   const mime = getMimeType(ext, file.type);
   options.onProgress?.(`Reading ${ext.toUpperCase()} file…`);
+
+  // OCR is only meaningful for scanned/image PDFs. Catching it here gives
+  // a clearer error than letting it silently no-op downstream.
+  if (options.useOcr && mime !== 'application/pdf') {
+    throw new Error(
+      `OCR is only supported for PDFs; got ${mime || ext || 'unknown'}. ` +
+      `Disable the OCR toggle for this document.`,
+    );
+  }
 
   switch (mime) {
     case 'application/pdf':
@@ -95,9 +111,15 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
   const parts: string[] = [];
   const layoutBlocks: LayoutBlock[] = [];
   const useOcr = options.useOcr ?? false;
+  const maxPages = Math.min(pdf.numPages, options.maxPdfPages ?? MAX_PDF_PAGES);
+  if (maxPages < pdf.numPages) {
+    options.onProgress?.(
+      `PDF has ${pdf.numPages} pages; only the first ${maxPages} will be extracted`,
+    );
+  }
 
-  for (let i = 1; i <= pdf.numPages; i++) {
-    options.onProgress?.(`Processing PDF page ${i}/${pdf.numPages}…`);
+  for (let i = 1; i <= maxPages; i++) {
+    options.onProgress?.(`Processing PDF page ${i}/${maxPages}…`);
     const page = await pdf.getPage(i);
 
     if (useOcr) {
@@ -148,9 +170,9 @@ async function ocrPage(page: pdfjs.PDFPageProxy, pageNumber: number, options: Ex
     },
   });
 
-  const resultData = result.data as any;
+  const resultData = (result as TesseractResult).data;
   const blocks: LayoutBlock[] = [];
-  const words: any[] = resultData.words ?? [];
+  const words: TesseractWord[] = resultData.words ?? [];
   if (words.length) {
     // Group words into rough horizontal lines, then collapse near lines into blocks.
     const lineThreshold = (canvas.height * 0.025);
@@ -171,15 +193,29 @@ async function ocrPage(page: pdfjs.PDFPageProxy, pageNumber: number, options: Ex
   return blocks;
 }
 
+// Tesseract's Word type — the public API exposes a richer type but we only
+// use the bbox + text. Narrowing here keeps the grouping logic readable.
+interface TesseractWord {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+  confidence?: number;
+}
+interface TesseractPage {
+  words?: TesseractWord[];
+}
+interface TesseractResult {
+  data: TesseractPage;
+}
+
 interface LineGroup {
   y: number;
   x: number;
   width: number;
   height: number;
-  words: any[];
+  words: TesseractWord[];
 }
 
-function groupWordsIntoLines(words: any[], yThreshold: number): LineGroup[] {
+function groupWordsIntoLines(words: TesseractWord[], yThreshold: number): LineGroup[] {
   const sorted = [...words].sort((a, b) => {
     const ay = Math.min(a.bbox.y0, b.bbox.y0);
     const by = Math.min(a.bbox.y0, b.bbox.y0);
@@ -259,16 +295,27 @@ async function extractOdt(file: File): Promise<Omit<ExtractedDocument, 'mimeType
 
 // ─── EPUB extraction ─────────────────────────────────────────────
 
+// Minimal subset of epubjs's spine API that we actually consume. The published
+// types are incomplete so we narrow to the shape we need.
+interface EpubSpineItem {
+  load: (fn: (url: string) => Promise<string | Document>) => Promise<string | Document>;
+  unload?: () => void;
+}
+interface EpubBook {
+  spine: { spineItems: EpubSpineItem[] };
+  load: (url: string) => Promise<string | Document>;
+  loaded: { spine: Promise<unknown> };
+}
+
 async function extractEpub(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const ePub = (await import('epubjs')).default;
+  const ePub = (await import('epubjs')).default as unknown as (data: ArrayBuffer) => EpubBook;
   const arrayBuffer = await readArrayBuffer(file);
   const book = ePub(arrayBuffer);
   await book.loaded.spine;
 
   const parts: string[] = [];
-  const spine = (book.spine as any).spineItems as Array<{ load: (fn: (url: string) => Promise<string | Document>) => Promise<string | Document>; unload?: () => void }>;
-  for (const item of spine) {
-    const doc = await item.load(book.load.bind(book) as any);
+  for (const item of book.spine.spineItems) {
+    const doc = await item.load(book.load.bind(book));
     const text = typeof doc === 'string'
       ? stripHtml(doc)
       : (doc as Document).body?.textContent ?? '';

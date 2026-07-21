@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { getMimeType, getFileExtension } from './document-types';
+import { getMimeType, getFileExtension, MAX_PDF_PAGES } from './document-types';
+
+describe('MAX_PDF_PAGES default', () => {
+  it('is exported and is a positive integer', () => {
+    expect(typeof MAX_PDF_PAGES).toBe('number');
+    expect(MAX_PDF_PAGES).toBeGreaterThan(0);
+    expect(Number.isInteger(MAX_PDF_PAGES)).toBe(true);
+  });
+});
 
 describe('getMimeType', () => {
   it.each([

@@ -14,6 +14,8 @@ export function getMimeType(ext: string, fallback: string): string {
   return fallback;
 }
 
+export const MAX_PDF_PAGES = 500;
+
 /**
  * Extract the file extension (lowercase, no dot) from a file name. Returns
  * the empty string when no extension is present.

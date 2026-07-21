@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { prepareReaderData } from './reader';
+import { prepareReaderData, pickHighlightedWord } from './reader';
 
 describe('prepareReaderData — sentence segmentation', () => {
   it('splits on plain terminal punctuation', () => {
@@ -96,5 +96,52 @@ describe('prepareReaderData — chunking', () => {
   it('returns no chunks for empty text', () => {
     const { chunks } = prepareReaderData('');
     expect(chunks).toEqual([]);
+  });
+});
+
+describe('pickHighlightedWord', () => {
+  it('returns 0 when there are no words', () => {
+    expect(pickHighlightedWord(0, 1, 10)).toBe(0);
+    expect(pickHighlightedWord(-1, 1, 10)).toBe(0);
+  });
+
+  it('falls back to chunk ratio when no timings are provided', () => {
+    // 10 words, chunk duration 10s → halfway is word 5
+    expect(pickHighlightedWord(10, 5, 10)).toBe(5);
+    expect(pickHighlightedWord(10, 0, 10)).toBe(0);
+    expect(pickHighlightedWord(10, 9.99, 10)).toBe(9);
+    expect(pickHighlightedWord(10, 100, 10)).toBe(9); // clamped at last
+  });
+
+  it('clamps negative or NaN time to 0', () => {
+    expect(pickHighlightedWord(10, -1, 10)).toBe(0);
+    expect(pickHighlightedWord(10, NaN, 10)).toBe(0);
+  });
+
+  it('uses wordTimings when present (binary search)', () => {
+    // 6 words, evenly spaced across 6s
+    const timings = [0, 1, 2, 3, 4, 5];
+    expect(pickHighlightedWord(6, 0.0, 6, timings)).toBe(0);
+    expect(pickHighlightedWord(6, 1.5, 6, timings)).toBe(1);
+    expect(pickHighlightedWord(6, 5.5, 6, timings)).toBe(5);
+    // Exactly at a boundary: word 3 starts at t=3, so t=3 returns word 3
+    expect(pickHighlightedWord(6, 3.0, 6, timings)).toBe(3);
+  });
+
+  it('does not jump backwards when timings are dense at the start', () => {
+    // Word 5 starts at t=0.1 — even at currentTime=0 it's already "passed"
+    // because we want the *latest* word whose start <= currentTime.
+    const timings = [0, 0.01, 0.02, 0.03, 0.04, 0.1];
+    // t=0: only word 0 has start <= 0
+    expect(pickHighlightedWord(6, 0, 6, timings)).toBe(0);
+    // t=0.05: words 0..4 qualify, latest is 4
+    expect(pickHighlightedWord(6, 0.05, 6, timings)).toBe(4);
+  });
+
+  it('falls back to chunk ratio if timings are shorter than word count', () => {
+    // Engine provided timings for fewer words than the chunk contains;
+    // ratio fallback is safer than indexing past the end.
+    const timings = [0, 1];  // only 2 timings, 10 words
+    expect(pickHighlightedWord(10, 5, 10, timings)).toBe(5); // ratio wins
   });
 });
