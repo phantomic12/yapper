@@ -212,6 +212,31 @@ body {
   background: var(--accent-glow);
 }
 
+/* Loaded state — only the card for the currently-loaded model wears this.
+   It stacks on top of --selected, so a user can have a card "selected but
+   not yet loaded" (in which case --selected alone shows) or "selected and
+   currently loaded" (both classes apply). */
+.model-card--loaded {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.model-card--loaded.model-card--selected {
+  border-color: var(--success);
+  background: linear-gradient(135deg, var(--accent-glow) 0%, var(--success-bg) 100%);
+}
+.model-card__status {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 4px;
+  color: var(--text-dim);
+}
+.model-card--loaded .model-card__status {
+  color: var(--success);
+}
+
 .model-card__name {
   font-size: 0.82rem;
   font-weight: 600;

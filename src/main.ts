@@ -124,6 +124,7 @@ async function render() {
               ${m.language && m.language !== 'en' ? `<span class="model-card__lang">${m.language.toUpperCase()}</span>` : ''}
               <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
             </div>
+            <div class="model-card__status" data-role="model-status">Selected</div>
           </button>
         `).join('')}
       </div>
@@ -272,6 +273,7 @@ async function render() {
 
   renderVoiceSection();
   renderLanguageFilter();
+  renderModelCardStatuses();
   bindEvents();
   updateDocumentSectionVisibility();
 }
@@ -286,6 +288,27 @@ function renderLanguageFilter() {
     const visible = currentLanguageFilter === 'all' || cardLang === currentLanguageFilter;
     card.style.display = visible ? '' : 'none';
     card.setAttribute('aria-hidden', String(!visible));
+  });
+}
+
+/**
+ * Update the "Selected" / "Loaded" / "Select to load" label on every model
+ * card. Called from the engine state handler so the UI stays in sync with
+ * what is actually in memory.
+ */
+function renderModelCardStatuses() {
+  const loadedId = engine?.getCurrentModel()?.id ?? null;
+  const isReady = engine?.getEngineState() === 'ready';
+  document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
+    const id = card.dataset.modelId;
+    const isSelected = id === selectedModel.id;
+    const isLoaded = isReady && id === loadedId;
+
+    card.classList.toggle('model-card--loaded', isLoaded);
+    const status = card.querySelector<HTMLElement>('[data-role="model-status"]');
+    if (status) {
+      status.textContent = isLoaded ? 'Loaded' : isSelected ? 'Selected' : 'Click to select';
+    }
   });
 }
 
@@ -543,6 +566,7 @@ function bindEvents() {
     card.classList.add('model-card--selected');
     card.setAttribute('aria-checked', 'true');
     renderVoiceSection();
+    renderModelCardStatuses();
   }
 
   function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1) {
@@ -988,6 +1012,7 @@ function handleEngineStateChange(state: EngineState) {
     // we update it once per state change instead of duplicating the call
     // in every branch above.
     updateDocumentSectionVisibility();
+    renderModelCardStatuses();
   }
 function handleLoadProgress(loaded: number, total: number, modelName: string) {
   const fill = document.getElementById('progress-fill')!;
