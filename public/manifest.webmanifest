@@ -1,0 +1,19 @@
+{
+  "name": "Yapper — Private Text-to-Speech",
+  "short_name": "Yapper",
+  "description": "Browser TTS with zero cloud. Kokoro, Kitten, SpeechT5 — 9 languages, runs offline once loaded.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a0a0f",
+  "theme_color": "#6366f1",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

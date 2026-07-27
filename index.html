@@ -5,13 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yapper — Private Text-to-Speech</title>
   <meta name="description" content="Run text-to-speech directly in your browser. No data leaves your device. Powered by WebGPU." />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="theme-color" content="#6366f1" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Yapper" />
 </head>
 <body>
   <a href="#main" class="skip-link">Skip to main content</a>
   <main id="main">
     <div id="app"></div>
   </main>
-  <script type="module" src="/src/main.ts"></script>
+  <script type="module" src="./src/main.ts"></script>
+  <script>
+    // Register the service worker last so it never blocks the initial paint.
+    // The SW only handles the app shell, so a failure here is non-fatal.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((err) => {
+          console.warn('[yapper] service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>

@@ -16,6 +16,8 @@
 4. Type or paste text, adjust speed, hit **Add to queue** (or `Ctrl`/`Cmd`+Enter).
 5. Drop a PDF, DOCX, EPUB, or Markdown file into the document reader to listen hands-free.
 
+> _A short demo GIF showing the model picker, queue, and document reader would go here. PRs welcome — capture it on a small screen so the file stays under 5 MB._
+
 ## Features
 
 - **100% local inference** — text never leaves your browser
