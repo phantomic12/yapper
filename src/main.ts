@@ -3,7 +3,7 @@ import { DocumentReaderSession, prepareReaderData, type ReaderState, type Highli
 import './style.css';
 import { TTSEngine, MODELS, detectWebGPU, LANGUAGE_NAMES, getSupportedLanguages, type TTSModel, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
-import { KittenCustomEngine } from './engines/kitten';
+import { WorkerBackedEngine } from './engines/worker-bridge';
 
 // ─── Note on Web Worker proxy ────────────────────────────────────
 // We previously enabled `env.backends.onnx.wasm.proxy = true` here AND
@@ -27,12 +27,19 @@ import { KittenCustomEngine } from './engines/kitten';
 // KittenCustomEngine and KokoroCustomEngine do no I/O in their constructor;
 // they only fetch model files in their .load() method, which is called
 // later when the user clicks "Download & Load Model".
-for (const [modelId, ctor] of [
-  ['onnx-community/Kokoro-82M-v1.0-ONNX', KokoroCustomEngine],
-  ['KittenML/kitten-tts-nano-0.8-int8', KittenCustomEngine],
-] as const) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  registerCustomEngine(modelId, new (ctor as any)());
+//
+// Each model is wrapped in a WorkerBackedEngine so that TTS inference runs
+// off the main thread. The wrapper preserves the CustomEngine interface so
+// the rest of the engine registry doesn't need to know workers exist.
+// The Kokoro repo (`onnx-community/Kokoro-82M-v1.0-ONNX`) is shared by
+// both the q8f16 and fp16 variants; the Kitten repos differ between
+// nano and mini. We register under the modelId the engine will look up.
+for (const modelId of [
+  'onnx-community/Kokoro-82M-v1.0-ONNX',
+  'KittenML/kitten-tts-nano-0.8-int8',
+  'KittenML/kitten-tts-mini-0.8',
+]) {
+  registerCustomEngine(modelId, new WorkerBackedEngine());
 }
 
 // ─── DOM refs ────────────────────────────────────────────────────
@@ -125,6 +132,7 @@ async function render() {
               <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
             </div>
             <div class="model-card__status" data-role="model-status">Selected</div>
+            <button class="model-card__sample" data-action="sample" data-model-id="${m.id}" type="button" title="Generate a sample using the currently loaded model" hidden>Try sample</button>
           </button>
         `).join('')}
       </div>
@@ -194,7 +202,10 @@ async function render() {
             <span class="switch__track"></span>
             <span class="switch__label">Use OCR for PDFs (experimental, slower)</span>
           </label>
-          <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
+          <div class="document-progress-row" id="document-progress-row" hidden>
+            <div class="document-progress-bar"><div class="document-progress-bar__fill" id="document-progress-fill"></div></div>
+            <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
+          </div>
         </div>
 
         <div class="document-preview" id="document-preview" style="display:none">
@@ -224,6 +235,7 @@ async function render() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
           <span id="generate-btn-label">Add to queue</span>
         </button>
+        <span class="queue-count" id="queue-count" hidden></span>
         <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
       </div>
 
@@ -309,6 +321,30 @@ function renderModelCardStatuses() {
     if (status) {
       status.textContent = isLoaded ? 'Loaded' : isSelected ? 'Selected' : 'Click to select';
     }
+    // Show the "Try sample" button only on the loaded model's card, and
+    // only when the engine is ready. A click on a child <button> must not
+    // also trigger the parent card's radio-click, so we stop propagation.
+    const sampleBtn = card.querySelector<HTMLButtonElement>('[data-action="sample"]');
+    if (sampleBtn) {
+      sampleBtn.hidden = !isLoaded;
+      if (isLoaded) {
+        sampleBtn.onclick = (e) => {
+          e.stopPropagation();
+          runModelSample();
+        };
+      }
+    }
+  });
+}
+
+const SAMPLE_TEXT = "The quick brown fox jumps over the lazy dog. Yapper runs entirely in your browser, with no data sent to any server.";
+
+function runModelSample() {
+  if (!engine || engine.getEngineState() !== 'ready') return;
+  engine.enqueue(SAMPLE_TEXT, {
+    modelId: selectedModel.id,
+    voiceId: selectedVoiceId,
+    speed: currentSpeed,
   });
 }
 
@@ -430,17 +466,36 @@ function renderJobList() {
   const list = document.getElementById('job-list')!;
   const label = document.getElementById('queue-label')!;
   const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+  const queueCount = document.getElementById('queue-count') as HTMLElement;
 
   if (currentJobs.length === 0) {
     list.innerHTML = '';
     label.style.display = 'none';
     clearBtn.disabled = true;
+    if (queueCount) { queueCount.hidden = true; queueCount.textContent = ''; }
     return;
   }
 
   label.style.display = '';
-  const hasFinished = currentJobs.some(j => j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
-  clearBtn.disabled = !hasFinished;
+  const finished = currentJobs.filter(j => j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
+  const active = currentJobs.filter(j => j.status === 'pending' || j.status === 'generating');
+  clearBtn.disabled = finished.length === 0;
+
+  // Show queue depth next to the generate button so users know how many
+  // jobs are stacked up. Only show when there's at least one queued or
+  // running job (finished jobs alone don't need a count).
+  if (queueCount) {
+    if (active.length > 0) {
+      queueCount.hidden = false;
+      const running = currentJobs.filter(j => j.status === 'generating').length;
+      queueCount.textContent = running > 0
+        ? `${running} running · ${active.length} in queue`
+        : `${active.length} in queue`;
+    } else {
+      queueCount.hidden = true;
+      queueCount.textContent = '';
+    }
+  }
 
   // Diff against existing DOM.
   const seen = new Set<string>();
@@ -609,6 +664,15 @@ function bindEvents() {
     charCount.textContent = `${len} / 2000`;
     charCount.classList.toggle('char-count--warn', len > 1800);
   });
+  textInput.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+Enter enqueues a job from the textarea. Avoid stealing the
+    // keystroke if a modifier other than Ctrl/Cmd is also held (Alt+Enter
+    // for newline, Shift+Enter for newline, etc.).
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById('generate-btn')?.click();
+    }
+  });
   charCount.textContent = `${textInput.value.length} / 2000`;
 
   // Generate — creates a job, does NOT block
@@ -693,6 +757,30 @@ function bindDocumentEvents() {
 
   function setProgress(msg: string) {
     documentProgress.textContent = msg;
+    documentProgress.parentElement!.hidden = false;
+    // If the message contains "page X/Y" or "OCR page X: N%", use that to
+    // drive a progress bar. Falls back to an indeterminate state otherwise.
+    const pageMatch = msg.match(/page\s+(\d+)\s*\/\s*(\d+)/i);
+    const ocrMatch = msg.match(/OCR page\s+\d+:\s*(\d+)%/i);
+    const fill = document.getElementById('document-progress-fill') as HTMLElement;
+    if (pageMatch) {
+      const pct = Math.min(100, Math.round((parseInt(pageMatch[1], 10) / parseInt(pageMatch[2], 10)) * 100));
+      fill.style.width = `${pct}%`;
+      fill.classList.remove('document-progress-bar__fill--indeterminate');
+    } else if (ocrMatch) {
+      fill.style.width = `${ocrMatch[1]}%`;
+      fill.classList.remove('document-progress-bar__fill--indeterminate');
+    } else if (msg) {
+      fill.classList.add('document-progress-bar__fill--indeterminate');
+    }
+  }
+
+  function clearProgress() {
+    documentProgress.textContent = '';
+    documentProgress.parentElement!.hidden = true;
+    const fill = document.getElementById('document-progress-fill') as HTMLElement;
+    fill.style.width = '0%';
+    fill.classList.remove('document-progress-bar__fill--indeterminate');
   }
 
   function renderReaderContent(target: HTMLElement, text: string) {
@@ -763,7 +851,7 @@ function bindDocumentEvents() {
         readerView.focus();
       })
       .catch(err => {
-        setProgress('');
+        clearProgress();
         showStatus('error', `Could not read document: ${err instanceof Error ? err.message : String(err)}`, true);
       });
   }
