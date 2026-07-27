@@ -98,3 +98,56 @@ is one of:
 The subject line is ≤ 72 chars and uses imperative mood
 ("add X", not "added X"). The body, when present, explains *why*
 the change was made; the diff already shows *what*.
+
+## Cutting a release
+
+The full release process lives in this file so the next person
+doesn't reinvent it:
+
+```bash
+# 1. Bump package.json (semver: 1.2.3 → 1.3.0 for features, → 1.2.4 for fixes)
+npm version patch   # or `minor` / `major`
+
+# 2. Push the version tag and the commit
+git push --follow-tags
+
+# 3. Create the GitHub release from the tag, with release notes
+gh release create vX.Y.Z \
+  --title "vX.Y.Z — Short summary" \
+  --notes "$(cat <<'EOF'
+Notable changes since vA.B.C:
+
+- feat: one-line description (#PR)
+- fix: one-line description (#PR)
+EOF
+)"
+
+# 4. The deploy workflow publishes GitHub Pages automatically once
+#    the new tag is pushed. No manual `npm run build` for the page
+#    itself.
+```
+
+The `package.json` `version` field, the git tag, and the GitHub
+release MUST all match. Bumping `package.json` alone (without a tag)
+will leave the live demo out of date with the release notes.
+
+## Cross-platform e2e testing
+
+`e2e_test.py` is written against headless Chrome via the DevTools
+Protocol. The Linux CI runner ships Chrome pre-installed and uses
+`start-chrome.sh` to launch it. On macOS / Windows:
+
+- **macOS:** Install Google Chrome to `/Applications/Google Chrome.app`.
+  The harness auto-detects the system Chrome when `--no-sandbox` is
+  not needed. Pass `--no-sandbox` if you see "DevToolsActivePort
+  not found" — Chrome refuses to attach to a non-default sandbox
+  user.
+- **Windows (WSL):** Same as macOS but install Chrome on the Windows
+  side. From WSL, `/mnt/c/Program Files/Google/Chrome/Application/chrome.exe`
+  is the canonical path. The start-chrome.sh wrapper will need a
+  small WSL-specific adjustment (TBD — see issue #6).
+- **Run locally:** `python3 e2e_test.py --headless --no-sandbox` from
+  the repo root, with `npm run dev` running in another terminal.
+
+If e2e tests are skipped in CI, the `vitest` unit tests (94+) and
+the link-health test still gate the merge.
