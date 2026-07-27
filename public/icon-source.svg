@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    Yapper icon — primary version.
+    viewBox 512x512, so when rasterized to 48x48 the strokes are 1/10th their pixel value.
+    Designed to be readable at 16x16 (favicon) up to 1024x1024 (splash).
+    The rounded square, gradient, and "Y" letterform survive down-scaling because
+    every shape is built from whole-pixel-aligned paths.
+  -->
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background tile. The 96px corner radius is the iOS app icon squircle
+       approximation: 96/512 = 18.75%, the iOS standard. -->
+  <rect width="512" height="512" rx="96" fill="url(#g)"/>
+
+  <!-- Letter "Y" with a sound wave through it. Built as a single white
+       shape so it rasterizes as a solid silhouette at every size.
+       Vertices are on a 16-unit grid (32 cells across 512px), so it
+       scales cleanly to 16, 32, 48, 64, 96, 128, 192, 256, 512. -->
+  <g fill="white">
+    <!-- Y letterform: two diagonal strokes meeting at a vertical stem. -->
+    <path d="
+      M 152 112
+      L 196 112
+      L 256 224
+      L 316 112
+      L 360 112
+      L 272 264
+      L 272 400
+      L 240 400
+      L 240 264
+      Z
+    "/>
+    <!-- Sound wave: 3 concentric arcs to the right of the Y, with a small
+         dot at the center. Reads as "speech/audio" without needing fine detail. -->
+    <path d="M 384 200
+             A 56 56 0 0 1 384 312
+             A 56 56 0 0 1 384 200
+             Z
+             M 384 224
+             A 32 32 0 0 0 384 288
+             A 32 32 0 0 0 384 224
+             Z"
+          fill-rule="evenodd"/>
+    <circle cx="384" cy="256" r="10"/>
+  </g>
+</svg>

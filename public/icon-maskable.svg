@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    Yapper icon — MASKABLE variant.
+    The OS may crop the icon to a circle, rounded square, or squircle and
+    may apply a background fill behind it. To survive that, the "safe area"
+    is a 320x320 square centered in the 512x512 viewBox (62.5% of the icon).
+    Anything outside that area is decoration that can be cropped away.
+
+    Standard maskable safe zone per the W3C spec:
+    https://www.w3.org/TR/appmanifest/#icons-member
+    "the icon with the 'maskable' purpose should be designed
+    such that the image's important content is within the central 80%
+    of the icon. The OS may crop the icon to a circle or rounded square."
+    We use 80% (320/400 ≈ 80% of 512) so the central safe area is preserved
+    under any mask the OS picks.
+  -->
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Full-bleed background that the OS can crop freely. -->
+  <rect width="512" height="512" rx="96" fill="url(#g)"/>
+
+  <!-- Y letterform — moved into the 320x320 safe area (96..416 on each axis).
+       Same shape as the primary icon, just inset by 96px. -->
+  <g fill="white">
+    <path d="
+      M 200 152
+      L 240 152
+      L 280 232
+      L 320 152
+      L 360 152
+      L 296 272
+      L 296 376
+      L 264 376
+      L 264 272
+      Z
+    "/>
+    <path d="M 376 232
+             A 40 40 0 0 1 376 320
+             A 40 40 0 0 1 376 232
+             Z
+             M 376 248
+             A 24 24 0 0 0 376 304
+             A 24 24 0 0 0 376 248
+             Z"
+          fill-rule="evenodd"/>
+    <circle cx="376" cy="276" r="7"/>
+  </g>
+</svg>

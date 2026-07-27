@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "test:links": "YAPPER_LINK_CHECK=1 vitest run src/links.test.ts",
     "demo:capture": "python3 scripts/capture_demo.py",
+    "icons:build": "node scripts/build-icons.cjs",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "typecheck": "tsc --noEmit"
