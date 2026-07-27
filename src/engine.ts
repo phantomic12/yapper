@@ -1,5 +1,6 @@
 import { pipeline } from '@huggingface/transformers';
 import { EventEmitter } from './events';
+import { KITTEN_VOICES } from './engines/kitten';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -152,22 +153,18 @@ export const MODELS: TTSModel[] = [
     name: 'Kitten TTS Mini (~78MB)',
     modelId: 'KittenML/kitten-tts-mini-0.8',
     modelFile: 'kitten_tts_mini_v0_8.onnx',
-    description: 'Larger Kitten model, better quality. 8 voices.',
+    description: 'Larger Kitten model, better quality. Same 8 voice IDs as Kitten Nano but with Mini-trained embeddings.',
     category: 'balanced',
     sampleRate: 24000,
     custom: true,
     language: 'en',
     sizeMB: 78,
-    voices: [
-      { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
-      { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
-      { id: 'expr-voice-3-m', name: 'Voice 3 (Male)' },
-      { id: 'expr-voice-3-f', name: 'Voice 3 (Female)' },
-      { id: 'expr-voice-4-m', name: 'Voice 4 (Male)' },
-      { id: 'expr-voice-4-f', name: 'Voice 4 (Female)' },
-      { id: 'expr-voice-5-m', name: 'Voice 5 (Male)' },
-      { id: 'expr-voice-5-f', name: 'Voice 5 (Female)' },
-    ],
+    // Voice IDs are the same as kitten-nano, but the float32 embeddings
+    // differ (verified: same .npz shape & key set, distinct SHA-256 per
+    // voice entry). Pulling from the shared KITTEN_VOICES constant keeps
+    // the registry in sync with the actual voice bank shipped in
+    // voices.npz, instead of duplicating an 8-entry array that can drift.
+    voices: KITTEN_VOICES,
     defaultVoiceId: 'expr-voice-2-m',
   },
   {
@@ -180,16 +177,9 @@ export const MODELS: TTSModel[] = [
     custom: true,
     language: 'en',
     sizeMB: 24,
-    voices: [
-      { id: 'expr-voice-2-m', name: 'Voice 2 (Male)' },
-      { id: 'expr-voice-2-f', name: 'Voice 2 (Female)' },
-      { id: 'expr-voice-3-m', name: 'Voice 3 (Male)' },
-      { id: 'expr-voice-3-f', name: 'Voice 3 (Female)' },
-      { id: 'expr-voice-4-m', name: 'Voice 4 (Male)' },
-      { id: 'expr-voice-4-f', name: 'Voice 4 (Female)' },
-      { id: 'expr-voice-5-m', name: 'Voice 5 (Male)' },
-      { id: 'expr-voice-5-f', name: 'Voice 5 (Female)' },
-    ],
+    // Same voice bank as kitten-mini, different embeddings. See the
+    // comment on the kitten-mini entry above.
+    voices: KITTEN_VOICES,
     defaultVoiceId: 'expr-voice-2-m',
   },
   // ── MMS-TTS — one model per language, q8 quantized. We only list

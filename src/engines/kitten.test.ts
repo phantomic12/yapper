@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseNpy, parseNpz } from './kitten';
+import { KITTEN_VOICES, parseNpy, parseNpz } from './kitten';
+import { MODELS } from '../engine';
 
 // ─── .npy file builder (v1 format, the one Kitten uses) ──────────────
 // Reference: https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html
@@ -217,5 +218,35 @@ describe('parseNpz', () => {
     ev.setUint32(16, 0, true);
     const out = parseNpz(eocd.buffer);
     expect(out).toEqual({});
+  });
+});
+
+describe('KITTEN_VOICES registry integration', () => {
+  // The MODELS registry now imports KITTEN_VOICES for both kitten-nano
+  // and kitten-mini. This test guards against a future change that
+  // accidentally re-introduces per-model voice duplication, which would
+  // drift away from the actual voice bank shipped in voices.npz.
+  it('contains the 8 expected voice IDs', () => {
+    expect(KITTEN_VOICES.map(v => v.id)).toEqual([
+      'expr-voice-2-m', 'expr-voice-2-f',
+      'expr-voice-3-m', 'expr-voice-3-f',
+      'expr-voice-4-m', 'expr-voice-4-f',
+      'expr-voice-5-m', 'expr-voice-5-f',
+    ]);
+  });
+
+  it('every voice entry has a name', () => {
+    for (const v of KITTEN_VOICES) {
+      expect(v.name, `voice ${v.id} missing a display name`).toBeTruthy();
+    }
+  });
+
+  it('kitten-nano and kitten-mini in MODELS share the KITTEN_VOICES reference', () => {
+    // Identity check: === so we know the engine.ts entries import the
+    // same array, not a hand-copied duplicate with the same contents.
+    const nano = MODELS.find(m => m.id === 'kitten-nano');
+    const mini = MODELS.find(m => m.id === 'kitten-mini');
+    expect(nano?.voices).toBe(mini?.voices);
+    expect(nano?.voices).toBe(KITTEN_VOICES);
   });
 });
