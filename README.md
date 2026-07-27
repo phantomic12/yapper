@@ -18,6 +18,12 @@
 
 > _A short demo GIF showing the model picker, queue, and document reader would go here. PRs welcome — capture it on a small screen so the file stays under 5 MB._
 
+> For now, a static landing-page screenshot of the [live demo](https://phantomic12.github.io/yapper/):
+>
+> ![Yapper landing page](docs/demo-landing.png)
+>
+> _To regenerate this screenshot: `npm run demo:capture`. The script lives at `scripts/capture_demo.py` and uses Playwright + the Chromium browser it installs. It produces `scripts/demo-shots/01-landing.png`, `02-loaded.png`, and `03-generating.png` (the last two require a successful model download in headless mode)._
+
 ## Features
 
 - **100% local inference** — text never leaves your browser
