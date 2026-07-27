@@ -18,11 +18,13 @@
 
 > _A short demo GIF showing the model picker, queue, and document reader would go here. PRs welcome — capture it on a small screen so the file stays under 5 MB._
 
-> For now, a static landing-page screenshot of the [live demo](https://phantomic12.github.io/yapper/):
+> A live demo (Kitten TTS Nano selected, then loaded):
 >
-> ![Yapper landing page](docs/demo-landing.png)
+> ![Yapper demo](docs/demo.gif)
 >
-> _To regenerate this screenshot: `npm run demo:capture`. The script lives at `scripts/capture_demo.py` and uses Playwright + the Chromium browser it installs. It produces `scripts/demo-shots/01-landing.png`, `02-loaded.png`, and `03-generating.png` (the last two require a successful model download in headless mode)._
+> Static stills ([landing](docs/demo-landing.png) · [loaded](docs/demo-loaded.png)) and a higher-quality [MP4](docs/demo.mp4) are also in `docs/`.
+>
+> _To regenerate: `bash scripts/capture-gif.sh`. The script builds a `nvidia/cuda + Chromium` Docker image, runs it with `--gpus all` so WebGPU/Vulkan are exposed, and produces `out/demo.gif` (and `.mp4`). It gracefully falls back to a synthesized "loaded" state if the model download times out in headless mode (WebGPU is often unavailable, and CPU WASM can take minutes to initialize)._
 
 ## Features
 

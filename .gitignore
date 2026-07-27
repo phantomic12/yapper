@@ -13,6 +13,9 @@ dist/
 public/pdf.worker.mjs
 public/pdf.worker.mjs.map
 
+# Generated artifacts (rebuilt by scripts/capture-gif.sh)
+out/
+
 # Editor
 .vscode/
 .idea/
