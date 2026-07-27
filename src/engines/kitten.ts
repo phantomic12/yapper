@@ -27,13 +27,15 @@ const VOICES_FILE = 'voices.npz';
 // file (balas-world/kitten-tts-web-demo). Served from /lib/ at runtime —
 // no external repo dependency, fully self-contained.
 //
-// IMPORTANT: the URL is resolved RELATIVE TO THE WORKER'S OWN URL because
-// this code runs inside inference-worker.ts (a Vite ?worker chunk that
-// lives under /assets/). The previous version used `import.meta.env.BASE_URL
-// + 'lib/...'` which Vite resolved to `/assets/lib/...` (the path Vite
-// uses for code-split chunks), giving a 404 in production. `new URL(..,
-// import.meta.url)` computes the path from this file's actual location.
-const TOKENIZER_URL = new URL('../../lib/kitten-tokenizer.json', import.meta.url).href;
+// IMPORTANT: the URL is resolved RELATIVE TO THIS BUNDLE'S URL. This
+// file is imported by both main.ts (which Vite bundles into
+// /assets/index-XXX.js) and by inference-worker.ts (a Vite ?worker chunk
+// at /assets/inference-worker-XXX.js). Both bundles live one level deep
+// under /assets/, so `../lib/...` reaches /lib/... in either case.
+// The earlier version used `import.meta.env.BASE_URL + 'lib/...'` which
+// Vite resolved to `/assets/lib/...` (404 in production). The `../lib/`
+// path works whether the consumer is the main thread or a worker.
+const TOKENIZER_URL = new URL('../lib/kitten-tokenizer.json', import.meta.url).href;
 // Phonemizer: eSpeak NG WASM wrapped by xenova/phonemizer.js. Loaded from CDN
 // at runtime (jsdelivr's field in their package.json points to this file).
 const PHONEMIZER_URL = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
