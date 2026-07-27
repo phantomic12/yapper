@@ -1,16 +1,32 @@
 # Yapper 🔊
 
-**Privacy-first text-to-speech that runs entirely in your browser.**
+**Browser text-to-speech with zero cloud.** Kokoro, Kitten, and SpeechT5 run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
-No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
+> **Note on performance:** inference currently runs on the main thread, so long generations will block the page while a job is in progress. A Web Worker build is in progress to fix this — see [issue tracker](https://github.com/phantomic12/yapper/issues). The non-blocking queue still lets you stack multiple jobs; only the active one blocks.
+
+## Quick start
+
+1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally).
+2. Pick a model:
+   - **Kokoro-82M (q8f16)** — best quality, 6 built-in English voices, ~86 MB download
+   - **Kitten TTS Mini** — balanced quality, 8 voices, ~78 MB
+   - **Kitten TTS Nano** — fastest, smallest, ~24 MB
+   - **SpeechT5** — 330 MB, multi-voice via xvector embeddings
+3. Click **Download & Load Model** (one-time per model; cached after).
+4. Type or paste text, adjust speed, hit **Add to queue** (or `Ctrl`/`Cmd`+Enter).
+5. Drop a PDF, DOCX, EPUB, or Markdown file into the document reader to listen hands-free.
 
 ## Features
 
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
-- **Multiple models** — Kokoro-82M, Kitten TTS Nano and more
+- **Models**
+  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) variants — 6 built-in English voices, highest quality
+  - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, WebGPU-optimized
+  - **SpeechT5** (~330 MB) — multi-voice via 512-dim xvector speaker embeddings
+  - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
 - **Non-blocking queue** — stack up multiple generations, page stays usable
-- **Voice selection** — pick from built-in voices per model
+- **Voice selection** — pick from built-in voices per model, or supply a custom xvector for SpeechT5
 - **Document reader** — upload PDF, DOCX, ODT, EPUB, TXT or Markdown and listen in real time
 - **Experimental layout OCR** — render scanned/image-based PDF pages and reconstruct reading order from detected text blocks
 - **Keyboard accessible controls** — arrow-key navigation, skip links, focus indicators and ARIA live regions
