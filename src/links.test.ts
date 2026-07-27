@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { MODELS } from './engine';
+import { MODELS, getSupportedLanguages, LANGUAGE_NAMES } from './engine';
 
 const NETWORK_TIMEOUT_MS = 15_000;
 
@@ -89,23 +89,28 @@ describe('MODELS registry link health', () => {
 });
 
 describe('UI language filter matches registry', () => {
-  // The static <option> list in src/main.ts must only contain languages for
-  // which a model exists in MODELS. If you add a model with a new language,
-  // add the option to main.ts; if you remove one, remove the option too.
-  it('contains only languages present in the registry', () => {
-    const registryLangs = new Set(
-      MODELS.map(m => m.language).filter((l): l is string => !!l),
-    );
-    // Static option values extracted from src/main.ts. If you change the UI,
-    // update this list to match. (Duplicated here to avoid spinning up the
-    // full DOM tree just for an assertion.)
-    const uiOptions = ['en', 'es', 'fr', 'de', 'pt', 'ru', 'ko', 'hi', 'ar'];
-    const orphans = uiOptions.filter(l => !registryLangs.has(l));
-    expect(orphans, `UI lists languages not in MODELS registry: ${orphans.join(', ')}`).toEqual([]);
-    const missing = [...registryLangs].filter(l => !uiOptions.includes(l));
-    if (missing.length) {
-      // Not a hard failure — the UI could simply hide the filter — but flag it.
-      console.warn(`[registry] models exist for languages not in the UI filter: ${missing.join(', ')}`);
-    }
+  // The language-filter <option> list is now generated from
+  // getSupportedLanguages(), which derives itself from the MODELS registry.
+  // This test pins the canonical language set and guards against a model
+  // being added with a language code that lacks a human-readable name in
+  // LANGUAGE_NAMES.
+  it('every supported language has a display name in LANGUAGE_NAMES', () => {
+    const langs = getSupportedLanguages();
+    expect(langs.length).toBeGreaterThan(0);
+    const missingNames = langs.filter(code => !LANGUAGE_NAMES[code]);
+    expect(
+      missingNames,
+      `Add display name(s) to LANGUAGE_NAMES for: ${missingNames.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('registry-derived language list matches the rendered <select> options', () => {
+    // Sanity check: if you add a model with a new language code without
+    // updating LANGUAGE_NAMES, the previous test fails; if you change
+    // LANGUAGE_NAMES without shipping a model, the helper won't return it.
+    // This test pins the canonical set so a refactor doesn't silently drop one.
+    expect(getSupportedLanguages()).toEqual([
+      'en', 'ar', 'de', 'es', 'fr', 'hi', 'ko', 'pt', 'ru',
+    ]);
   });
 });

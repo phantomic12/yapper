@@ -3,6 +3,35 @@ import { EventEmitter } from './events';
 
 // ─── Model definitions ───────────────────────────────────────────
 
+/** Human-readable language code → ISO 639-1 code. */
+export const LANGUAGE_NAMES: Record<string, string> = {
+  en: 'English',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  ko: 'Korean',
+  hi: 'Hindi',
+  ar: 'Arabic',
+};
+
+/**
+ * Languages actually present in the MODELS registry, with `en` pinned first
+ * (most users want English) and any other language codes that ship models
+ * sorted alphabetically after. Single source of truth for the UI language
+ * filter in src/main.ts and the regression test in src/links.test.ts.
+ */
+export function getSupportedLanguages(): string[] {
+  const seen = new Set<string>();
+  for (const m of MODELS) {
+    if (m.language && m.language !== 'multi') seen.add(m.language);
+  }
+  // Enforce order: en first, then alphabetical.
+  const others = [...seen].filter(l => l !== 'en').sort();
+  return seen.has('en') ? ['en', ...others] : others;
+}
+
 export interface Voice {
   id: string;
   name: string;

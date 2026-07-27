@@ -1,7 +1,7 @@
 import { extractDocument, type ExtractedDocument } from './document-reader';
 import { DocumentReaderSession, prepareReaderData, type ReaderState, type HighlightInfo, type ReaderSentence } from './reader';
 import './style.css';
-import { TTSEngine, MODELS, detectWebGPU, type TTSModel, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
+import { TTSEngine, MODELS, detectWebGPU, LANGUAGE_NAMES, getSupportedLanguages, type TTSModel, type GenerationJob, type EngineState, registerCustomEngine } from './engine';
 import { KokoroCustomEngine } from './engines/kokoro';
 import { KittenCustomEngine } from './engines/kitten';
 
@@ -104,19 +104,13 @@ async function render() {
       <!-- Model Selection -->
       <label class="section-label" for="language-filter">Filter models by language</label>
 
-      <!-- Language filter -->
+      <!-- Language filter (populated from MODELS registry; see getSupportedLanguages) -->
       <div class="select-wrapper language-select-wrapper">
         <select id="language-filter" class="lang-select" aria-label="Filter models by language">
           <option value="all" selected>All languages</option>
-          <option value="en">English</option>
-          <option value="es">Spanish</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="pt">Portuguese</option>
-          <option value="ru">Russian</option>
-          <option value="ko">Korean</option>
-          <option value="hi">Hindi</option>
-          <option value="ar">Arabic</option>
+          ${getSupportedLanguages().map(code =>
+            `<option value="${code}">${LANGUAGE_NAMES[code] ?? code.toUpperCase()}</option>`
+          ).join('')}
         </select>
       </div>
 
