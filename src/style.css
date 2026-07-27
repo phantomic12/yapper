@@ -236,6 +236,23 @@ body {
 .model-card--loaded .model-card__status {
   color: var(--success);
 }
+.model-card__sample {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--success);
+  background: transparent;
+  border: 1px solid var(--success);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.model-card__sample:hover {
+  background: var(--success);
+  color: #000;
+}
 
 .model-card__name {
   font-size: 0.82rem;
@@ -732,6 +749,18 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.queue-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
 
 /* ─── Speed slider ──────────────────────────────────────────── */
 .speed-row {
@@ -1170,8 +1199,33 @@ body {
 .reader-legend--future::before { background: transparent; border: 1px solid var(--border); }
 
 .document-options { margin: 16px 0; }
-.document-progress {
+.document-progress-row {
   margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.document-progress-bar {
+  height: 4px;
+  background: var(--bg-surface);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.document-progress-bar__fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.2s ease;
+}
+.document-progress-bar__fill--indeterminate {
+  width: 30% !important;
+  animation: document-progress-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes document-progress-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.document-progress {
   font-size: 0.78rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
