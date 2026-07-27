@@ -201,6 +201,21 @@ body {
   transition: all 0.15s ease;
   text-align: left;
 }
+.model-card__pick {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.model-card__pick:focus { outline: none; }
+.model-card:focus { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.model-card:focus:not(:focus-visible) { outline: none; }
 
 .model-card:hover {
   border-color: var(--border-focus);

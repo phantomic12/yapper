@@ -14,6 +14,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:links": "YAPPER_LINK_CHECK=1 vitest run src/links.test.ts",
+    "demo:capture": "python3 scripts/capture_demo.py",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "typecheck": "tsc --noEmit"
@@ -38,6 +39,7 @@
     "eslint": "^9.39.5",
     "eslint-plugin-vue": "^10.10.0",
     "jsdom": "^29.1.1",
+    "playwright": "^1.62.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.0.0",

@@ -407,6 +407,39 @@ def step_type_and_generate(cdp_holder):
     print(f'      generate clicked at {g.get("ts")}')
 
 
+def step_verify_worker_chunk_loaded(cdp_holder):
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    # After the engine load completes, the inference worker script should
+    # be in the page's resource list. This proves Vite emitted and the
+    # main thread fetched the worker chunk — the worker has to exist in
+    # the page graph for the engine to be doing inference off-thread.
+    resp = cdp.eval(
+        """(function() {
+            const entries = performance.getEntriesByType('resource').map(e => e.name);
+            const workerChunk = entries.find(n => /inference-worker.*\\.js(\\?|$)/.test(n));
+            return {
+                totalResources: entries.length,
+                hasWorkerChunk: !!workerChunk,
+                workerChunk,
+                sample: entries.slice(0, 5),
+            };
+        })()""",
+        target['id'], timeout=10,
+    )
+    r = v(resp)
+    if not r.get('hasWorkerChunk'):
+        raise AssertionError(
+            f'inference-worker chunk not found in page resources. '
+            f'This means Vite did not emit it OR the engine did not '
+            f'spawn the worker — inference would be running on the main '
+            f'thread. Saw {r.get("totalResources")} resources total. '
+            f'First 5: {r.get("sample")}'
+        )
+    print(f'      ✓ worker chunk loaded: {r["workerChunk"]}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '03-worker-loaded.png')
+
+
 def step_wait_for_audio(cdp_holder):
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
@@ -453,6 +486,7 @@ def main():
         ('select_model', lambda: step_select_model(cdp_holder)),
         ('click_load', lambda: step_click_load(cdp_holder)),
         ('wait_for_model_ready', lambda: step_wait_for_model_ready(cdp_holder)),
+        ('verify_worker_chunk_loaded', lambda: step_verify_worker_chunk_loaded(cdp_holder)),
         ('type_and_generate', lambda: step_type_and_generate(cdp_holder)),
         ('wait_for_audio', lambda: step_wait_for_audio(cdp_holder)),
     ]

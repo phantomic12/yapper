@@ -123,17 +123,19 @@ async function render() {
 
       <div class="model-grid" id="model-grid" role="radiogroup" aria-label="Choose a TTS model">
         ${MODELS.map(m => `
-          <button class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" aria-checked="${m.id === selectedModel.id}">
-            <div class="model-card__name">${m.name}</div>
-            <div class="model-card__desc">${m.description}</div>
-            <div class="model-card__meta">
-              ${m.sizeMB ? `<span class="model-card__size">~${m.sizeMB}MB</span>` : ''}
-              ${m.language && m.language !== 'en' ? `<span class="model-card__lang">${m.language.toUpperCase()}</span>` : ''}
-              <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
-            </div>
-            <div class="model-card__status" data-role="model-status">Selected</div>
+          <div class="model-card ${m.id === selectedModel.id ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" tabindex="0" aria-checked="${m.id === selectedModel.id}">
+            <button class="model-card__pick" type="button" data-action="pick" aria-label="Select ${m.name}">
+              <div class="model-card__name">${m.name}</div>
+              <div class="model-card__desc">${m.description}</div>
+              <div class="model-card__meta">
+                ${m.sizeMB ? `<span class="model-card__size">~${m.sizeMB}MB</span>` : ''}
+                ${m.language && m.language !== 'en' ? `<span class="model-card__lang">${m.language.toUpperCase()}</span>` : ''}
+                <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
+              </div>
+              <div class="model-card__status" data-role="model-status">Selected</div>
+            </button>
             <button class="model-card__sample" data-action="sample" data-model-id="${m.id}" type="button" title="Generate a sample using the currently loaded model" hidden>Try sample</button>
-          </button>
+          </div>
         `).join('')}
       </div>
 
@@ -295,7 +297,7 @@ function renderLanguageFilter() {
   const select = document.getElementById('language-filter') as HTMLSelectElement;
   if (select) select.value = currentLanguageFilter;
   // Show/hide model cards based on filter
-  document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
+  document.querySelectorAll<HTMLElement>('.model-card').forEach(card => {
     const cardLang = card.dataset.language ?? 'en';
     const visible = currentLanguageFilter === 'all' || cardLang === currentLanguageFilter;
     card.style.display = visible ? '' : 'none';
@@ -311,7 +313,7 @@ function renderLanguageFilter() {
 function renderModelCardStatuses() {
   const loadedId = engine?.getCurrentModel()?.id ?? null;
   const isReady = engine?.getEngineState() === 'ready';
-  document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
+  document.querySelectorAll<HTMLElement>('.model-card').forEach(card => {
     const id = card.dataset.modelId;
     const isSelected = id === selectedModel.id;
     const isLoaded = isReady && id === loadedId;
@@ -590,9 +592,16 @@ function statusIconHtml(status: GenerationJob['status']): string {
 
 // ─── Event Binding ───────────────────────────────────────────────
 function bindEvents() {
-  // Bind model card clicks and keyboard nav
-  document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(card => {
-    card.addEventListener('click', () => {
+  // Bind model card clicks and keyboard nav. The card is a div with
+  // role="radio" (you can't put a <button> inside a <button> — the
+  // browser's HTML parser auto-closes the outer button and hoists the
+  // inner one out as a sibling, breaking the layout). The inner
+  // <button class="model-card__pick"> is what receives the actual
+  // pointer click; the card div owns the keyboard arrow navigation.
+  document.querySelectorAll<HTMLElement>('.model-card').forEach(card => {
+    const pickBtn = card.querySelector<HTMLButtonElement>('[data-action="pick"]');
+    pickBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
       const modelId = card.dataset.modelId!;
       const newModel = MODELS.find(m => m.id === modelId);
       if (!newModel) return;
@@ -614,7 +623,7 @@ function bindEvents() {
     // Reset voice selection to this model's default
     selectedVoiceId = newModel.defaultVoiceId ?? newModel.voices?.[0]?.id;
     customEmbeddingUrl = '';
-    document.querySelectorAll<HTMLButtonElement>('.model-card').forEach(c => {
+    document.querySelectorAll<HTMLElement>('.model-card').forEach(c => {
       c.classList.remove('model-card--selected');
       c.setAttribute('aria-checked', 'false');
     });
@@ -625,9 +634,9 @@ function bindEvents() {
   }
 
   function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1) {
-    const visible = Array.from(document.querySelectorAll<HTMLButtonElement>('.model-card'))
+    const visible = Array.from(document.querySelectorAll<HTMLElement>('.model-card'))
       .filter(c => c.style.display !== 'none');
-    const idx = visible.indexOf(current as HTMLButtonElement);
+    const idx = visible.indexOf(current);
     const next = visible[idx + direction];
     next?.focus();
   }

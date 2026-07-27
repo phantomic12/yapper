@@ -27,3 +27,5 @@ Thumbs.db
 # Env
 .env
 .env.local
+scripts/probe.py
+scripts/demo-shots/
