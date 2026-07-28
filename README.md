@@ -18,13 +18,14 @@
 
 > _A short demo GIF showing the model picker, queue, and document reader would go here. PRs welcome — capture it on a small screen so the file stays under 5 MB._
 
-> A live demo (Kitten TTS Nano selected, then loaded):
+> A live demo (pick a model → load → queue a sample → audio plays):
 >
 > ![Yapper demo](docs/demo.gif)
 >
-> Static stills ([landing](docs/demo-landing.png) · [loaded](docs/demo-loaded.png)) and a higher-quality [MP4](docs/demo.mp4) are also in `docs/`.
+> MP4 version: [docs/demo.mp4](docs/demo.mp4) (better quality, 11.8s).
+> Static stills: [landing](docs/demo-landing.png) · [audio playing](docs/demo-audio.png).
 >
-> _To regenerate: `bash scripts/capture-gif.sh`. The script builds a `nvidia/cuda + Chromium` Docker image, runs it with `--gpus all` so WebGPU/Vulkan are exposed, and produces `out/demo.gif` (and `.mp4`). It gracefully falls back to a synthesized "loaded" state if the model download times out in headless mode (WebGPU is often unavailable, and CPU WASM can take minutes to initialize)._
+> _To regenerate: `bash scripts/capture-gif.sh`. The script builds a Chromium Docker image, runs it with `--gpus all` (real model load works in a real browser; the headless capture synthesizes the "loaded" state because the 24MB download + CORS-protected voices.npz fetch can leave an error banner on screen that ruins the demo), and produces a 10.4s 720×450 GIF + a 1024×640 MP4 at 25fps._
 
 ## Features
 
