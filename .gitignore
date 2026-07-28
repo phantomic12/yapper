@@ -13,8 +13,11 @@ dist/
 public/pdf.worker.mjs
 public/pdf.worker.mjs.map
 
-# Generated artifacts (rebuilt by scripts/capture-gif.sh)
+# Generated artifacts (rebuilt by scripts/capture-gif.sh, npm run icons:build)
 out/
+# iOS launch screens (~10MB total). Regenerable from public/icon-source.svg
+# via \`npm run icons:build\`. Kept out of git to avoid bloating the repo.
+public/icons/splash-*.png
 
 # Editor
 .vscode/

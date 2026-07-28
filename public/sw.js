@@ -27,7 +27,17 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== SHELL_CACHE).map((k) => caches.delete(k)))
+      // Clear any cache that doesn't match the current build's
+      // SHELL_CACHE name. The `yapper-shell-` prefix covers all
+      // historical versions (v1, v2, build-id timestamps, etc.),
+      // not just the exact current one. This is the safety net: if
+      // a deploy's generateBundle rename somehow misses an
+      // instance, the next activate will still clear it.
+      Promise.all(
+        keys
+          .filter((k) => k.startsWith('yapper-shell-') && k !== SHELL_CACHE)
+          .map((k) => caches.delete(k))
+      )
     ).then(() => self.clients.claim())
   );
 });
