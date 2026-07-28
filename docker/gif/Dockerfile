@@ -12,6 +12,11 @@ RUN apt-get update -qq && \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 \
         libxcomposite1 libxdamage1 libxrandr2 libxext6 libxfixes3 \
         libxss1 libasound2 libgbm1 libpango-1.0-0 libcairo2 \
+        # Xvfb + X11 utilities for headed-Chromium GPU testing.
+        # We need an actual display surface for Chromium's GPU process
+        # to expose navigator.gpu (headless mode hides the GPU
+        # compositor entirely).
+        xvfb xauth libx11-6 libxcb1 libxrandr2 libxkbcommon0 \
         mesa-vulkan-drivers vulkan-tools \
         chromium-browser ffmpeg \
         fonts-liberation fonts-dejavu && \
@@ -30,6 +35,9 @@ RUN python3 -m playwright install chromium
 
 WORKDIR /capture
 COPY capture.py /capture/capture.py
+COPY gpu_smoke_test.py /capture/gpu_smoke_test.py
 
-# Run with GPU passthrough
+# Default to the demo capture script; pass a different command (e.g.
+# `python3 /capture/gpu_smoke_test.py`) to run the GPU smoke test
+# instead. See scripts/capture-gif.sh for both entry points.
 ENTRYPOINT ["python3", "/capture/capture.py"]

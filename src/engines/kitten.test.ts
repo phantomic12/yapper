@@ -250,3 +250,18 @@ describe('KITTEN_VOICES registry integration', () => {
     expect(nano?.voices).toBe(KITTEN_VOICES);
   });
 });
+
+describe('Kitten URL construction', () => {
+  // Regression: MODEL_URL_BASE / VOICES_URL_BASE used to be
+  // 'https://huggingface.co/KittenML/'. Combined with modelId values
+  // like 'KittenML/kitten-tts-nano-0.8-int8', the final URL became
+  // 'https://huggingface.co/KittenML/KittenML/.../voices.npz' — a
+  // double 'KittenML/' that 404s in production. The fix is to leave
+  // the org out of the URL base and let modelId carry it.
+  it('produces single-KittenML HF URLs for the model file', async () => {
+    const fs = await import('node:fs/promises');
+    const src = await fs.readFile('src/engines/kitten.ts', 'utf8');
+    // No more 'huggingface.co/KittenML/' literal in the source
+    expect(src).not.toMatch(/huggingface\.co\/KittenML\//);
+  });
+});

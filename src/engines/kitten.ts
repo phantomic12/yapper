@@ -15,13 +15,13 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 // vector) for the `style` input. Better TTS would index into the bank by frame,
 // but that requires more API surface than this v1 supports.
 
-const MODEL_URL_BASE = 'https://huggingface.co/KittenML/';
+const MODEL_URL_BASE = 'https://huggingface.co/';
 // Default ONNX file within the repo. Overridden by model.modelFile per-entry,
 // because each Kitten release ships its model under a different filename
 // (e.g. `kitten_tts_nano_v0_8.onnx` vs `kitten_tts_mini_v0_8.onnx`). Using the
 // wrong filename for a given repo silently 404s at download time.
 const DEFAULT_KITTEN_MODEL_FILE = 'kitten_tts_nano_v0_8.onnx';
-const VOICES_URL_BASE = 'https://huggingface.co/KittenML/';
+const VOICES_URL_BASE = 'https://huggingface.co/';
 const VOICES_FILE = 'voices.npz';
 // Tokenizer (phoneme vocab) is mirrored from the original demo's bundled
 // file (balas-world/kitten-tts-web-demo). Served from /lib/ at runtime —
