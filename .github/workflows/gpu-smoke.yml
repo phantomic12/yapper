@@ -1,0 +1,52 @@
+name: GPU smoke test (Kaggle)
+
+# Runs the yapper GPU smoke test on Kaggle's free GPU tier.
+# This is the test path that requires a real GPU with display
+# passthrough — GitHub-hosted runners don't have that, so we use
+# Kaggle's GPU kernels via the Frederisk/kaggle-action marketplace
+# action.
+#
+# Triggered:
+#   - manual (workflow_dispatch)
+#   - weekly schedule (Sunday 06:00 UTC) to catch model/dependency rot
+#   - on release publish (so each release gets a GPU verification)
+#
+# Required secrets:
+#   - KAGGLE_API_TOKEN: a kaggle API token (Settings → API → Create
+#     New Token). Add it at
+#     https://github.com/phantomic12/yapper/settings/secrets/actions
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Sunday 06:00 UTC. Catches silent regressions in
+    # transformers.js / onnxruntime-web / HF model availability.
+    - cron: '0 6 * * 0'
+  release:
+    types: [published]
+
+jobs:
+  gpu-smoke:
+    name: GPU smoke test on Kaggle
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run GPU smoke test on Kaggle
+        uses: Frederisk/kaggle-action@v2
+        with:
+          api_token: ${{ secrets.KAGGLE_API_TOKEN }}
+          # Kernel title becomes the slug. No spaces, no underscores.
+          title: YapperGpuSmoke
+          code_file: .github/scripts/gpu_smoke_kaggle.py
+          enable_gpu: enable
+          enable_internet: enable
+          # T4 (default) is enough for the yapper GPU test. P100
+          # would be faster but T4 is the free tier default and
+          # the test only runs for ~5 min total.
+          machine_shape: ''
+          # The Kaggle kernel polls for status every 30s and the
+          # GPU test can take up to 20 min (download + load + test).
+          # Default fetch_time is 3s; we don't override.

@@ -72,6 +72,21 @@ npm install
 npm run dev
 ```
 
+### GPU testing
+
+The unit tests + build + link-health regression test (`npm test`, `npm run test:links`) all run in CI on GitHub-hosted runners. The **GPU smoke test** — which actually probes `navigator.gpu` and runs a model load + inference end-to-end — needs a real GPU with display passthrough, which neither WSL2 nor standard CI runners provide. It runs on **Kaggle's free GPU tier** via `.github/workflows/gpu-smoke.yml` (triggered weekly, on release, or manually).
+
+To run it yourself locally, the captured container has xvfb + Chromium + Vulkan pre-installed:
+
+```bash
+bash scripts/capture-gif.sh                                          # demo capture
+docker run --rm --gpus all -v $(pwd)/out:/capture/out \
+    --entrypoint python3 yapper-gif-capture \
+    /capture/gpu_smoke_test.py --model kitten-nano                   # GPU probe
+```
+
+The Kaggle kernel script is at `.github/scripts/gpu_smoke_kaggle.py`. To enable the weekly run, add a `KAGGLE_API_TOKEN` secret at the repo settings page.
+
 ## Build
 
 ```bash
