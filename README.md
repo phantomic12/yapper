@@ -22,10 +22,10 @@
 >
 > ![Yapper demo](docs/demo.gif)
 >
-> MP4 version: [docs/demo.mp4](docs/demo.mp4) (better quality, 11.8s).
+> MP4 version: [docs/demo.mp4](docs/demo.mp4) (better quality, 13.8s).
 > Static stills: [landing](docs/demo-landing.png) · [audio playing](docs/demo-audio.png).
 >
-> _To regenerate: `bash scripts/capture-gif.sh`. The script builds a Chromium Docker image, runs it with `--gpus all` (real model load works in a real browser; the headless capture synthesizes the "loaded" state because the 24MB download + CORS-protected voices.npz fetch can leave an error banner on screen that ruins the demo), and produces a 10.4s 720×450 GIF + a 1024×640 MP4 at 25fps._
+> _To regenerate: `python3 scripts/capture_demo_v2.py` from the project root (needs `playwright install chromium`). The script drives the live demo site, hides the headless-only WebGPU banner, animates a real TTS flow (model select → text typed → queue card → generating → audio player), and produces a 13.8s 720×450 GIF + a 1024×640 MP4 at 24fps. The "loaded" state is synthesized because the 24MB ONNX download + CORS-protected voices.npz fetch can leave an error banner on screen in headless capture — the real flow works in a real browser._
 
 ## Features
 
