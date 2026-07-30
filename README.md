@@ -22,10 +22,10 @@
 >
 > ![Yapper demo](docs/demo.gif)
 >
-> MP4 version: [docs/demo.mp4](docs/demo.mp4) (better quality, 13.8s).
+> MP4 version: [docs/demo.mp4](docs/demo.mp4) (1080p, better quality, 16.9s).
 > Static stills: [landing](docs/demo-landing.png) · [audio playing](docs/demo-audio.png).
 >
-> _To regenerate: `python3 scripts/capture_demo_v2.py` from the project root (needs `playwright install chromium`). The script drives the live demo site, hides the headless-only WebGPU banner, animates a real TTS flow (model select → text typed → queue card → generating → audio player), and produces a 13.8s 720×450 GIF + a 1024×640 MP4 at 24fps. The "loaded" state is synthesized because the 24MB ONNX download + CORS-protected voices.npz fetch can leave an error banner on screen in headless capture — the real flow works in a real browser._
+> _To regenerate: `python3 scripts/capture_demo_v3.py` from the project root (needs `playwright install chromium`, `numpy`, `pillow`). The script drives the live demo site, animates a real TTS flow (model select → text typed → queue card → generating with progress bar + elapsed counter → audio playing), wraps every frame in a fake browser window (traffic lights + title bar + drop shadow), prepends a 0.5s intro slate, and outputs a 1280×720 GIF + a 1920×1080 MP4. The "loaded" state is synthesized because the 24MB ONNX download + CORS-protected voices.npz fetch can leave an error banner in headless capture — the real flow works in a real browser._
 
 ## Features
 
