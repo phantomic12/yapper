@@ -1,27 +1,43 @@
 import type { CustomEngine, TTSModel } from '../engine';
+import { KOKORO_MODEL_ID } from './kokoro';
 
 export type WorkerRequest =
-  | { type: 'load'; model: TTSModel }
-  | { type: 'generate'; model: TTSModel; voiceId?: string; text: string; speed?: number }
-  | { type: 'dispose' };
+  | { id: number; type: 'load'; model: TTSModel }
+  | { id: number; type: 'generate'; model: TTSModel; voiceId?: string; text: string; speed?: number }
+  | { id: number; type: 'dispose' };
 
 export type WorkerResponse =
-  | { type: 'progress'; loaded: number; total: number }
-  | { type: 'loaded'; sampleRate: number }
-  | { type: 'generated'; audio: Float32Array; samplingRate: number; wordTimings?: number[] }
-  | { type: 'disposed' }
-  | { type: 'error'; message: string };
+  | { id: number; type: 'progress'; loaded: number; total: number }
+  | { id: number; type: 'loaded'; sampleRate: number }
+  | { id: number; type: 'generated'; audio: Float32Array; samplingRate: number; wordTimings?: number[] }
+  | { id: number; type: 'disposed' }
+  | { id: number; type: 'error'; message: string };
+
+let nextRequestId = 1;
 
 export function createLoadRequest(model: TTSModel): WorkerRequest {
-  return { type: 'load', model };
+  return { id: nextRequestId++, type: 'load', model };
 }
 
-export function createGenerateRequest(model: TTSModel, voiceId: string | undefined, text: string, speed?: number): WorkerRequest {
-  return { type: 'generate', model, voiceId, text, speed };
+export function createGenerateRequest(
+  model: TTSModel,
+  voiceId: string | undefined,
+  text: string,
+  speed?: number,
+): WorkerRequest {
+  return { id: nextRequestId++, type: 'generate', model, voiceId, text, speed };
 }
 
 export function createDisposeRequest(): WorkerRequest {
-  return { type: 'dispose' };
+  return { id: nextRequestId++, type: 'dispose' };
+}
+
+/** Pick which custom engine the inference worker should instantiate. */
+export function selectWorkerEngineKind(modelId: string): 'kokoro' | 'kitten' {
+  if (modelId === KOKORO_MODEL_ID || modelId.toLowerCase().includes('kokoro')) {
+    return 'kokoro';
+  }
+  return 'kitten';
 }
 
 type WorkerLike = {
@@ -31,10 +47,17 @@ type WorkerLike = {
   terminate(): void;
 };
 
+type Pending = {
+  resolve: (response: WorkerResponse) => void;
+  reject: (error: Error) => void;
+  progress?: (loaded: number, total: number) => void;
+};
+
 export class WorkerBackedEngine implements CustomEngine {
   private worker: WorkerLike | null = null;
-  private pending: ((response: WorkerResponse) => void) | null = null;
-  private pendingReject: ((error: Error) => void) | null = null;
+  private readonly pending = new Map<number, Pending>();
+  /** Serialize outgoing requests so the worker never sees overlapping generate/load. */
+  private chain: Promise<void> = Promise.resolve();
   private readonly workerFactory: () => WorkerLike;
 
   constructor(workerFactory: () => WorkerLike = () => new Worker(
@@ -55,41 +78,82 @@ export class WorkerBackedEngine implements CustomEngine {
     return { sampleRate: response.sampleRate };
   }
 
-  async generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
+  async generate(
+    model: TTSModel,
+    voiceId: string | undefined,
+    text: string,
+    options?: { speed?: number },
+  ): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
     const response = await this.request(createGenerateRequest(model, voiceId, text, options?.speed));
     if (response.type !== 'generated') throw new Error(`Unexpected worker response: ${response.type}`);
-    return response;
+    // Normalize in case the worker transferred a plain ArrayBuffer view oddly.
+    const audio = response.audio instanceof Float32Array
+      ? response.audio
+      : new Float32Array(response.audio as unknown as ArrayBuffer);
+    return { audio, samplingRate: response.samplingRate, wordTimings: response.wordTimings };
   }
 
   dispose(): void {
-    if (!this.worker) return;
-    this.worker.postMessage(createDisposeRequest());
+    if (!this.worker) {
+      this.rejectAll(new Error('Worker disposed'));
+      return;
+    }
+    try {
+      this.worker.postMessage(createDisposeRequest());
+    } catch {
+      // Worker may already be gone.
+    }
     this.worker.removeEventListener('message', this.onMessage);
     this.worker.removeEventListener('error', this.onError);
     this.worker.terminate();
     this.worker = null;
-    this.rejectPending(new Error('Worker disposed'));
+    this.rejectAll(new Error('Worker disposed'));
   }
 
-  private request(message: WorkerRequest, progressCallback?: (loaded: number, total: number) => void): Promise<WorkerResponse> {
+  private request(
+    message: WorkerRequest,
+    progressCallback?: (loaded: number, total: number) => void,
+  ): Promise<WorkerResponse> {
     if (!this.worker) return Promise.reject(new Error('Inference worker is not available'));
-    if (this.pending) return Promise.reject(new Error('Inference worker request already pending'));
-    return new Promise((resolve, reject) => {
-      this.pending = (response) => {
-        if (response.type === 'progress') progressCallback?.(response.loaded, response.total);
-        else { this.pending = null; this.pendingReject = null; response.type === 'error' ? reject(new Error(response.message)) : resolve(response); }
-      };
-      this.pendingReject = reject;
-      const transfer = message.type === 'generate' ? [] : undefined;
-      this.worker!.postMessage(message, transfer);
+
+    const run = (): Promise<WorkerResponse> => new Promise((resolve, reject) => {
+      if (!this.worker) {
+        reject(new Error('Inference worker is not available'));
+        return;
+      }
+      this.pending.set(message.id, { resolve, reject, progress: progressCallback });
+      this.worker.postMessage(message);
     });
+
+    // Chain so concurrent generate() calls from the queue don't overlap on one worker.
+    const result = this.chain.then(run, run);
+    this.chain = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private readonly onMessage = (event: MessageEvent | ErrorEvent) => {
-    if ('data' in event) this.pending?.(event.data as WorkerResponse);
+    if (!('data' in event)) return;
+    const response = event.data as WorkerResponse;
+    if (!response || typeof response !== 'object' || typeof response.id !== 'number') return;
+    const slot = this.pending.get(response.id);
+    if (!slot) return;
+    if (response.type === 'progress') {
+      slot.progress?.(response.loaded, response.total);
+      return;
+    }
+    this.pending.delete(response.id);
+    if (response.type === 'error') slot.reject(new Error(response.message));
+    else slot.resolve(response);
   };
+
   private readonly onError = (event: MessageEvent | ErrorEvent) => {
-    this.rejectPending(new Error('message' in event ? event.message : String(event.data)));
+    const message = 'message' in event ? event.message : String((event as MessageEvent).data);
+    this.rejectAll(new Error(message || 'Inference worker error'));
   };
-  private rejectPending(error: Error) { const reject = this.pendingReject; this.pending = null; this.pendingReject = null; reject?.(error); }
+
+  private rejectAll(error: Error) {
+    const slots = [...this.pending.values()];
+    this.pending.clear();
+    for (const slot of slots) slot.reject(error);
+  }
 }

@@ -65,9 +65,11 @@ function swCacheBustPlugin(): Plugin {
       const buildId = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 12);
       const newName = `yapper-shell-${buildId}`;
       const original = readFileSync(swPath, 'utf8');
+      // Match both the source form (yapper-shell-v1) and any prior
+      // timestamped build id so repeated builds always bust the cache.
       const updated = original
-        .replace(/const SHELL_CACHE = 'yapper-shell-v\d+';/, `const SHELL_CACHE = '${newName}';`)
-        .replace(/'yapper-shell-v\d+'/g, `'${newName}'`);
+        .replace(/const SHELL_CACHE = 'yapper-shell[^']*';/, `const SHELL_CACHE = '${newName}';`)
+        .replace(/'yapper-shell[^']*'/g, `'${newName}'`);
       if (updated === original) {
         // Pattern didn't match. Source probably has the new buildId
         // already (idempotent re-run) or the regex needs updating.

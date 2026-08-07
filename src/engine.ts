@@ -1,6 +1,7 @@
 import { pipeline } from '@huggingface/transformers';
 import { EventEmitter } from './events';
 import { KITTEN_VOICES } from './engines/kitten';
+import { KOKORO_VOICES } from './engines/kokoro';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -90,14 +91,7 @@ export const MODELS: TTSModel[] = [
     custom: true,
     language: 'en',
     sizeMB: 86,
-    voices: [
-      { id: 'af_heart',   name: 'Heart (en-us, Female)' },
-      { id: 'af_bella',   name: 'Bella (en-us, Female)' },
-      { id: 'am_michael', name: 'Michael (en-us, Male)' },
-      { id: 'am_adam',    name: 'Adam (en-us, Male)' },
-      { id: 'bf_emma',    name: 'Emma (en-gb, Female)' },
-      { id: 'bm_george',  name: 'George (en-gb, Male)' },
-    ],
+    voices: KOKORO_VOICES,
     defaultVoiceId: 'af_heart',
   },
   {
@@ -112,14 +106,7 @@ export const MODELS: TTSModel[] = [
     custom: true,
     language: 'en',
     sizeMB: 163,
-    voices: [
-      { id: 'af_heart',   name: 'Heart (en-us, Female)' },
-      { id: 'af_bella',   name: 'Bella (en-us, Female)' },
-      { id: 'am_michael', name: 'Michael (en-us, Male)' },
-      { id: 'am_adam',    name: 'Adam (en-us, Male)' },
-      { id: 'bf_emma',    name: 'Emma (en-gb, Female)' },
-      { id: 'bm_george',  name: 'George (en-gb, Male)' },
-    ],
+    voices: KOKORO_VOICES,
     defaultVoiceId: 'af_heart',
   },
   {
@@ -314,9 +301,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   private jobs: GenerationJob[] = [];
   private processing = false;
   private nextJobId = 1;
-  /** Single-flight: when non-null, a load is in progress and concurrent
-   *  loadModel() calls should await this promise instead of starting over. */
+  /** In-flight load loop promise. Concurrent loadModel() callers all await
+   *  this single chain; the loop always ends on the latest requested model. */
   private loadingPromise: Promise<void> | null = null;
+  /** Most recently requested model (latest-wins while a load loop runs). */
+  private pendingLoadModel: TTSModel | null = null;
 
   constructor(events: EngineEvents = {}) {
     super();
@@ -369,49 +358,86 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
       && this.currentModel.modelId === model.modelId
       && (this.currentModel.modelFile ?? '') === (model.modelFile ?? '')
       && (this.currentModel.dtype ?? 'q8') === (model.dtype ?? 'q8');
-    if (sameModel && (this.pipe || customEngines.has(model.modelId))) {
+    if (sameModel && (this.pipe || customEngines.has(model.modelId)) && !this.loadingPromise) {
       this.setEngineState('ready');
       return;
     }
 
-    // Single-flight guard: if a load is already in progress, wait for it
-    // instead of starting a second concurrent load. Without this, two
-    // rapid clicks on "Load Model" race: each call disposes the other's
-    // pipe mid-init and the slower one overwrites `currentModel` with
-    // its stale result.
+    // Latest-wins: always record the desired model. A single load loop drains
+    // pendingLoadModel until it stabilizes, so rapid clicks end on the last one.
+    this.pendingLoadModel = model;
     if (this.loadingPromise) {
       return this.loadingPromise;
     }
 
-    // If we're mid-generation on a different model, let it finish but cancel
-    // any pending jobs for the OLD model — they can never run with the new one.
-    for (const job of this.jobs) {
-      if (job.status === 'pending' && job.modelId !== model.modelId) {
-        job.status = 'cancelled';
-        job.error = 'Model changed before generation started';
-        job.completedAt = Date.now();
-      }
-    }
-    this.notifyJobs();
-
-    // Dispose old pipe (if switching models)
-    if (this.pipe && typeof this.pipe.dispose === 'function') {
-      this.pipe.dispose();
-      this.pipe = null;
-    }
-    if (this.currentModel) {
-      const oldCustom = customEngines.get(this.currentModel.modelId);
-      if (oldCustom) oldCustom.dispose();
-    }
-
-    this.setEngineState('loading');
-    this.emit('loadProgress', 0, 1, model.name);
-
-    this.loadingPromise = this.doLoad(model);
+    this.loadingPromise = this.runLoadLoop();
     try {
       await this.loadingPromise;
     } finally {
       this.loadingPromise = null;
+    }
+  }
+
+  private async runLoadLoop(): Promise<void> {
+    while (true) {
+      const model = this.pendingLoadModel;
+      if (!model) break;
+      this.pendingLoadModel = null;
+
+      // Cancel pending jobs that cannot run under the model we're about to load.
+      for (const job of this.jobs) {
+        if (job.status === 'pending' && job.modelId !== model.id) {
+          job.status = 'cancelled';
+          job.error = 'Model changed before generation started';
+          job.completedAt = Date.now();
+        }
+      }
+      this.notifyJobs();
+
+      if (this.pipe && typeof this.pipe.dispose === 'function') {
+        this.pipe.dispose();
+        this.pipe = null;
+      }
+      if (this.currentModel) {
+        const oldCustom = customEngines.get(this.currentModel.modelId);
+        if (oldCustom) oldCustom.dispose();
+      }
+
+      this.setEngineState('loading');
+      this.emit('loadProgress', 0, 1, model.name);
+
+      try {
+        await this.doLoad(model);
+      } catch (err) {
+        // If a newer model was requested, keep looping instead of surfacing a
+        // stale failure as terminal — doLoad already emitted engineError.
+        if (!this.pendingLoadModel) throw err;
+        continue;
+      }
+
+      // Concurrent loadModel(same) only sets pendingLoadModel — don't reload
+      // an identity we just finished successfully.
+      this.clearPendingIfSameAsCurrent();
+    }
+  }
+
+  /** True when two registry entries refer to the same on-disk/backend artifact. */
+  private isSameModelIdentity(a: TTSModel, b: TTSModel): boolean {
+    return a.modelId === b.modelId
+      && (a.modelFile ?? '') === (b.modelFile ?? '')
+      && (a.dtype ?? 'q8') === (b.dtype ?? 'q8');
+  }
+
+  private clearPendingIfSameAsCurrent(): void {
+    const pending = this.pendingLoadModel;
+    const loaded = this.currentModel;
+    if (
+      pending
+      && loaded
+      && this.isSameModelIdentity(pending, loaded)
+      && this.engineState === 'ready'
+    ) {
+      this.pendingLoadModel = null;
     }
   }
 
@@ -578,10 +604,10 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           samplingRate = result.sampling_rate ?? this.currentSampleRate;
         }
 
-        // Resample to apply playback speed for engines that don't have
-        // a native speed param (SpeechT5, MMS-TTS). Kokoro and Kitten
-        // already applied speed during inference.
-        if (next.speed !== 1.0) {
+        // Resample only for engines without a native speed param
+        // (SpeechT5, MMS-TTS). Custom engines (Kokoro, Kitten) apply
+        // speed during inference — resampling again would double-speed.
+        if (!model.custom && next.speed !== 1.0) {
           audio = changeSpeed(audio, next.speed);
         }
 

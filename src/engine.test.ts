@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { float32ToWav, changeSpeed, MODELS } from './engine';
+import { KOKORO_VOICES } from './engines/kokoro';
 
 describe('float32ToWav', () => {
   it('produces a RIFF/WAVE header for a mono 16-bit PCM blob', async () => {
@@ -139,6 +140,16 @@ describe('MODELS registry', () => {
       if (!m.defaultVoiceId) continue;
       const found = m.voices?.some(v => v.id === m.defaultVoiceId);
       expect(found, `${m.id}: defaultVoiceId ${m.defaultVoiceId} not in voices`).toBe(true);
+    }
+  });
+
+  it('kokoro model entries expose the full KOKORO_VOICES list', () => {
+    const kokoros = MODELS.filter(m => m.id.startsWith('kokoro'));
+    expect(kokoros.length).toBeGreaterThanOrEqual(2);
+    for (const m of kokoros) {
+      expect(m.voices, m.id).toBe(KOKORO_VOICES);
+      expect(m.voices?.length).toBe(28);
+      expect(m.defaultVoiceId).toBe('af_heart');
     }
   });
 });

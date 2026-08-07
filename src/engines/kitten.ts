@@ -3,7 +3,7 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 
 // Kitten TTS Nano via direct onnxruntime-web + manual phonemization.
 // This is a separate integration from kokoro-js (which has its own eSpeak WASM
-// inlined). The `phonemizer` package is loaded from jsdelivr at runtime.
+// inlined). The `phonemizer` package is vendored under /lib/ at runtime.
 //
 // Model:  KittenML/kitten-tts-nano-0.8-int8 (HF, ~24MB quantized ONNX)
 // Voices: 8 built-in (in voices.npz, each shape (400, 256) float32)
@@ -36,9 +36,11 @@ const VOICES_FILE = 'voices.npz';
 // Vite resolved to `/assets/lib/...` (404 in production). The `../lib/`
 // path works whether the consumer is the main thread or a worker.
 const TOKENIZER_URL = new URL('../lib/kitten-tokenizer.json', import.meta.url).href;
-// Phonemizer: eSpeak NG WASM wrapped by xenova/phonemizer.js. Loaded from CDN
-// at runtime (jsdelivr's field in their package.json points to this file).
-const PHONEMIZER_URL = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
+// Phonemizer: eSpeak NG WASM wrapped by xenova/phonemizer.js.
+// Vendored to public/lib/phonemizer.js via scripts/copy-phonemizer.mjs
+// (postinstall). Resolved RELATIVE TO THIS BUNDLE — same gotcha as the
+// tokenizer: import.meta.env.BASE_URL + 'lib/...' would 404 under /assets/.
+const PHONEMIZER_URL = new URL('../lib/phonemizer.js', import.meta.url).href;
 const SAMPLE_RATE = 24000;
 
 interface VoiceEntry {
@@ -261,7 +263,7 @@ async function getOrt() {
     // "no available backend found". Inference runs on the main thread —
     // generation blocks the page for the duration, but the queue still
     // accepts new jobs (each is just blocked behind the current one).
-    // TODO: implement proper off-thread inference via a Vite `?worker` import.
+    // Off-thread inference is owned by WorkerBackedEngine + inference-worker.ts.
   }
   return ortModule;
 }

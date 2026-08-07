@@ -21,6 +21,9 @@ Subject ≤ 72 chars, imperative mood. Body explains why, not what.
   `npm run test:links` and `YAPPER_LINK_CHECK=1 npm test`.
 - New engine code should add a mock `CustomEngine` to
   `engine.behavior.test.ts` rather than test the real model.
+- Worker protocol helpers belong in `engines/worker-bridge.test.ts`;
+  keep pure document helpers in `document-types` / reader tests so
+  vitest does not pull pdfjs or tesseract into every file.
 
 ## Build / CI
 
@@ -37,3 +40,9 @@ Subject ≤ 72 chars, imperative mood. Body explains why, not what.
   (pdfjs, tesseract).
 - Engine events go through `EventEmitter` (`engine.on()`), never by
   mutating `engine.events.*` directly. That pattern is deprecated.
+- Custom TTS backends implement `CustomEngine` and register via
+  `registerCustomEngine(modelId, …)`. Kokoro/Kitten are wrapped in
+  `WorkerBackedEngine` from `src/engines/worker-bridge.ts`.
+- Document ingestion for the UI is `document-reader.ts`; reading UX
+  and highlight timing live in `reader.ts`. See
+  [docs/architecture.md](docs/architecture.md).

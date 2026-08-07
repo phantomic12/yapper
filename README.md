@@ -1,71 +1,91 @@
 # Yapper 🔊
 
-**Browser text-to-speech with zero cloud.** Kokoro, Kitten, and SpeechT5 run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
+**Browser text-to-speech with zero cloud.** Kokoro, Kitten, SpeechT5, and MMS-TTS run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
-> **Note on performance:** inference currently runs on the main thread, so long generations will block the page while a job is in progress. A Web Worker build is in progress to fix this — see [issue tracker](https://github.com/phantomic12/yapper/issues). The non-blocking queue still lets you stack multiple jobs; only the active one blocks.
+> **Note on performance:** Kokoro and Kitten are registered through `WorkerBackedEngine` (`src/engines/worker-bridge.ts` → `inference-worker.ts`), so load/generate for those models run off the main thread and the UI stays responsive while a job is in progress. SpeechT5 and MMS-TTS still run on the main thread via Transformers.js. The non-blocking queue lets you stack multiple jobs either way.
 
 ## Quick start
 
 1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally).
 2. Pick a model:
-   - **Kokoro-82M (q8f16)** — best quality, 6 built-in English voices, ~86 MB download
+   - **Kokoro-82M (q8f16)** — best quality, 6 selectable English voices in the UI, ~86 MB
+   - **Kokoro-82M (fp16)** — same voices, higher fidelity, ~163 MB
    - **Kitten TTS Mini** — balanced quality, 8 voices, ~78 MB
-   - **Kitten TTS Nano** — fastest, smallest, ~24 MB
-   - **SpeechT5** — 330 MB, multi-voice via xvector embeddings
+   - **Kitten TTS Nano** — fastest / smallest, 8 voices, ~24 MB
+   - **SpeechT5** — ~330 MB, multi-voice via xvector embeddings
+   - **MMS-TTS** — ~50 MB each, 9 languages (see Features)
 3. Click **Download & Load Model** (one-time per model; cached after).
 4. Type or paste text, adjust speed, hit **Add to queue** (or `Ctrl`/`Cmd`+Enter).
-5. Drop a PDF, DOCX, EPUB, or Markdown file into the document reader to listen hands-free.
-
-> _A short demo GIF showing the model picker, queue, and document reader would go here. PRs welcome — capture it on a small screen so the file stays under 5 MB._
+5. Drop a PDF, DOCX, ODT, EPUB, TXT, or Markdown file into the document reader to listen hands-free. For scanned PDFs, enable the OCR toggle.
 
 > A live demo (pick a model → load → queue a sample → audio plays):
 >
 > ![Yapper demo](docs/demo.gif)
 >
-> MP4 version: [docs/demo.mp4](docs/demo.mp4) (1080p, better quality, 16.9s).
+> MP4 version: [docs/demo.mp4](docs/demo.mp4) (1080p, better quality).
 > Static stills: [landing](docs/demo-landing.png) · [audio playing](docs/demo-audio.png).
 >
-> _To regenerate: `python3 scripts/capture_demo_v3.py` from the project root (needs `playwright install chromium`, `numpy`, `pillow`). The script drives the live demo site, animates a real TTS flow (model select → text typed → queue card → generating with progress bar + elapsed counter → audio playing), wraps every frame in a fake browser window (traffic lights + title bar + drop shadow), prepends a 0.5s intro slate, and outputs a 1280×720 GIF + a 1920×1080 MP4. The "loaded" state is synthesized because the 24MB ONNX download + CORS-protected voices.npz fetch can leave an error banner in headless capture — the real flow works in a real browser._
+> _To regenerate the animated demo (`docs/demo.gif` + `docs/demo.mp4`): `python3 scripts/capture_demo_v3.py` from the project root (needs `playwright install chromium`, `numpy`, `pillow`, and `ffmpeg` on `PATH`). The script drives the live demo site, animates a real TTS flow, wraps frames in a fake browser chrome, and writes GIF/MP4 under `OUT_DIR` (default `./out` — copy into `docs/`). The "loaded" state may be synthesized in headless capture because large ONNX downloads + CORS can fail there; the real flow works in a normal browser._
+>
+> _Still screenshots only: `npm run demo:capture` runs `scripts/capture_demo.py` and writes PNGs to `scripts/demo-shots/`._
 
 ## Features
 
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
 - **Models**
-  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) variants — 6 built-in English voices, highest quality
-  - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, WebGPU-optimized
-  - **SpeechT5** (~330 MB) — multi-voice via 512-dim xvector speaker embeddings
+  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) — shared HF repo, different `modelFile` / dtype; 6 voices exposed in the picker
+  - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, ONNX Runtime Web
+  - **SpeechT5** (~330 MB, fp32) — multi-voice via 512-dim xvector speaker embeddings
   - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
-- **Read documents aloud** — drop a PDF / DOCX / ODT / EPUB / text / image; text is extracted locally and chunked into the TTS queue. Scanned PDFs can use on-device OCR
-- **Lightweight on-device OCR** — Tesseract.js (LSTM English, self-hosted under `public/lib/tesseract/`, runs in a Web Worker)
-- **Non-blocking queue** — stack up multiple generations, page stays usable
-- **Voice selection** — pick from built-in voices per model, or supply a custom xvector for SpeechT5
-- **Document reader** — upload PDF, DOCX, ODT, EPUB, TXT or Markdown and listen in real time
-- **Experimental layout OCR** — render scanned/image-based PDF pages and reconstruct reading order from detected text blocks
-- **Keyboard accessible controls** — arrow-key navigation, skip links, focus indicators and ARIA live regions
-- **Models from Hugging Face** — zero hosting burden, loaded on demand
+- **Off-thread Kokoro / Kitten** — `WorkerBackedEngine` keeps the page usable during those generations
+- **Read documents aloud** — drop PDF / DOCX / ODT / EPUB / TXT / MD; text is extracted locally and fed to the reader session + TTS queue
+- **Optional PDF OCR** — toggle OCR for scanned/layout pages (Tesseract.js). Self-hosted worker, WASM core, and English traineddata live under `public/lib/tesseract/`
+- **Non-blocking queue** — stack multiple generations
+- **Voice selection** — built-in voices per model, or a custom xvector for SpeechT5
+- **Keyboard accessible controls** — skip links, focus indicators, ARIA live regions
+- **Models from Hugging Face** — loaded on demand, cached by the browser
 - **WAV download** — save generated audio as standard WAV files
 - **Dark mode UI** — minimal, fast, no frameworks
 
 ## Supported document formats
 
-| Format | Reader support | Notes |
-|--------|----------------|-------|
-| PDF    | text + OCR     | Text layer extracted first; toggle OCR for scanned/layout pages |
-| DOCX   | text           | Extracted with `mammoth` |
-| ODT    | text           | Zipped XML text extraction |
-| EPUB   | text           | HTML spine text extraction |
-| TXT    | text           | Plain UTF-8 |
-| MD     | text           | Markdown markup stripped |
+Active path: `src/document-reader.ts` → `src/reader.ts` (`DocumentReaderSession`).
+
+| Format | Support | Notes |
+|--------|---------|-------|
+| PDF    | text + optional OCR | Text layer first; enable **Use OCR for scanned PDFs** for layout/OCR blocks |
+| DOCX   | text | `word/document.xml` via JSZip |
+| ODT    | text | Zipped ODF text extraction |
+| EPUB   | text | HTML spine text extraction |
+| TXT    | text | Plain UTF-8 |
+| MD     | text | Read as text (markup left for the reader to handle lightly) |
+
+PDF extraction is capped at 500 pages by default (`MAX_PDF_PAGES`) to avoid tab OOMs.
 
 ## Tech Stack
 
-- [Transformers.js](https://huggingface.co/docs/transformers.js) — Hugging Face models in the browser
-- [ONNX Runtime Web](https://onnxruntime.ai) — WebGPU/WASM inference backend
-- [pdfjs-dist](https://github.com/mozilla/pdf.js), [mammoth](https://github.com/mwilliamson/mammoth.js), [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
-- [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR (self-hosted assets)
+- [Transformers.js](https://huggingface.co/docs/transformers.js) — SpeechT5 + MMS-TTS in the browser
+- [ONNX Runtime Web](https://onnxruntime.ai) — WebGPU/WASM backend (Kitten; also used under Kokoro)
+- [kokoro-js](https://www.npmjs.com/package/kokoro-js) — Kokoro-82M integration
+- [pdfjs-dist](https://github.com/mozilla/pdf.js), [mammoth](https://github.com/mwilliamson/mammoth.js) / JSZip, [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
+- [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR (assets under `public/lib/tesseract/`)
 - [Vite](https://vitejs.dev) — build tooling
 - TypeScript, vanilla CSS — no framework overhead
+
+## Architecture (short)
+
+| Module | Role |
+|--------|------|
+| `src/main.ts` | UI wiring, model registration, document upload |
+| `src/engine.ts` | `TTSEngine`, `MODELS`, queue, WAV encode, speed |
+| `src/engines/` | Kokoro, Kitten, `WorkerBackedEngine`, inference worker |
+| `src/document-reader.ts` | File → plain text (+ optional PDF OCR layout blocks) |
+| `src/reader.ts` | Reading session, chunking, sentence/word highlight |
+| `src/events.ts` | Typed `engine.on()` lifecycle events |
+| `public/sw.js` | App-shell PWA cache (not model weights) |
+
+See [docs/architecture.md](docs/architecture.md) for a one-screen map.
 
 ## Development
 
@@ -74,20 +94,20 @@ npm install
 npm run dev
 ```
 
+Useful scripts: `npm test`, `npm run test:links`, `npm run lint`, `npm run typecheck`, `npm run build`.
+
 ### GPU testing
 
-The unit tests + build + link-health regression test (`npm test`, `npm run test:links`) all run in CI on GitHub-hosted runners. The **GPU smoke test** — which actually probes `navigator.gpu` and runs a model load + inference end-to-end — needs a real GPU with display passthrough, which neither WSL2 nor standard CI runners provide. It runs on **Kaggle's free GPU tier** via `.github/workflows/gpu-smoke.yml` (triggered weekly, on release, or manually).
-
-To run it yourself locally, the captured container has xvfb + Chromium + Vulkan pre-installed:
+Unit tests + build + link-health (`npm test`, `npm run test:links`) run in CI on GitHub-hosted runners. The **GPU smoke test** probes `navigator.gpu` and runs a real model load + inference on **Kaggle's free GPU tier** via `.github/workflows/gpu-smoke.yml` (weekly, on release, or manually).
 
 ```bash
-bash scripts/capture-gif.sh                                          # demo capture
+bash scripts/capture-gif.sh                                          # docker demo capture helper
 docker run --rm --gpus all -v $(pwd)/out:/capture/out \
     --entrypoint python3 yapper-gif-capture \
     /capture/gpu_smoke_test.py --model kitten-nano                   # GPU probe
 ```
 
-The Kaggle kernel script is at `.github/scripts/gpu_smoke_kaggle.py`. To enable the weekly run, add a `KAGGLE_API_TOKEN` secret at the repo settings page.
+The Kaggle kernel script is `.github/scripts/gpu_smoke_kaggle.py`. Enable the weekly run with a `KAGGLE_API_TOKEN` repo secret.
 
 ## Build
 
@@ -98,21 +118,20 @@ npm run build
 
 ## Privacy
 
-- All text-to-speech inference, document parsing and OCR run **entirely in your browser**
-- Model files are downloaded from [Hugging Face](https://huggingface.co) (public CDN) and cached locally
-- OCR WASM core and English traineddata ship under `public/lib/tesseract/` — no OCR CDN at runtime
-- **No analytics, no tracking, no server-side processing**
-- Your text inputs and uploaded files never leave your device
+- All text-to-speech inference and document parsing run **in your browser**
+- Model files download from [Hugging Face](https://huggingface.co) and are cached locally
+- OCR assets (worker, WASM core, `eng.traineddata`) ship under `public/lib/tesseract/` for on-device use
+- **No analytics, no tracking, no server-side processing of your text**
+- Uploaded files are read locally in the tab; they are not uploaded to a Yapper backend
 
 ## Document reading
 
-Drop a file into the upload zone, or click to browse. Supported formats:
+1. Drop a file on the upload zone (or click to browse). Max 25 MB in the UI.
+2. Optionally enable **Use OCR for scanned PDFs** before extract.
+3. Review extracted text in the reader view.
+4. **Read document** queues chunks through the loaded model; the active sentence is highlighted as audio plays.
 
-- **PDF** — text extracted per page via pdfjs-dist; pages with little/no text (scanned/image-only) auto-render to canvas and OCR via Tesseract
-- **TXT / Markdown / JSON / CSV** — read as text, Markdown emphasis stripped so TTS doesn't speak "asterisk asterisk"
-- **PNG / JPEG / WebP** — OCR via Tesseract
-
-Extracted text is split into ~1.5k-char sentence-aware chunks. Click **Read all** to queue every chunk, or **Read aloud** per chunk. Loading is one-shot — the OCR worker is reused across pages so the second page of a scanned PDF is essentially instant after the first.
+Unsupported types error clearly: PDF, DOCX, ODT, EPUB, TXT, MD only on the active path.
 
 ## License
 

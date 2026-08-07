@@ -2,10 +2,10 @@
   "name": "yapper",
   "version": "0.1.0",
   "type": "module",
-  "description": "Privacy-first browser TTS \u2014 all inference runs locally via WebGPU",
+  "description": "Privacy-first browser TTS — all inference runs locally via WebGPU",
   "license": "MIT",
   "scripts": {
-    "postinstall": "node scripts/copy-pdf-worker.mjs",
+    "postinstall": "node scripts/copy-pdf-worker.mjs && node scripts/copy-phonemizer.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
@@ -29,6 +29,7 @@
     "mammoth": "^1.12.0",
     "onnxruntime-web": "^1.26.0",
     "pdfjs-dist": "^6.1.200",
+    "phonemizer": "^1.2.1",
     "tesseract.js": "^7.0.0"
   },
   "overrides": {
