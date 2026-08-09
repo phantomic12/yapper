@@ -306,7 +306,12 @@ def step_select_model(cdp_holder):
         f"""(function() {{
               const card = document.querySelector('.model-card[data-model-id="{DEFAULT_MODEL}"]');
               if (!card) return {{ ok: false, msg: 'no card for {DEFAULT_MODEL}' }};
-              card.click();
+              // Click handler lives on the inner [data-action="pick"] button,
+              // not the outer .model-card div (see src/ui/model-panel.ts).
+              // Calling card.click() on the div would fire on the wrong target.
+              const pickBtn = card.querySelector('[data-action="pick"]');
+              if (!pickBtn) return {{ ok: false, msg: 'no pick button on card' }};
+              pickBtn.click();
               return {{
                   ok: true,
                   selected: document.querySelector('.model-card--selected')?.dataset.modelId,
