@@ -1,4 +1,3 @@
-import type { TTSModel } from '../engine';
 import { KittenCustomEngine } from './kitten';
 import { KokoroCustomEngine } from './kokoro';
 import { selectWorkerEngineKind, type WorkerRequest, type WorkerResponse } from './worker-bridge';

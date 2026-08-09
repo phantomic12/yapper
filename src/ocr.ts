@@ -32,7 +32,6 @@ export interface OcrOptions {
  * One instance per language; reuse across pages to amortize the WASM load.
  */
 export class OcrEngine {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private worker: Worker | null = null;
   private language: string;
   private loading: Promise<void> | null = null;
