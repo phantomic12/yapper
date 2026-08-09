@@ -194,7 +194,7 @@ async function fetchWithDiagnostics(
     clearTimeout(timer);
     const e = err as Error;
     if (e.name === 'AbortError') {
-      throw new Error(`${label} fetch timed out after ${timeoutMs / 1000}s (${url})`);
+      throw new Error(`${label} fetch timed out after ${timeoutMs / 1000}s (${url})`, { cause: err });
     }
     // CORS failures, network failures, and DNS failures all land here
     // with the same generic message. We can't distinguish them from
@@ -205,7 +205,8 @@ async function fetchWithDiagnostics(
       `  This is usually one of: (a) CORS preflight failed — the host must\n` +
       `  serve Access-Control-Allow-Origin for the page origin, (b) the\n` +
       `  network is unreachable, (c) the URL is wrong. Open DevTools →\n` +
-      `  Network tab and look for the actual response.`
+      `  Network tab and look for the actual response.`,
+      { cause: err },
     );
   }
   clearTimeout(timer);
