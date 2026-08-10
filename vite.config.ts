@@ -82,8 +82,52 @@ function swCacheBustPlugin(): Plugin {
   };
 }
 
+/**
+ * Vite plugin: copy onnxruntime-web's WASM artifacts into `public/ort-wasm/`
+ * with stable filenames. Vite content-hashes the WASM bundle
+ * (e.g. `ort-wasm-simd-threaded.jsep-DC5y_g6C.wasm`); the inference
+ * Web Worker (`src/engines/inference-worker.ts`) historically had to
+ * resolve the WASM path via `wasmPaths` / `locateFile`, and any
+ * custom locateFile call needs a stable URL target. The Vite-emitted
+ * hashed URL is the primary path; this plugin is a belt-and-braces
+ * fallback so any explicit locateFile / wasmPaths call still
+ * resolves.
+ *
+ * The output directory is gitignored (see `.gitignore`) — every
+ * build regenerates these from `node_modules/onnxruntime-web/dist/*`.
+ */
+function copyOrtWasmPlugin(): Plugin {
+  return {
+    name: 'copy-ort-wasm',
+    apply: 'build',
+    closeBundle() {
+      const projectRoot = process.cwd();
+      const ortDist = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
+      const destDir = resolve(projectRoot, 'public', 'ort-wasm');
+      if (!existsSync(ortDist)) {
+        // onnxruntime-web is a dep, so this shouldn't fire on a healthy
+        // checkout. Fail loud rather than silently ship a broken dist.
+        throw new Error(
+          `onnxruntime-web dist not found at ${ortDist}. ` +
+          `Run \`npm install\` or check the dependency.`,
+        );
+      }
+      mkdirSync(destDir, { recursive: true });
+      const files = readdirSync(ortDist).filter((f) => f.endsWith('.wasm'));
+      let copied = 0;
+      for (const file of files) {
+        const src = resolve(ortDist, file);
+        const dest = resolve(destDir, file);
+        copyFileSync(src, dest);
+        copied++;
+      }
+      console.log(`[copy-ort-wasm] copied ${copied} WASM files → public/ort-wasm/`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [copyPdfWorkerPlugin(), swCacheBustPlugin()],
+  plugins: [copyPdfWorkerPlugin(), copyOrtWasmPlugin(), swCacheBustPlugin()],
   base: './',
   build: {
     outDir: 'dist',

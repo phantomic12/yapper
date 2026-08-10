@@ -127,4 +127,26 @@ describe('WorkerBackedEngine', () => {
     expect(out.samplingRate).toBe(24000);
     expect(Array.from(out.audio)).toEqual([0, 0.5, -0.5]);
   });
+
+  it('constructs the worker via the canonical Vite-friendly URL', () => {
+    // The default factory must use `new URL('./inference-worker.ts',
+    // import.meta.url)` — Vite rewrites that at build time to point at
+    // the emitted worker bundle. If anyone switches this to a CDN URL,
+    // an absolute path, or a data: URL, the worker fails to load
+    // (no COOP/COEP headers on the demo CDN) and the production app
+    // breaks silently. Read the source and assert the literal form.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('node:fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.join(__dirname, 'worker-bridge.ts'),
+      'utf8',
+    );
+    expect(src).toMatch(
+      /new Worker\(\s*new URL\(\s*['"]\.\/inference-worker\.ts['"]\s*,\s*import\.meta\.url\s*\)/,
+    );
+    // Worker must be a module worker — ORT is ESM-only.
+    expect(src).toMatch(/type:\s*'module'/);
+  });
 });

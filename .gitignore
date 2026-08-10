@@ -12,6 +12,12 @@ dist/
 # Copied public assets
 public/pdf.worker.mjs
 public/pdf.worker.mjs.map
+# Vite-emitted ORT WASM files: copies of node_modules/onnxruntime-web/dist/*.wasm
+# kept under stable names so the inference Web Worker can resolve them
+# via wasmPaths / locateFile when the runtime would otherwise lose track
+# of Vite's content-hashed bundle URLs. Regenerated on every build by
+# the copy-ort-wasm plugin in vite.config.ts.
+public/ort-wasm/
 
 # Generated artifacts (rebuilt by scripts/capture-gif.sh, npm run icons:build)
 out/
@@ -35,3 +41,6 @@ Thumbs.db
 .env.local
 scripts/probe.py
 scripts/demo-shots/
+
+# Local scratch
+__pycache__/

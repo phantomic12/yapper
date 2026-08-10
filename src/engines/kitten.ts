@@ -257,14 +257,15 @@ let ortModule: any = null;
 async function getOrt() {
   if (!ortModule) {
     ortModule = await import('onnxruntime-web');
-    // Web Worker proxy is intentionally NOT enabled. With Vite's bundling,
-    // the proxy worker can't find the WASM (Vite emits the WASM with a content
-    // hash; `wasmPaths` doesn't help because the worker fetches from the same
-    // path as the main script, which is content-hashed). Result was
-    // "no available backend found". Inference runs on the main thread —
-    // generation blocks the page for the duration, but the queue still
-    // accepts new jobs (each is just blocked behind the current one).
-    // Off-thread inference is owned by WorkerBackedEngine + inference-worker.ts.
+    // Web Worker proxy is intentionally NOT enabled here. With Vite's
+    // bundling, the proxy worker could not find the WASM (Vite emits
+    // the WASM with a content hash; `wasmPaths` alone doesn't help
+    // because the worker fetches from the same directory as its own
+    // script). Off-thread inference is owned by `WorkerBackedEngine`
+    // + `inference-worker.ts` — Kokoro + Kitten both run there. The
+    // `copy-ort-wasm` Vite plugin (vite.config.ts) keeps stable copies
+    // of every ORT WASM flavor under `public/ort-wasm/` so any custom
+    // locateFile call still resolves to a usable URL.
   }
   return ortModule;
 }

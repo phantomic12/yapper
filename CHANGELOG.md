@@ -24,6 +24,21 @@ All notable changes to Yapper are recorded here. Versions follow
   (`scripts/capture_demo.py`) is stills-only into `scripts/demo-shots/`.
 - **CONTRIBUTING** points at worker-bridge registration and
   `docs/architecture.md`.
+- **Stale "main thread" comment removed** from `src/app-bootstrap.ts`
+  (and tightened in `src/engines/kitten.ts` `getOrt()`): both still
+  claimed "inference runs on the main thread" but Kokoro + Kitten
+  actually run inside `WorkerBackedEngine` → `inference-worker.ts`.
+  New comments describe the worker path explicitly and point at the
+  `copy-ort-wasm` Vite plugin.
+
+### Fixed
+- **New `copy-ort-wasm` Vite plugin** (`vite.config.ts`) copies every
+  onnxruntime-web WASM flavor into `public/ort-wasm/` with stable
+  names. Belt-and-braces fallback: the Vite-emitted content-hashed
+  URL is still the primary WASM source for `WorkerBackedEngine`, but
+  any explicit `locateFile` / `wasmPaths` call now resolves to a
+  non-hashed URL on stable filenames. Stops "no available backend
+  found" regressions if the WASM hash strategy ever changes.
 
 ### Also unreleased (prior integration work)
 

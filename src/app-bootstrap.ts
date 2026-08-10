@@ -6,18 +6,19 @@ import {
 } from './engine';
 import { WorkerBackedEngine } from './engines/worker-bridge';
 
-// ─── Note on Web Worker proxy ────────────────────────────────────
-// We previously enabled `env.backends.onnx.wasm.proxy = true` here AND
-// in src/engines/kitten.ts to run inference in a Web Worker so the page
-// stays responsive during generation. This caused "no available backend
-// found" on Kitten because Vite emits the ORT WASM with a content hash
-// in its filename, and the proxy worker can't resolve that path via
-// `wasmPaths` alone (the worker fetches from the script's own directory).
+// ─── Off-thread inference ─────────────────────────────────────
+// Kokoro + Kitten run inside a Web Worker via `WorkerBackedEngine` (see
+// `src/engines/worker-bridge.ts` → `src/engines/inference-worker.ts`)
+// so inference doesn't block the page while a job is in progress. The
+// page stays interactive; the queue serializes requests on each worker.
 //
-// For now, inference runs on the main thread — generation will block
-// the page, but the queue still accepts new jobs (each blocks behind
-// the active one). The proper fix is a Vite `?worker` import that owns
-// the ONNX runtime + WASM lifecycle, which we'll add as a follow-up.
+// A earlier version tried `env.backends.onnx.wasm.proxy = true` and
+// hit "no available backend found" — Vite emits the ORT WASM with a
+// content hash and the proxy worker couldn't resolve the path. We do
+// not toggle `wasm.proxy`; rely on `WorkerBackedEngine` instead. The
+// `copy-ort-wasm` Vite plugin (vite.config.ts) keeps stable copies of
+// every ORT WASM flavor under `public/ort-wasm/` so any custom
+// locateFile / wasmPaths call still resolves.
 
 /**
  * Register Kokoro + both Kitten modelIds as WorkerBackedEngine instances.

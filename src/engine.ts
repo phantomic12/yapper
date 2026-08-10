@@ -170,8 +170,24 @@ export const MODELS: TTSModel[] = [
     defaultVoiceId: 'expr-voice-2-m',
   },
   // ── MMS-TTS — one model per language, q8 quantized. We only list
-  //    languages for which Xenova actually published a repo. Missing
-  //    languages (ita/jpn/zho/nld/pol) returned 401 on the HF API.
+  //    languages for which Xenova actually published an ONNX repo
+  //    (the `transformers.js` ecosystem depends on these mirrors;
+  //    raw `facebook/mms-tts-*` models are PyTorch-only).
+  //
+  //    Languages we deliberately omit:
+  //      • ita, jpn, zho — Xenova namespace returns 401, and
+  //        `facebook/mms-tts-{ita,jpn,zho}` are gated at the HF API
+  //        level (Meta has since restricted access to these cards).
+  //      • nld, pol — `facebook/mms-tts-{nld,pol}` are public
+  //        (gated=False, private=False) but ship only PyTorch weights;
+  //        no ONNX export exists upstream.
+  //
+  //    Re-adding any of these needs either an upstream ONNX export
+  //    or hosting a self-converted mirror in a sibling HF repo (e.g.
+  //    `phantomic12/mms-tts-XXX-onnx`). The HF link-health regression
+  //    test (`src/links.test.ts`) skips auth-failed URLs, so an
+  //    anonymous probe failure (401/403) won't break CI; a clean 200
+  //    is required to be added here.
   { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, voices: [], defaultVoiceId: '' },
