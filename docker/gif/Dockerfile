@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.9.2-base-ubuntu22.04
+FROM nvidia/cuda:13.3.1-base-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
