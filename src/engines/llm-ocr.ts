@@ -131,16 +131,27 @@ export class LlmOcrEngine {
       },
     };
 
-    // Load model and processor in parallel — they hit different files in
-    // the same HF repo so the browser can pipeline the requests.
-    const [model, processor] = await Promise.all([
-      Florence2ForConditionalGeneration.from_pretrained(MODEL_ID, opts) as unknown as Florence2Model,
-      AutoProcessor.from_pretrained(MODEL_ID) as unknown as Florence2Processor,
-    ]);
+    try {
+      // Load model and processor in parallel — they hit different files in
+      // the same HF repo so the browser can pipeline the requests.
+      const [model, processor] = await Promise.all([
+        Florence2ForConditionalGeneration.from_pretrained(MODEL_ID, opts) as unknown as Florence2Model,
+        AutoProcessor.from_pretrained(MODEL_ID) as unknown as Florence2Processor,
+      ]);
 
-    this.model = model;
-    this.processor = processor;
-    this._isLoaded = true;
+      this.model = model;
+      this.processor = processor;
+      this._isLoaded = true;
+    } catch (err) {
+      // Reset loading state so a retry can attempt to load again
+      this.loading = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to load Florence-2 model (~200MB download from Hugging Face). ` +
+        `Check your network connection and try again. Error: ${msg}`,
+        { cause: err },
+      );
+    }
   }
 
   /**

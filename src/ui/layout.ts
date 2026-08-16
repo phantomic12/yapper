@@ -149,7 +149,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </label>
             <label class="ocr-mode-option">
               <input type="radio" name="ocr-mode" value="llm" />
-              <span>Florence-2 LLM (smart, ~200MB download)</span>
+              <span>Florence-2 LLM (smart, ~200MB download)${!webgpuAvailable ? ' — slow on CPU' : ''}</span>
             </label>
           </div>
           <div class="document-progress-row" id="document-progress-row" hidden>

@@ -68,7 +68,7 @@ PDF extraction is capped at 500 pages by default (`MAX_PDF_PAGES`) to avoid tab 
 - [Transformers.js](https://huggingface.co/docs/transformers.js) — SpeechT5 + MMS-TTS in the browser
 - [ONNX Runtime Web](https://onnxruntime.ai) — WebGPU/WASM backend (Kitten; also used under Kokoro)
 - [kokoro-js](https://www.npmjs.com/package/kokoro-js) — Kokoro-82M integration
-- [pdfjs-dist](https://github.com/mozilla/pdf.js), [mammoth](https://github.com/mwilliamson/mammoth.js) / JSZip, [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
+- [pdfjs-dist](https://github.com/mozilla/pdf.js), [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
 - [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR (assets under `public/lib/tesseract/`)
 - [Vite](https://vitejs.dev) — build tooling
 - TypeScript, vanilla CSS — no framework overhead

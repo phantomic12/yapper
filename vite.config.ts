@@ -139,8 +139,7 @@ export default defineConfig({
           // TTS app loads instantly; they are only fetched when a user uploads.
           if (id.includes('node_modules/pdfjs-dist') ||
               id.includes('node_modules/jszip') ||
-              id.includes('node_modules/epubjs') ||
-              id.includes('node_modules/mammoth')) {
+              id.includes('node_modules/epubjs')) {
             return 'documents';
           }
           if (id.includes('node_modules/tesseract.js')) {

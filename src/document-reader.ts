@@ -245,14 +245,24 @@ async function ocrPageWithLlm(
 ): Promise<LayoutBlock[]> {
   const llmEngine = getLlmOcrEngine();
   options.onProgress?.(`OCR page ${pageNumber}: LLM analyzing…`);
-  const result = await llmEngine.recognize(canvas, {
-    onProgress: (p) => {
-      if (p.status === 'recognizing text') {
-        options.onProgress?.(`OCR page ${pageNumber}: LLM generating…`);
-      }
-    },
-    includeWords: true,
-  });
+  let result;
+  try {
+    result = await llmEngine.recognize(canvas, {
+      onProgress: (p) => {
+        if (p.status === 'recognizing text') {
+          options.onProgress?.(`OCR page ${pageNumber}: LLM generating…`);
+        }
+      },
+      includeWords: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `LLM OCR failed on page ${pageNumber}: ${msg}. ` +
+      `Try switching to Tesseract OCR mode.`,
+      { cause: err },
+    );
+  }
 
   const blocks: LayoutBlock[] = [];
   const llmWords: QuadWord[] = result.words ?? [];

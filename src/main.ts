@@ -17,6 +17,8 @@ import {
   bindDocumentEvents,
   updateDocumentSectionVisibility,
 } from './ui/document-panel';
+import { disposeAllOcrEngines } from './ocr';
+import { disposeLlmOcrEngine } from './engines/llm-ocr';
 
 // Custom engines (Kokoro + Kitten) behind WorkerBackedEngine — once, before render.
 registerEngines();
@@ -64,4 +66,11 @@ render().catch((err) => {
   root.innerHTML = `<p role="alert">Failed to start Yapper: ${
     err instanceof Error ? err.message : String(err)
   }</p>`;
+});
+
+// Clean up OCR engine workers when the page unloads to prevent memory leaks.
+// Tesseract creates a Web Worker; Florence-2 holds a large WASM/model in memory.
+window.addEventListener('beforeunload', () => {
+  void disposeAllOcrEngines();
+  disposeLlmOcrEngine();
 });
