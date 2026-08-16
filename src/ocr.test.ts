@@ -58,12 +58,23 @@ describe('OcrEngine', () => {
     expect(createWorker).toHaveBeenCalledTimes(1);
   });
 
-  it('recognize returns plain text from the worker', async () => {
+  it('recognize returns text from the worker', async () => {
     const { getOcrEngine } = await import('./ocr');
     const engine = getOcrEngine('eng');
-    const text = await engine.recognize(new Blob(['x']));
-    expect(text).toBe('hello from tesseract');
+    const result = await engine.recognize(new Blob(['x']));
+    expect(result.text).toBe('hello from tesseract');
+    expect(result.words).toBeUndefined();
     expect(recognize).toHaveBeenCalled();
+  });
+
+  it('recognize returns word boxes when includeWords is set', async () => {
+    const { getOcrEngine } = await import('./ocr');
+    const engine = getOcrEngine('eng');
+    const result = await engine.recognize(new Blob(['x']), { includeWords: true });
+    expect(result.text).toBe('hello from tesseract');
+    expect(result.words).toHaveLength(1);
+    expect(result.words![0].text).toBe('hello');
+    expect(result.words![0].bbox).toEqual({ x0: 1, y0: 2, x1: 3, y1: 4 });
   });
 
   it('getOcrEngine reuses one instance per language', async () => {

@@ -1356,6 +1356,33 @@ body {
 .switch input:checked + .switch__track { background: var(--accent); }
 .switch input:checked + .switch__track::after { transform: translateX(18px); }
 
+/* OCR mode selector */
+.ocr-mode-selector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.ocr-mode-label { font-weight: 600; color: var(--text-dim); }
+.ocr-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.ocr-mode-option input { margin: 0; }
+.ocr-mode-option input:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

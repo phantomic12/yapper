@@ -1,8 +1,9 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
-import Tesseract from 'tesseract.js';
-import { getMimeType, getFileExtension, MAX_PDF_PAGES } from './document-types';
-export { getMimeType, getFileExtension, MAX_PDF_PAGES } from './document-types';
+import { getOcrEngine } from './ocr';
+import { getLlmOcrEngine } from './engines/llm-ocr';
+import { getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox, stripRtfControlWords, parseCsv, type OcrMode, type BboxWord, type QuadWord } from './document-types';
+export { getMimeType, getFileExtension, MAX_PDF_PAGES, type OcrMode, type BboxWord, type QuadWord, quadToBbox, stripRtfControlWords, parseCsv } from './document-types';
 
 // PDF.js worker must be told where its worker script is. In Vite we copy the
 // worker to public/ and reference it relative to the served page so it works on
@@ -32,9 +33,16 @@ export interface LayoutBlock {
 }
 
 export interface ExtractOptions {
-  /** For PDFs only: render pages and run Tesseract.js OCR instead of normal text extraction. */
+  /** For PDFs only: render pages and run OCR instead of normal text extraction. */
   useOcr?: boolean;
-  /** Language passed to Tesseract. */
+  /**
+   * Which OCR backend to use when `useOcr` is true.
+   * - `tesseract` (default): Tesseract.js — fast, rule-based, ~4MB WASM.
+   * - `llm`: Florence-2 vision-language model — slower, ~200MB download,
+   *   but much better for complex layouts, varied fonts, and handwriting.
+   */
+  ocrMode?: OcrMode;
+  /** Language passed to Tesseract (ignored for LLM mode). */
   ocrLang?: string;
   /** Optional progress callback for large documents. */
   onProgress?: (message: string) => void;
@@ -66,15 +74,30 @@ export async function extractDocument(file: File, options: ExtractOptions = {}):
       return extractPdf(file, options);
     case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
       return { ...(await extractDocx(file)), mimeType: mime, name: file.name };
+    case 'application/msword':
+      return { ...(await extractDoc(file)), mimeType: mime, name: file.name };
     case 'application/vnd.oasis.opendocument.text':
       return { ...(await extractOdt(file)), mimeType: mime, name: file.name };
+    case 'application/rtf':
+      return { ...(await extractRtf(file)), mimeType: mime, name: file.name };
     case 'application/epub+zip':
       return { ...(await extractEpub(file)), mimeType: mime, name: file.name };
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+      return { ...(await extractXlsx(file)), mimeType: mime, name: file.name };
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+      return { ...(await extractPptx(file)), mimeType: mime, name: file.name };
+    case 'text/csv':
+      return { ...(await extractCsv(file)), mimeType: mime, name: file.name };
+    case 'text/html':
+      return { ...(await extractHtml(file)), mimeType: mime, name: file.name };
     case 'text/plain':
     case 'text/markdown':
       return { text: await readTextFile(file), mimeType: mime, name: file.name };
     default:
-      throw new Error(`Unsupported file type: ${file.type || ext}. Supported: PDF, DOCX, ODT, EPUB, TXT, MD.`);
+      throw new Error(
+        `Unsupported file type: ${file.type || ext}. ` +
+        `Supported: PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD.`,
+      );
   }
 }
 
@@ -164,17 +187,33 @@ async function ocrPage(page: pdfjs.PDFPageProxy, pageNumber: number, options: Ex
   if (!ctx) throw new Error('Cannot create canvas context');
   await page.render({ canvasContext: ctx, viewport, canvas }).promise;
 
-  const result = await Tesseract.recognize(canvas, options.ocrLang ?? 'eng', {
-    logger: (m) => {
-      if (m.status === 'recognizing text') options.onProgress?.(`OCR page ${pageNumber}: ${Math.round(m.progress * 100)}%`);
+  const mode: OcrMode = options.ocrMode ?? 'tesseract';
+  if (mode === 'llm') {
+    return ocrPageWithLlm(canvas, pageNumber, scale, options);
+  }
+  return ocrPageWithTesseract(canvas, pageNumber, scale, options);
+}
+
+/** Tesseract.js OCR path — fast, rule-based, self-hosted WASM. */
+async function ocrPageWithTesseract(
+  canvas: HTMLCanvasElement,
+  pageNumber: number,
+  scale: number,
+  options: ExtractOptions,
+): Promise<LayoutBlock[]> {
+  const ocrEngine = getOcrEngine(options.ocrLang ?? 'eng');
+  const result = await ocrEngine.recognize(canvas, {
+    onProgress: (p) => {
+      if (p.status === 'recognizing text') {
+        options.onProgress?.(`OCR page ${pageNumber}: ${Math.round(p.progress * 100)}%`);
+      }
     },
+    includeWords: true,
   });
 
-  const resultData = (result as TesseractResult).data;
   const blocks: LayoutBlock[] = [];
-  const words: TesseractWord[] = resultData.words ?? [];
+  const words: BboxWord[] = result.words ?? [];
   if (words.length) {
-    // Group words into rough horizontal lines, then collapse near lines into blocks.
     const lineThreshold = (canvas.height * 0.025);
     const lines = groupWordsIntoLines(words, lineThreshold);
     for (const line of lines) {
@@ -193,33 +232,80 @@ async function ocrPage(page: pdfjs.PDFPageProxy, pageNumber: number, options: Ex
   return blocks;
 }
 
-// Tesseract's Word type — the public API exposes a richer type but we only
-// use the bbox + text. Narrowing here keeps the grouping logic readable.
-interface TesseractWord {
-  text: string;
-  bbox: { x0: number; y0: number; x1: number; y1: number };
-  confidence?: number;
+/**
+ * Florence-2 LLM OCR path — slower but much better for complex layouts,
+ * varied fonts, and handwriting. Converts the model's quad-box output to
+ * the same LayoutBlock format as the Tesseract path.
+ */
+async function ocrPageWithLlm(
+  canvas: HTMLCanvasElement,
+  pageNumber: number,
+  scale: number,
+  options: ExtractOptions,
+): Promise<LayoutBlock[]> {
+  const llmEngine = getLlmOcrEngine();
+  options.onProgress?.(`OCR page ${pageNumber}: LLM analyzing…`);
+  const result = await llmEngine.recognize(canvas, {
+    onProgress: (p) => {
+      if (p.status === 'recognizing text') {
+        options.onProgress?.(`OCR page ${pageNumber}: LLM generating…`);
+      }
+    },
+    includeWords: true,
+  });
+
+  const blocks: LayoutBlock[] = [];
+  const llmWords: QuadWord[] = result.words ?? [];
+  if (llmWords.length) {
+    // Convert Florence-2 quad-boxes to axis-aligned bboxes so we can reuse
+    // the same line-grouping logic as the Tesseract path.
+    const words: BboxWord[] = llmWords.map(w => quadToBbox(w));
+    const lineThreshold = (canvas.height * 0.025);
+    const lines = groupWordsIntoLines(words, lineThreshold);
+    for (const line of lines) {
+      const text = line.words.map(w => w.text).join(' ');
+      if (!text.trim()) continue;
+      blocks.push({
+        page: pageNumber,
+        text,
+        x: line.x / scale,
+        y: line.y / scale,
+        width: line.width / scale,
+        height: line.height / scale,
+      });
+    }
+  }
+  // If the LLM returned text but no word boxes (e.g., <OCR> without regions),
+  // fall back to the full text as a single block.
+  if (blocks.length === 0 && result.text.trim()) {
+    blocks.push({
+      page: pageNumber,
+      text: result.text.trim(),
+      x: 0,
+      y: 0,
+      width: canvas.width / scale,
+      height: canvas.height / scale,
+    });
+  }
+  return blocks;
 }
-interface TesseractPage {
-  words?: TesseractWord[];
-}
-interface TesseractResult {
-  data: TesseractPage;
-}
+
+// quadToBbox is imported from ./document-types (pure helper, testable
+// without pulling in pdfjs or transformers).
 
 interface LineGroup {
   y: number;
   x: number;
   width: number;
   height: number;
-  words: TesseractWord[];
+  words: BboxWord[];
 }
 
-function groupWordsIntoLines(words: TesseractWord[], yThreshold: number): LineGroup[] {
+function groupWordsIntoLines(words: BboxWord[], yThreshold: number): LineGroup[] {
   const sorted = [...words].sort((a, b) => {
-    const ay = Math.min(a.bbox.y0, b.bbox.y0);
-    const by = Math.min(a.bbox.y0, b.bbox.y0);
-    if (Math.abs(ay - by) > yThreshold) return a.bbox.y0 - b.bbox.y0;
+    const ay = a.bbox.y0;
+    const by = b.bbox.y0;
+    if (Math.abs(ay - by) > yThreshold) return ay - by;
     return a.bbox.x0 - b.bbox.x0;
   });
 
@@ -257,6 +343,10 @@ function groupWordsIntoLines(words: TesseractWord[], yThreshold: number): LineGr
 // ─── DOCX extraction ──────────────────────────────────────────────
 
 async function extractDocx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  // We use manual XML parsing instead of mammoth because mammoth's internal
+  // xmldom wrapper calls DOMParser.parseFromString() without a mimeType,
+  // which fails in modern browsers. Manual parsing of w:t runs covers the
+  // vast majority of DOCX text content (paragraphs, tables, lists).
   const JSZip = (await import('jszip')).default;
   const zip = await JSZip.loadAsync(await readArrayBuffer(file));
   const xmlText = await zip.file('word/document.xml')?.async('text');
@@ -272,6 +362,227 @@ async function extractDocx(file: File): Promise<Omit<ExtractedDocument, 'mimeTyp
     if (line.trim()) out.push(line);
   }
   return { text: out.join('\n\n') };
+}
+
+// ─── DOC (legacy Word binary) extraction ──────────────────────────
+// The .doc format is a complex binary OLE container. Full parsing would
+// require a dedicated library (e.g. antiword or libreoffice). We do a
+// best-effort extraction: strip non-printable bytes and OLE overhead,
+// then clean up the result. This works for simple documents but may
+// produce noise for complex ones. Mammoth does not support .doc.
+
+async function extractDoc(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const arrayBuffer = await readArrayBuffer(file);
+  const bytes = new Uint8Array(arrayBuffer);
+  // Extract printable ASCII + common UTF-8 sequences from the binary.
+  // The WordDocument stream contains text as either Latin-1 or UTF-16LE.
+  // We try UTF-16LE first (most common in modern .doc files), then fall
+  // back to Latin-1.
+  const text = extractTextFromDocBinary(bytes);
+  if (!text.trim()) {
+    throw new Error(
+      'Could not extract text from .doc file. ' +
+      'Try converting it to .docx or .pdf for better results.',
+    );
+  }
+  return { text: text.trim() };
+}
+
+function extractTextFromDocBinary(bytes: Uint8Array): string {
+  // Try UTF-16LE decoding first — .doc files typically store text this way.
+  // We look for runs of valid UTF-16LE characters (printable ASCII range
+  // in the low byte, zero in the high byte).
+  const parts: string[] = [];
+  let i = 0;
+  let current: number[] = [];
+
+  while (i < bytes.length - 1) {
+    const lo = bytes[i];
+    const hi = bytes[i + 1];
+    // Printable ASCII or common Latin-1 in UTF-16LE
+    if (hi === 0 && lo >= 0x20 && lo <= 0x7e) {
+      current.push(lo);
+      i += 2;
+    } else if (hi === 0 && lo === 0x0a) {
+      // Newline
+      if (current.length) {
+        parts.push(String.fromCharCode(...current));
+        current = [];
+      }
+      i += 2;
+    } else if (hi === 0 && lo >= 0xa0 && lo <= 0xff) {
+      // Latin-1 supplement
+      current.push(lo);
+      i += 2;
+    } else {
+      // Non-text byte — flush current run
+      if (current.length >= 3) {
+        parts.push(String.fromCharCode(...current));
+      }
+      current = [];
+      i += 1;
+    }
+  }
+  if (current.length >= 3) {
+    parts.push(String.fromCharCode(...current));
+  }
+
+  return parts
+    .map(p => p.trim())
+    .filter(p => p.length > 0)
+    .join('\n');
+}
+
+// ─── RTF extraction ───────────────────────────────────────────────
+// RTF is a plain-text format with control words. We strip control words
+// and extract the text content. This handles the common cases (fonts,
+// colors, paragraphs) without needing a full RTF parser.
+
+async function extractRtf(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const rtf = await readTextFile(file);
+  const text = stripRtfControlWords(rtf);
+  if (!text.trim()) {
+    throw new Error('Could not extract text from RTF file (file may be empty or corrupted).');
+  }
+  return { text: text.trim() };
+}
+
+// ─── HTML extraction ──────────────────────────────────────────────
+
+async function extractHtml(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const html = await readTextFile(file);
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  // Remove script and style content
+  doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+  const text = doc.body?.textContent ?? '';
+  const cleaned = collapseWhitespace(text);
+  if (!cleaned) {
+    throw new Error('Could not extract text from HTML file (no body content).');
+  }
+  return { text: cleaned };
+}
+
+// ─── CSV extraction ───────────────────────────────────────────────
+// CSV is plain text — we read it and format rows as lines, preserving
+// the tabular structure for TTS readability.
+
+async function extractCsv(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const csv = await readTextFile(file);
+  if (!csv.trim()) {
+    throw new Error('CSV file is empty.');
+  }
+  const rows = parseCsv(csv);
+  const lines = rows.map(row => row.join(', '));
+  return { text: lines.join('\n') };
+}
+
+// ─── XLSX extraction ──────────────────────────────────────────────
+// XLSX is a ZIP with XML sheets. We use JSZip (already a dependency) to
+// read xl/worksheets/sheet*.xml and extract cell values from the shared
+// strings table (xl/sharedStrings.xml).
+
+async function extractXlsx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
+
+  // Load shared strings table (maps string IDs to text)
+  const sharedStringsXml = await zip.file('xl/sharedStrings.xml')?.async('text');
+  const sharedStrings: string[] = [];
+  if (sharedStringsXml) {
+    const parser = new DOMParser();
+    const ssDoc = parser.parseFromString(sharedStringsXml, 'application/xml');
+    const siNodes = ssDoc.getElementsByTagName('si');
+    for (const si of Array.from(siNodes)) {
+      // Each <si> contains one or more <t> (text runs)
+      const tNodes = si.getElementsByTagName('t');
+      const text = Array.from(tNodes).map(t => t.textContent ?? '').join('');
+      sharedStrings.push(text);
+    }
+  }
+
+  // Find and parse all worksheets
+  const sheetFiles = Object.keys(zip.files).filter(path => /^xl\/worksheets\/sheet\d+\.xml$/.test(path));
+  if (sheetFiles.length === 0) throw new Error('Invalid XLSX: no worksheets found');
+
+  const parser = new DOMParser();
+  const parts: string[] = [];
+
+  for (const sheetPath of sheetFiles.sort()) {
+    const sheetXml = await zip.file(sheetPath)?.async('text');
+    if (!sheetXml) continue;
+    const sheetDoc = parser.parseFromString(sheetXml, 'application/xml');
+    const rows = sheetDoc.getElementsByTagName('row');
+    for (const row of Array.from(rows)) {
+      const cells = row.getElementsByTagName('c');
+      const cellTexts: string[] = [];
+      for (const cell of Array.from(cells)) {
+        const type = cell.getAttribute('t');
+        const valueNode = cell.getElementsByTagName('v')[0];
+        const value = valueNode?.textContent ?? '';
+        if (type === 's') {
+          // Shared string reference
+          const idx = parseInt(value, 10);
+          cellTexts.push(sharedStrings[idx] ?? '');
+        } else if (type === 'inlineStr') {
+          // Inline string
+          const tNode = cell.getElementsByTagName('t')[0];
+          cellTexts.push(tNode?.textContent ?? '');
+        } else {
+          // Number or other
+          cellTexts.push(value);
+        }
+      }
+      if (cellTexts.some(t => t.trim())) {
+        parts.push(cellTexts.join(', '));
+      }
+    }
+    // Add a blank line between sheets
+    if (parts.length) parts.push('');
+  }
+
+  const text = parts.join('\n').trim();
+  if (!text) throw new Error('XLSX file contains no text data.');
+  return { text };
+}
+
+// ─── PPTX extraction ──────────────────────────────────────────────
+// PPTX is a ZIP with XML slides. We extract text from the <a:t> elements
+// in each slide's XML (ppt/slides/slide*.xml).
+
+async function extractPptx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
+
+  const slideFiles = Object.keys(zip.files).filter(path => /^ppt\/slides\/slide\d+\.xml$/.test(path));
+  if (slideFiles.length === 0) throw new Error('Invalid PPTX: no slides found');
+
+  const parser = new DOMParser();
+  const parts: string[] = [];
+
+  // Sort slides by number (slide1.xml, slide2.xml, ... slide10.xml)
+  slideFiles.sort((a, b) => {
+    const numA = parseInt(a.match(/slide(\d+)\.xml/)?.[1] ?? '0', 10);
+    const numB = parseInt(b.match(/slide(\d+)\.xml/)?.[1] ?? '0', 10);
+    return numA - numB;
+  });
+
+  for (const slidePath of slideFiles) {
+    const slideXml = await zip.file(slidePath)?.async('text');
+    if (!slideXml) continue;
+    const slideDoc = parser.parseFromString(slideXml, 'application/xml');
+    // Text in PPTX slides is in <a:t> elements (DrawingML run text)
+    const textNodes = slideDoc.getElementsByTagName('a:t');
+    const texts = Array.from(textNodes).map(t => t.textContent ?? '');
+    const slideText = texts.join(' ').trim();
+    if (slideText) {
+      parts.push(slideText);
+    }
+  }
+
+  const text = parts.join('\n\n').trim();
+  if (!text) throw new Error('PPTX file contains no text data.');
+  return { text };
 }
 
 // ─── ODT extraction ──────────────────────────────────────────────

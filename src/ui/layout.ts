@@ -99,19 +99,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Status -->
       <div id="status-container"></div>
 
-      <!-- Document Upload (PDF / text / image → OCR → chunks → TTS) -->
-      <div class="section-label">Or read a document</div>
-      <div class="doc-section" id="doc-section">
-        <label class="doc-drop" id="doc-drop" for="doc-file">
-          <input type="file" id="doc-file" accept=".pdf,.txt,.md,.markdown,application/pdf,text/*,image/png,image/jpeg,image/jpg,image/webp" hidden />
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <div class="doc-drop__title">Drop a PDF, text file, or image</div>
-          <div class="doc-drop__hint">or click to browse — .pdf, .txt, .md, .png, .jpg, .webp</div>
-        </label>
-        <div class="doc-status" id="doc-status"></div>
-        <div class="doc-result" id="doc-result"></div>
-      </div>
-
       <!-- Text Input -->
       <label class="section-label" for="text-input">Text to speak</label>
       <div class="textarea-wrapper">
@@ -134,14 +121,14 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             type="file"
             id="document-upload"
             class="visually-hidden"
-            accept=".pdf,.docx,.odt,.epub,.txt,.md,.markdown"
+            accept=".pdf,.docx,.doc,.odt,.rtf,.epub,.xlsx,.pptx,.csv,.html,.htm,.txt,.md,.markdown"
             aria-describedby="document-formats"
           />
           <label for="document-upload" class="document-drop__label">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Drop a document here or click to upload</span>
           </label>
-          <p class="document-formats" id="document-formats">PDF, DOCX, ODT, EPUB, TXT, MD. Max 25 MB.</p>
+          <p class="document-formats" id="document-formats">PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD. Max 25 MB.</p>
         </div>
 
         <div class="document-need-model" id="document-need-model">
@@ -154,6 +141,17 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <span class="switch__track"></span>
             <span class="switch__label">Use OCR for PDFs (experimental, slower)</span>
           </label>
+          <div class="ocr-mode-selector" id="ocr-mode-selector" style="display:none">
+            <span class="ocr-mode-label">OCR engine:</span>
+            <label class="ocr-mode-option">
+              <input type="radio" name="ocr-mode" value="tesseract" checked />
+              <span>Tesseract (fast, ~4MB)</span>
+            </label>
+            <label class="ocr-mode-option">
+              <input type="radio" name="ocr-mode" value="llm" />
+              <span>Florence-2 LLM (smart, ~200MB download)</span>
+            </label>
+          </div>
           <div class="document-progress-row" id="document-progress-row" hidden>
             <div class="document-progress-bar"><div class="document-progress-bar__fill" id="document-progress-fill"></div></div>
             <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
@@ -180,7 +178,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
         </details>
       </section>
-    </div>
 
       <div class="generate-row">
         <button class="generate-btn" id="generate-btn" disabled>

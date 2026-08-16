@@ -23,6 +23,7 @@ export function bindDocumentEvents(state: AppState): void {
   const drop = document.getElementById('document-drop') as HTMLElement;
   const input = document.getElementById('document-upload') as HTMLInputElement;
   const ocrToggle = document.getElementById('ocr-toggle') as HTMLInputElement;
+  const ocrModeSelector = document.getElementById('ocr-mode-selector') as HTMLElement;
   const documentProgress = document.getElementById('document-progress') as HTMLElement;
   const options = document.getElementById('document-options') as HTMLElement;
   const preview = document.getElementById('document-preview') as HTMLElement;
@@ -134,7 +135,7 @@ export function bindDocumentEvents(state: AppState): void {
     }
     setProgress('Extracting text…');
     const useOcr = ocrToggle.checked && file.name.toLowerCase().endsWith('.pdf');
-    extractDocument(file, { useOcr, onProgress: setProgress })
+    extractDocument(file, { useOcr, ocrMode: state.ocrMode, onProgress: setProgress })
       .then(doc => {
         state.extractedDocument = doc;
         renderReaderView(doc.text);
@@ -177,6 +178,18 @@ export function bindDocumentEvents(state: AppState): void {
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (file) handleFile(file);
+  });
+
+  // Show/hide the OCR mode selector when the OCR toggle changes.
+  ocrToggle.addEventListener('change', () => {
+    ocrModeSelector.style.display = ocrToggle.checked ? '' : 'none';
+  });
+
+  // Wire up OCR mode radio buttons.
+  ocrModeSelector.querySelectorAll<HTMLInputElement>('input[name="ocr-mode"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      state.ocrMode = radio.value as 'tesseract' | 'llm';
+    });
   });
 
   let lastHighlightedWord: { sentence: number; word: number } | null = null;

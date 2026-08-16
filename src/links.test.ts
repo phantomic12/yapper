@@ -52,9 +52,9 @@ describe('MODELS registry link health', () => {
     }
   });
 
-  it.skipIf(!networkAvailable)('every model in the registry has a live HF endpoint', async () => {
+  it('every model in the registry has a live HF endpoint', async () => {
     if (!networkAvailable) {
-      // unreachable: it.skipIf already handled this
+      console.warn(`[links] skipped: no network (${skipReason})`);
       return;
     }
     if (skipReason) {

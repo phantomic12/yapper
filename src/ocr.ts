@@ -21,10 +21,26 @@ export interface OcrProgress {
   progress: number;
 }
 
+/** Word-level bounding box from Tesseract. */
+export interface OcrWord {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+  confidence?: number;
+}
+
+export interface OcrResult {
+  /** Full recognized text. */
+  text: string;
+  /** Word-level boxes when `includeWords` was requested. */
+  words?: OcrWord[];
+}
+
 export interface OcrOptions {
   language?: string; // default 'eng'
   /** Receives progress updates during recognition. */
   onProgress?: (p: OcrProgress) => void;
+  /** When true, include word-level bounding boxes in the result. */
+  includeWords?: boolean;
 }
 
 /**
@@ -61,17 +77,22 @@ export class OcrEngine {
     this.worker = w;
   }
 
-  /** Recognize text in an image. Returns plain text (Tesseract's default). */
-  async recognize(image: Blob | HTMLCanvasElement | HTMLImageElement, options: OcrOptions = {}): Promise<string> {
+  /** Recognize text in an image. Returns text and optionally word-level boxes. */
+  async recognize(image: Blob | HTMLCanvasElement | HTMLImageElement, options: OcrOptions = {}): Promise<OcrResult> {
     await this.load();
     if (!this.worker) throw new Error('OCR worker failed to initialize');
-    // Forward progress. tesseract.js v5 has no progress callback on recognize,
+    // Forward progress. tesseract.js v7 has no per-recognize progress callback,
     // so we emit a single synthetic event for consistency with the docs router.
     options.onProgress?.({ status: 'recognizing text', progress: 0 });
     try {
       const { data } = await this.worker.recognize(image);
       options.onProgress?.({ status: 'done', progress: 1 });
-      return data.text;
+      // tesseract.js v7's Page type declares `blocks` but the runtime object
+      // also includes a flat `words` array (not in the .d.ts). Cast to access it.
+      const words = options.includeWords
+        ? (data as unknown as { words?: OcrWord[] }).words
+        : undefined;
+      return { text: data.text, words };
     } catch (err) {
       options.onProgress?.({ status: 'error', progress: 0 });
       throw err;

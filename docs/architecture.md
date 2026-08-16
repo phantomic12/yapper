@@ -31,8 +31,11 @@ Yapper is a browser-only TTS SPA. Vite builds a static `dist/` for GitHub Pages;
 
 - Ingestion: `document-reader.ts` (`extractDocument`).
 - Playback UX: `reader.ts` (`DocumentReaderSession`, `prepareReaderData`).
-- Types/helpers without heavy deps: `document-types.ts`.
-- Alternate / WIP path: `docs.ts` + `ocr.ts` (self-hosted Tesseract paths under `public/lib/tesseract/`) — not wired from `main.ts` today.
+- Types/helpers without heavy deps: `document-types.ts` (includes `OcrMode`, `quadToBbox`, `stripRtfControlWords`, `parseCsv`).
+- Supported formats: PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD.
+- OCR (Tesseract): `ocr.ts` (`OcrEngine`, self-hosted Tesseract paths under `public/lib/tesseract/`) — fast, rule-based, ~4MB WASM. Good for clean printed text.
+- OCR (LLM): `engines/llm-ocr.ts` (`LlmOcrEngine`, Florence-2 via Transformers.js) — slower, ~200MB download, but much better for complex layouts, varied fonts, and handwriting. Uses `<OCR_WITH_REGION>` task for word-level bounding polygons.
+- OCR mode is selected per-document via the UI (`ocrMode` in `AppState`); `document-reader.ts` dispatches to the appropriate engine in `ocrPage()`.
 
 **Events**
 

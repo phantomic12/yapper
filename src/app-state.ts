@@ -1,6 +1,7 @@
 import type { ExtractedDocument } from './document-reader';
 import type { DocumentReaderSession } from './reader';
 import { MODELS, type TTSEngine, type TTSModel, type GenerationJob } from './engine';
+import type { OcrMode } from './document-types';
 
 /** Mutable UI + engine session state shared across main and UI modules. */
 export interface AppState {
@@ -14,6 +15,8 @@ export interface AppState {
   currentJobs: GenerationJob[];
   extractedDocument: ExtractedDocument | null;
   readerSession: DocumentReaderSession | null;
+  /** OCR backend for scanned PDFs: 'tesseract' (default) or 'llm' (Florence-2). */
+  ocrMode: OcrMode;
 }
 
 export function createAppState(): AppState {
@@ -28,5 +31,6 @@ export function createAppState(): AppState {
     currentJobs: [],
     extractedDocument: null,
     readerSession: null,
+    ocrMode: 'tesseract',
   };
 }
