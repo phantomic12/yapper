@@ -202,10 +202,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
 
       <footer class="footer">
         <p class="footer__text">
-          Models loaded from <a href="https://huggingface.co" target="_blank" rel="noopener">Hugging Face</a> •
-          Powered by <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noopener">Transformers.js</a> +
-          <a href="https://onnxruntime.ai" target="_blank" rel="noopener">ONNX Runtime</a> •
-          <a href="https://github.com/phantomic12/yapper" target="_blank" rel="noopener">Source</a>
+          Models loaded from <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer">Hugging Face</a> •
+          Powered by <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noopener noreferrer">Transformers.js</a> +
+          <a href="https://onnxruntime.ai" target="_blank" rel="noopener noreferrer">ONNX Runtime</a> •
+          <a href="https://github.com/phantomic12/yapper" target="_blank" rel="noopener noreferrer">Source</a>
         </p>
       </footer>
     </div>

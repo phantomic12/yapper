@@ -8,7 +8,7 @@
 
 1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally).
 2. Pick a model:
-   - **Kokoro-82M (q8f16)** — best quality, 6 selectable English voices in the UI, ~86 MB
+   - **Kokoro-82M (q8f16)** — best quality, 28 selectable English voices (US + British, male + female), ~86 MB
    - **Kokoro-82M (fp16)** — same voices, higher fidelity, ~163 MB
    - **Kitten TTS Mini** — balanced quality, 8 voices, ~78 MB
    - **Kitten TTS Nano** — fastest / smallest, 8 voices, ~24 MB
@@ -16,7 +16,7 @@
    - **MMS-TTS** — ~50 MB each, 9 languages (see Features)
 3. Click **Download & Load Model** (one-time per model; cached after).
 4. Type or paste text, adjust speed, hit **Add to queue** (or `Ctrl`/`Cmd`+Enter).
-5. Drop a PDF, DOCX, ODT, EPUB, TXT, or Markdown file into the document reader to listen hands-free. For scanned PDFs, enable the OCR toggle.
+5. Drop a PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, or Markdown file into the document reader to listen hands-free. For scanned PDFs, enable the OCR toggle (Tesseract or Florence-2 LLM).
 
 > A live demo (pick a model → load → queue a sample → audio plays):
 >

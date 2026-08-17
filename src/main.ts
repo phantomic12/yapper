@@ -68,6 +68,13 @@ render().catch((err) => {
   }</p>`;
 });
 
+// Catch unhandled promise rejections from anywhere in the app (worker errors,
+// model download failures, etc.) so they don't silently disappear.
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[yapper] Unhandled promise rejection:', event.reason);
+  event.preventDefault();
+});
+
 // Clean up OCR engine workers when the page unloads to prevent memory leaks.
 // Tesseract creates a Web Worker; Florence-2 holds a large WASM/model in memory.
 window.addEventListener('beforeunload', () => {
