@@ -56,7 +56,7 @@ Active path: `src/document-reader.ts` → `src/reader.ts` (`DocumentReaderSessio
 |--------|---------|-------|
 | PDF    | text + optional OCR | Text layer first; enable **Use OCR for scanned PDFs** for layout/OCR blocks |
 | DOCX   | text | `word/document.xml` via JSZip |
-| DOC    | text | Legacy Word format via mammoth-style extraction |
+| DOC    | text | Legacy Word format via binary text extraction (UTF-16LE/Latin-1 scan) |
 | ODT    | text | Zipped ODF text extraction |
 | RTF    | text | RTF control-word stripping to plain text |
 | EPUB   | text | HTML spine text extraction |
