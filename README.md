@@ -34,7 +34,7 @@
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
 - **Models**
-  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) — shared HF repo, different `modelFile` / dtype; 6 voices exposed in the picker
+  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) — shared HF repo, different `modelFile` / dtype; 28 voices exposed in the picker
   - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, ONNX Runtime Web
   - **SpeechT5** (~330 MB, fp32) — multi-voice via 512-dim xvector speaker embeddings
   - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
@@ -56,8 +56,14 @@ Active path: `src/document-reader.ts` → `src/reader.ts` (`DocumentReaderSessio
 |--------|---------|-------|
 | PDF    | text + optional OCR | Text layer first; enable **Use OCR for scanned PDFs** for layout/OCR blocks |
 | DOCX   | text | `word/document.xml` via JSZip |
+| DOC    | text | Legacy Word format via binary text extraction (UTF-16LE/Latin-1 scan) |
 | ODT    | text | Zipped ODF text extraction |
+| RTF    | text | RTF control-word stripping to plain text |
 | EPUB   | text | HTML spine text extraction |
+| XLSX   | text | Spreadsheet cell text via JSZip |
+| PPTX   | text | Presentation slide text via JSZip |
+| CSV    | text | Comma-separated values parsed to rows |
+| HTML   | text | HTML tag-stripped body text |
 | TXT    | text | Plain UTF-8 |
 | MD     | text | Read as text (markup left for the reader to handle lightly) |
 
@@ -131,7 +137,7 @@ npm run build
 3. Review extracted text in the reader view.
 4. **Read document** queues chunks through the loaded model; the active sentence is highlighted as audio plays.
 
-Unsupported types error clearly: PDF, DOCX, ODT, EPUB, TXT, MD only on the active path.
+Unsupported types error clearly: PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD only on the active path.
 
 ## License
 
