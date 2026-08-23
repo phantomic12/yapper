@@ -3,8 +3,20 @@ name: GPU smoke test (Kaggle)
 # Runs the yapper GPU smoke test on Kaggle's free GPU tier.
 # This is the test path that requires a real GPU with display
 # passthrough — GitHub-hosted runners don't have that, so we use
-# Kaggle's GPU kernels via the Frederisk/kaggle-action marketplace
-# action.
+# Kaggle's GPU kernels via the `kaggle` CLI.
+#
+# Why not Frederisk/kaggle-action anymore: that action could not
+# surface the real kernel failure (its log parser crashed with
+# "Conversion from JSON failed" on the kernel's NDJSON output), and
+# the scripts it drove relied on Docker-in-Docker, which Kaggle
+# kernels do not support. This workflow drives the same kernel
+# directly via the official `kaggle` CLI so any kernel failure is
+# reported verbatim from the Kaggle API.
+#
+# The kernel script (.github/scripts/gpu_smoke_kaggle.py) installs
+# Chromium + Xvfb + Mesa Vulkan directly in the kernel environment
+# and runs docker/gif/gpu_smoke_test.py in-process — no Docker
+# daemon required.
 #
 # Triggered:
 #   - manual (workflow_dispatch)
@@ -13,7 +25,8 @@ name: GPU smoke test (Kaggle)
 #
 # Required secrets:
 #   - KAGGLE_API_TOKEN: a kaggle API token (Settings → API → Create
-#     New Token). Add it at
+#     New Token). The raw JSON file contents ({ "username": ...,
+#     "key": ... }) pasted as the secret value. Add it at
 #     https://github.com/phantomic12/yapper/settings/secrets/actions
 
 on:
@@ -25,28 +38,133 @@ on:
   release:
     types: [published]
 
+concurrency:
+  group: gpu-smoke
+  cancel-in-progress: false
+
 jobs:
   gpu-smoke:
     name: GPU smoke test on Kaggle
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run GPU smoke test on Kaggle
-        uses: Frederisk/kaggle-action@v2
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
-          api_token: ${{ secrets.KAGGLE_API_TOKEN }}
-          # Kernel title becomes the slug. No spaces, no underscores.
-          title: YapperGpuSmoke
-          code_file: .github/scripts/gpu_smoke_kaggle.py
-          enable_gpu: enable
-          enable_internet: enable
-          # T4 (default) is enough for the yapper GPU test. P100
-          # would be faster but T4 is the free tier default and
-          # the test only runs for ~5 min total.
-          machine_shape: ''
-          # The Kaggle kernel polls for status every 30s and the
-          # GPU test can take up to 20 min (download + load + test).
-          # Default fetch_time is 3s; we don't override.
+          python-version: '3.14'
+
+      - name: Install kaggle CLI
+        run: pip install --quiet kaggle
+
+      - name: Configure kaggle credentials
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+        run: |
+          mkdir -p ~/.kaggle
+          python - "$KAGGLE_API_TOKEN" <<'EOF'
+          import json, pathlib, sys
+          token = sys.argv[1]
+          if not token:
+              raise SystemExit("KAGGLE_API_TOKEN secret is empty or not set")
+          try:
+              parsed = json.loads(token)
+          except json.JSONDecodeError:
+              raise SystemExit(
+                  "KAGGLE_API_TOKEN must be the raw JSON contents of the "
+                  "kaggle.json token file ({'username': ..., 'key': ...}). "
+                  "Get it at kaggle.com → Settings → API → Create New Token."
+              )
+          token_path = pathlib.Path.home().joinpath('.kaggle', 'kaggle.json')
+          token_path.write_text(json.dumps(parsed, indent=2))
+          token_path.chmod(0o600)
+          EOF
+
+      # Driver for the kernel push + status polling. The kernel slug is
+      # derived from the title exactly like the CLI does (title → slug),
+      # so we keep the title stable and hard-code the computed slug.
+      - name: Push kernel to Kaggle
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+        run: |
+          KERNEL_DIR="$RUNNER_TEMP/yapper-kaggle-kernel"
+          mkdir -p "$KERNEL_DIR"
+          cp .github/scripts/gpu_smoke_kaggle.py "$KERNEL_DIR/main.py"
+          cat > "$KERNEL_DIR/kernel-metadata.json" <<JSON
+          {
+            "id": "phantomic/yappergpusmoke",
+            "title": "YapperGpuSmoke",
+            "code_file": "main.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": true,
+            "enable_gpu": true,
+            "enable_internet": true,
+            "competition_sources": [],
+            "dataset_sources": [],
+            "kernel_sources": []
+          }
+          JSON
+          kaggle kernels push -p "$KERNEL_DIR"
+
+      - name: Poll kernel status and fetch output
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+        run: |
+          SLUG="phantomic/yappergpusmoke"
+          for i in $(seq 1 60); do
+            STATUS=$(kaggle kernels status "$SLUG" 2>&1)
+            echo "poll $i: $STATUS"
+            case "$STATUS" in
+              *complete*) break ;;
+              *error*|*canceled*|*"not found"*)
+                echo "::error::Kernel failed: $STATUS"
+                if ! kaggle kernels output "$SLUG" -p "$RUNNER_TEMP/kernel-output" 2>/dev/null; then
+                  echo "  (no output artifacts available)"
+                fi
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          # Fetch the report + screenshots from the completed kernel
+          mkdir -p "$RUNNER_TEMP/kernel-output"
+          kaggle kernels output "$SLUG" -p "$RUNNER_TEMP/kernel-output"
+          ls -la "$RUNNER_TEMP/kernel-output"
+
+      - name: Verify GPU smoke report
+        run: |
+          REPORT="$RUNNER_TEMP/kernel-output/gpu-smoke-report.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::gpu-smoke-report.json not found in kernel output"
+            ls -la "$RUNNER_TEMP/kernel-output" || true
+            exit 1
+          fi
+          python - "$REPORT" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          webgpu = report.get("webgpu", {})
+          model_load = report.get("modelLoad", {})
+          gen = report.get("generate", {})
+          print(f"WebGPU:    available={webgpu.get('available')}  vendor={webgpu.get('vendor')!r}")
+          print(f"Model load: {model_load.get('loaded')} in {model_load.get('secondsTotal', '?')}s")
+          print(f"Generate:  {gen.get('done')} in {gen.get('secondsTotal', '?')}s")
+          failed = (
+              not webgpu.get("available")
+              or not model_load.get("loaded")
+              or gen.get("done") is False
+          )
+          if failed:
+              raise SystemExit("GPU smoke test FAILED — see report for details")
+          print("GPU smoke test PASSED")
+          EOF
+
+      - name: Upload kernel output artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kaggle-gpu-smoke-output
+          path: ${{ runner.temp }}/kernel-output/
+          if-no-files-found: ignore
