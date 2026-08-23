@@ -148,7 +148,7 @@ jobs:
             sleep "$POLL_INTERVAL_SECONDS"
           done
           if [ -z "$ok" ]; then
-            echo "::error::Kernel did not reach complete within $((POLL_ATTEMPTS * POLL_INTERVAL_SECONDS / 60)) min — see polls above."
+            echo "::error::GPU smoke kernel did not complete — see polls and the fetched yappergpusmoke.log for the actual error."
             exit 1
           fi
 

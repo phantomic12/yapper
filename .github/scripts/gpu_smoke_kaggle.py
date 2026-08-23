@@ -72,6 +72,23 @@ def run(cmd, **kwargs):
                           **{'timeout': 600, **kwargs})
 
 
+def run_retry(cmd, attempts=3, **kwargs):
+    """Run a command, retrying transient failures (Kaggle mirrors are
+    occasionally very slow — an unattended apt has been observed to sit
+    minutes without output before finishing)."""
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return run(cmd, **kwargs)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            last = exc
+            log(f'attempt {attempt}/{attempts} failed ({exc}); '
+                f'retrying after 15s')
+            time.sleep(15)
+    assert last is not None
+    raise last
+
+
 def main():
     KAGGLE_WORKING.mkdir(parents=True, exist_ok=True)
 
@@ -84,10 +101,13 @@ def main():
             log(f'purged stale artifact {stale}')
 
     # 1. System deps. Kaggle kernels run as root in a Debian container.
+    #    Acquire::Retries handles flaky package fetches; the outer retry
+    #    handles slow-mirror timeouts.
     log('installing system dependencies')
-    run(['apt-get', 'update', '-qq'], timeout=300)
-    run(['apt-get', 'install', '-y', '-qq', '--no-install-recommends']
-        + APT_DEPS, timeout=900)
+    run_retry(['apt-get', 'update', '-qq',
+               '-o', 'Acquire::Retries=5'], attempts=3, timeout=900)
+    run_retry(['apt-get', 'install', '-y', '-qq', '--no-install-recommends']
+              + APT_DEPS, attempts=2, timeout=1800)
 
     # 2. Clone the yapper repo at the ref under test. PR runs fetch the
     #    merge commit explicitly; branch/tag runs clone it directly.
