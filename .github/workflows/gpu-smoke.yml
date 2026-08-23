@@ -52,9 +52,10 @@ jobs:
   gpu-smoke:
     name: GPU smoke test on Kaggle
     runs-on: ubuntu-latest
-    # Kernel side needs ~15 min worst case (apt + pip + Chromium download +
-    # clone + model load + generate); the poll loop allows up to 40 min.
-    timeout-minutes: 50
+    # Kernel side worst case: apt (slow-mirror retries) + Chromium download
+    # + clone + model load + generate ≈ 35 min; the poll loop allows 60 min
+    # of kernel time inside a 75-min job ceiling.
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -130,7 +131,7 @@ jobs:
       # output — no swallowing.
       - name: Poll kernel status
         env:
-          POLL_ATTEMPTS: 80
+          POLL_ATTEMPTS: 120
           POLL_INTERVAL_SECONDS: 30
         run: |
           set -u
@@ -148,7 +149,7 @@ jobs:
             sleep "$POLL_INTERVAL_SECONDS"
           done
           if [ -z "$ok" ]; then
-            echo "::error::GPU smoke kernel did not complete — see polls and the fetched yappergpusmoke.log for the actual error."
+            echo "::error::GPU smoke kernel did not complete within $((POLL_ATTEMPTS * POLL_INTERVAL_SECONDS / 60)) min — see polls above; if still RUNNING the kernel was stalled and its log will show where."
             exit 1
           fi
 

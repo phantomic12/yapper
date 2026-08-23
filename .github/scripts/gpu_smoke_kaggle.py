@@ -61,6 +61,15 @@ APT_DEPS = [
 
 STALE_OUTPUTS = [REPORT_OUT] + sorted(KAGGLE_WORKING.glob('*.png'))
 
+# Slow-mirror defenses for apt: retry each fetch, time each transfer out
+# at 60s (a healthy mirror serves any single package in seconds), and
+# cap the total pipeline at 120s per operation.
+APT_SLOW = [
+    '-o', 'Acquire::Retries=5',
+    '-o', 'Acquire::http::Timeout=60',
+    '-o', 'Acquire::https::Timeout=60',
+]
+
 
 def log(msg):
     print(f'[yapper-gpu-smoke] {msg}', flush=True)
@@ -101,13 +110,13 @@ def main():
             log(f'purged stale artifact {stale}')
 
     # 1. System deps. Kaggle kernels run as root in a Debian container.
-    #    Acquire::Retries handles flaky package fetches; the outer retry
-    #    handles slow-mirror timeouts.
+    #    Acquire::Retries + per-transfer timeouts handle slow mirrors; the
+    #    outer retry handles residual transient failures.
     log('installing system dependencies')
-    run_retry(['apt-get', 'update', '-qq',
-               '-o', 'Acquire::Retries=5'], attempts=3, timeout=900)
+    run_retry(['apt-get', 'update', '-qq'] + APT_SLOW,
+              attempts=2, timeout=600)
     run_retry(['apt-get', 'install', '-y', '-qq', '--no-install-recommends']
-              + APT_DEPS, attempts=2, timeout=1800)
+              + APT_SLOW + APT_DEPS, attempts=2, timeout=900)
 
     # 2. Clone the yapper repo at the ref under test. PR runs fetch the
     #    merge commit explicitly; branch/tag runs clone it directly.
