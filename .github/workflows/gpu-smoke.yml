@@ -78,8 +78,9 @@ jobs:
           BREAK_TOKEN: ${{ inputs.break_token }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/write_kaggle_token.py \
-            --break-token "${BREAK_TOKEN}"
+          ARGS=""
+          if [ "${BREAK_TOKEN}" = "true" ]; then ARGS="--break-token"; fi
+          python3 .github/scripts/write_kaggle_token.py ${ARGS}
 
       # Ref the kernel should test. PR runs check out the merge commit via
       # refs/pull/N/merge; release runs test the tag; everything else tests
