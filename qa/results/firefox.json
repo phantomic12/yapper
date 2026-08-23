@@ -1,0 +1,46 @@
+{
+  "key": "firefox",
+  "engine": "firefox",
+  "mobile": false,
+  "url": "http://127.0.0.1:8098/index.html",
+  "started": "2026-08-23T22:20:32",
+  "steps": {
+    "app_loads": {
+      "pass": true,
+      "note": "model grid rendered in 0.7s"
+    },
+    "select_model": {
+      "pass": true,
+      "note": "card marked selected"
+    },
+    "download_and_load": {
+      "pass": true,
+      "note": "10.4s, btn='\u2713 Kitten TTS Nano (~24MB) loaded', status='LOADED'"
+    },
+    "generation": {
+      "pass": true,
+      "note": "done card in 44.5s, blob src, duration=3.975"
+    },
+    "download_wav": {
+      "pass": true,
+      "note": "190844 bytes, header=b'RIFF'",
+      "artifact": "/opt/data/yapper/.worktrees/t_c724b5ba/qa/artifacts/firefox.wav"
+    },
+    "reader_txt": {
+      "pass": true,
+      "note": "extracted 527 chars into preview"
+    },
+    "reader_pdf": {
+      "pass": true,
+      "note": "pdf.js extracted fixture sentence"
+    }
+  },
+  "backend": "unspecified",
+  "console_errors": [],
+  "console_all_count": 1,
+  "page_errors": [],
+  "status": "pass",
+  "webgpu_available": false,
+  "clean_console": true,
+  "finished": "2026-08-23T22:21:31"
+}

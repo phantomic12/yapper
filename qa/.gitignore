@@ -1,0 +1,19 @@
+# QA scratch — never commit the heavy stuff
+.pw-browsers/
+.edge/
+.sysroot/
+.debs/
+.venv/
+.gio-gnutls-only/
+.empty-gio/
+__pycache__/
+*.pyc
+.xvfb.log
+
+# one-off diagnostics kept out of history; harness + results are committed
+diag_*.py
+debug_*.py
+probe*.py
+check_deps.py
+find_edge.py
+fetch_bundle_deps.py

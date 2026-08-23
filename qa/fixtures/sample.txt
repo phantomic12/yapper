@@ -1,0 +1,5 @@
+Yapper document reader QA fixture.
+
+This plain-text file exercises the TXT extraction path of the in-browser document reader. It contains three short paragraphs so the reader has real content to display.
+
+If you can read this sentence in the reader preview, text extraction worked.
