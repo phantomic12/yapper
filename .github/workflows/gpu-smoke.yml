@@ -107,7 +107,7 @@ jobs:
 
           # Kernel id must be <kaggle-username>/<slug>; derive the
           # username from the token instead of hardcoding an account.
-          USERNAME=$(python3 .github/scripts/token_username.py "$HOME/.kaggle/kaggle.json")
+          USERNAME=$(python3 .github/scripts/kaggle_username.py)
           SLUG="yappergpusmoke"
           echo "KERNEL_SLUG=${USERNAME}/${SLUG}" >> "$GITHUB_ENV"
 
