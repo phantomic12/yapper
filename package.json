@@ -33,7 +33,7 @@
   },
   "overrides": {
     "@xmldom/xmldom": "^0.9.8",
-    "protobufjs": "^7.6.5"
+    "protobufjs": "^8.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
