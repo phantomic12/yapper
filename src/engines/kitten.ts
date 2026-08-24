@@ -28,28 +28,26 @@ const VOICES_FILE = 'voices.npz';
 // no external repo dependency, fully self-contained.
 //
 // IMPORTANT: how the /lib URL is resolved depends on where this code runs.
-// In production both consumers live one level deep (/assets/index-XXX.js and
-// /assets/inference-worker-XXX.js), so any "one level up" scheme reaches
-// /lib. Under the Vite DEV server, though, import.meta.url points at
-// /src/engines/kitten.ts, whose parent directories don't serve /lib — the
-// fetch would return index.html (SPA fallback) and die as invalid JSON.
-// On the main thread we therefore anchor on the document base URL (works
-// for both `/` and GitHub-Pages-style subpaths); workers have no document,
-// so there we strip two segments off the module URL instead. Either way the
-// resolved URLs are IDENTICAL to the previous `../lib` behaviour in
-// production builds.
+// On the MAIN thread we anchor on document.baseURI, which is the deploy
+// root under the dev server, a root preview, and a project-pages subpath
+// (GitHub Pages serves /yapper/) alike.
+// In a WORKER there is no document, so we climb from the module URL. How
+// far depends on where Vite serves this module from:
+//   - production: the bundled worker chunk lives at <deploy-root>/assets/
+//     <name>.js at ANY base depth, so ONE level lands on the deploy root
+//     (/yapper/assets/x.js -> /yapper/). This is the case PR #46 broke by
+//     climbing three levels, which 404'd the tokenizer on Pages.
+//   - dev server: this file is served at /src/engines/kitten.ts, so TWO
+//     levels are needed to reach the server root.
+// The `'../'.repeat(n)` indirection is deliberate: a plain string-literal
+// path as the first argument of new URL(<literal>, import.meta.url) risks
+// Vite's static asset transform rewriting it to a /@fs/<build-path> URL,
+// while the dynamic expression passes through untouched.
 function publicLibUrl(file: string): string {
-  // Anchor on the document when on the main thread (correct for both `/`
-  // and GitHub-Pages-style subpaths). Workers have no document; there we
-  // climb from this module's own URL to the origin root. NOTE: the
-  // `'../'.repeat(3)` indirection is deliberate — a plain string literal
-  // as the first argument of `new URL(<literal>, import.meta.url)` gets
-  // statically rewritten by Vite's asset transform, which produces a
-  // broken /@fs/<absolute-build-path> URL whenever the literal escapes
-  // the project root (exactly our case).
+  const up = import.meta.env.DEV ? '../'.repeat(2) : '../'.repeat(1);
   const base = typeof document !== 'undefined'
     ? document.baseURI
-    : new URL('../'.repeat(3), import.meta.url).href;
+    : new URL(up, import.meta.url).href;
   return new URL(`lib/${file}`, base).href;
 }
 const TOKENIZER_URL = publicLibUrl('kitten-tokenizer.json');

@@ -3,6 +3,18 @@
 All notable changes to Yapper are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Kitten models failed to load on subpath deploys**: `publicLibUrl()`
+  climbed three directory levels from the worker module URL, overshooting
+  the app root whenever Yapper is served under a subpath (GitHub Pages
+  serves `/yapper/`), so the tokenizer fetch hit `<origin>/lib/…` and 404'd.
+  Found by the v0.2.0 release spot-check on the live site. Production
+  workers now climb one level (`<deploy-root>/assets/` → deploy root) and
+  dev-server modules two, independent of deploy depth; full e2e re-run
+  green against dist served under a `/yapper/` subpath.
+
 ## [0.2.0] - 2026-08-24
 
 ### Fixed
