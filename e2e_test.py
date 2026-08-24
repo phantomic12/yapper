@@ -8,6 +8,10 @@ Drives a real Chrome instance through the full TTS workflow:
   4. Click "Download & Load Model" and wait for ready state
   5. Type text and click Generate
   6. Verify a job card appears and produces an audio blob
+  7. Upload a TXT document and verify extracted text renders as sentences
+  8. Queue a read of that document ("Read aloud") with the loaded model
+  9. Verify the live sentence/word highlight advances during playback
+ 10. Stop the read, then upload a PDF and verify pdfjs text extraction
 
 Usage:
     python e2e_test.py                                  # uses defaults
@@ -42,6 +46,14 @@ TEST_TEXT = (
     'running entirely in your browser. Mr. Smith approves.'
 )
 
+# Small documents committed alongside this script (see e2e/fixtures/). The
+# PDF is a 641-byte single-page file whose text layer holds two lines, so
+# pdfjs extraction is instant and adds no OCR/model weight to the run.
+FIXTURES_DIR = Path(os.environ.get(
+    'YAPPER_FIXTURES',
+    str(Path(__file__).resolve().parent / 'e2e' / 'fixtures'),
+))
+
 
 class CDPError(RuntimeError):
     pass
@@ -52,6 +64,9 @@ class CDPSession:
         self.ws = websocket.create_connection(browser_ws_url, timeout=30)
         self._msg_id = 0
         self._sessions: dict[str, str] = {}
+        # URLs of every target the browser auto-attaches us to. Populated
+        # from Target.attachedToTarget events sniffed inside wait_for().
+        self.attached_targets: list[dict] = []
 
     def send(self, method: str, params=None, session_id=None):
         self._msg_id += 1
@@ -73,6 +88,10 @@ class CDPSession:
                     resp = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if resp.get('method') == 'Target.attachedToTarget':
+                    info = resp.get('params', {}).get('targetInfo', {})
+                    if info.get('url'):
+                        self.attached_targets.append(info)
                 if resp.get('id') == msg_id:
                     return resp
                 if debug:
@@ -116,6 +135,74 @@ class CDPSession:
         )
         return self.wait_for(msg_id, timeout=timeout)
 
+    def eval_async(self, expr: str, target_id: str, timeout: float = 30.0):
+        """Evaluate an async IIFE / promise expression and await its result."""
+        sid = self._sessions.get(target_id)
+        if not sid:
+            raise CDPError('Not attached to target')
+        msg_id = self.send(
+            'Runtime.evaluate',
+            {'expression': expr, 'returnByValue': True, 'awaitPromise': True},
+            session_id=sid,
+        )
+        return self.wait_for(msg_id, timeout=timeout)
+
+    def click_at(self, target_id: str, x: float, y: float):
+        """Dispatch a trusted mouse click at viewport coordinates via the
+        Input domain. Unlike element.click(), this counts as a user gesture
+        in the renderer (user activation is set), which the reader's audio
+        autoplay path needs."""
+        sid = self._sessions.get(target_id)
+        if not sid:
+            raise CDPError('Not attached to target')
+        for type_, button in (('mousePressed', 'left'), ('mouseReleased', 'left')):
+            msg_id = self.send(
+                'Input.dispatchMouseEvent',
+                {
+                    'type': type_,
+                    'x': x, 'y': y,
+                    'button': button,
+                    'clickCount': 1,
+                },
+                session_id=sid,
+            )
+            resp = self.wait_for(msg_id, timeout=10)
+            if resp and 'error' in resp:
+                raise CDPError(f'Input.dispatchMouseEvent failed: {resp["error"]}')
+
+    def find_element(self, target_id: str, selector: str) -> dict | None:
+        """Resolve a CSS selector to a CDP node object (for DOM.* commands)."""
+        # Runtime.evaluate with returnByValue=False hands back a RemoteObjectId
+        # for the node, which DOM.getBoxModel etc. accept.
+        msg_id = self.send(
+            'Runtime.evaluate',
+            {
+                'expression': f'document.querySelector({json.dumps(selector)})',
+                'returnByValue': False,
+                'objectGroup': 'e2e',
+            },
+            session_id=self._sessions[target_id],
+        )
+        resp = self.wait_for(msg_id, timeout=10)
+        if not resp or 'error' in resp:
+            return None
+        obj = resp.get('result', {}).get('result', {})
+        if obj.get('subtype') == 'null' or 'objectId' not in obj:
+            return None
+        return {'objectId': obj['objectId']}
+
+    def get_box_model(self, target_id: str, object_id: str) -> tuple[float, float] | None:
+        """Return the (x, y) of an element's content-box top-left."""
+        msg_id = self.send(
+            'DOM.getBoxModel', {'objectId': object_id},
+            session_id=self._sessions[target_id],
+        )
+        resp = self.wait_for(msg_id, timeout=10)
+        if not resp or 'result' not in resp:
+            return None
+        quad = [float(n) for n in resp['result']['model']['content']]
+        return quad[0], quad[1]
+
     def screenshot(self, target_id: str, path: Path) -> bool:
         sid = self._sessions.get(target_id)
         if not sid:
@@ -136,6 +223,16 @@ class CDPSession:
     def close(self):
         self.ws.close()
 
+    def get_browser_targets(self) -> list[dict]:
+        """Browser-level Target.getTargets — includes dedicated workers."""
+        msg_id = self.send('Target.getTargets')
+        resp = self.wait_for(msg_id, timeout=10)
+        if resp and 'result' in resp:
+            infos = resp['result'].get('targetInfos', [])
+            assert isinstance(infos, list)
+            return infos
+        return []
+
 
 def v(resp) -> dict:
     """Extract `.value` from a Runtime.evaluate response."""
@@ -148,12 +245,19 @@ def banner(label: str):
     print(f'\n{"=" * 70}\n  {label}\n{"=" * 70}')
 
 
-def fetch_cdp(path: str) -> dict:
+def fetch_cdp(path: str):
     try:
         with urllib.request.urlopen(f'{CDP}{path}') as r:
             return json.loads(r.read())
     except (urllib.error.URLError, ConnectionError) as e:
         raise CDPError(f'Cannot reach CDP at {CDP}: {e}')
+
+
+def list_targets() -> list[dict]:
+    """All CDP targets (pages, workers, iframes, …) via the HTTP endpoint."""
+    targets = fetch_cdp('/json/list')
+    assert isinstance(targets, list)
+    return targets
 
 
 # ─── Test harness ────────────────────────────────────────────────────────
@@ -264,6 +368,16 @@ def step_attach_and_navigate(cdp_holder):
 
     cdp.send('Page.enable', session_id=sid)
     cdp.wait_for(cdp.send('Page.enable', session_id=sid))
+    # Observe child targets (dedicated workers, iframes, …) from the PAGE
+    # session. Browser-level auto-attach does NOT report dedicated workers
+    # on current Chrome (verified on 151: /json/list, browser-level
+    # Target.getTargets and browser-scope setAutoAttach all omit them),
+    # while page-scope setAutoAttach fires Target.attachedToTarget when
+    # the engine spawns the inference module worker. Enabled here, before
+    # any load, so the spawn event can't slip past us.
+    cdp.wait_for(cdp.send('Target.setAutoAttach', {
+        'autoAttach': True, 'waitForDebuggerOnStart': False, 'flatten': True,
+    }, session_id=sid), timeout=10)
     nav_id = cdp.send('Page.navigate', {'url': URL}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
     print(f'      Navigated to {URL}; waiting for app render…')
@@ -415,34 +529,22 @@ def step_type_and_generate(cdp_holder):
 def step_verify_worker_chunk_loaded(cdp_holder):
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
-    # After the engine load completes, the inference worker script should
-    # be in the page's resource list. This proves Vite emitted and the
-    # main thread fetched the worker chunk — the worker has to exist in
-    # the page graph for the engine to be doing inference off-thread.
-    resp = cdp.eval(
-        """(function() {
-            const entries = performance.getEntriesByType('resource').map(e => e.name);
-            const workerChunk = entries.find(n => /inference-worker.*\\.js(\\?|$)/.test(n));
-            return {
-                totalResources: entries.length,
-                hasWorkerChunk: !!workerChunk,
-                workerChunk,
-                sample: entries.slice(0, 5),
-            };
-        })()""",
-        target['id'], timeout=10,
-    )
-    r = v(resp)
-    if not r.get('hasWorkerChunk'):
+    # The engine spawns inference in a dedicated module Worker from inside
+    # WorkerBackedEngine.load(), so by now (model ready) it must exist.
+    # Under the production bundle its URL is /assets/inference-worker-*.js;
+    # under the Vite dev server it is /src/...?worker_file&type=module.
+    # Either way the page-scope auto-attach enabled during navigation has
+    # delivered a Target.attachedToTarget event for it (browser-level
+    # discovery surfaces don't list dedicated workers on current Chrome).
+    workers = [t for t in cdp.attached_targets
+               if 'inference-worker' in t.get('url', '')]
+    if not workers:
         raise AssertionError(
-            f'inference-worker chunk not found in page resources. '
-            f'This means Vite did not emit it OR the engine did not '
-            f'spawn the worker — inference would be running on the main '
-            f'thread. Saw {r.get("totalResources")} resources total. '
-            f'First 5: {r.get("sample")}'
+            'no inference worker target found. This means Vite did not '
+            'emit it OR the engine did not spawn the worker — inference '
+            'would be running on the main thread.'
         )
-    print(f'      ✓ worker chunk loaded: {r["workerChunk"]}')
-    cdp.screenshot(target['id'], SCREENSHOT_DIR / '03-worker-loaded.png')
+    print(f'      ✓ live inference worker target (url=…{str(workers[0].get("url", ""))[-50:]})')
 
 
 def step_wait_for_audio(cdp_holder):
@@ -476,6 +578,218 @@ def step_wait_for_audio(cdp_holder):
     raise AssertionError(f'no job reached done within {gen_timeout}s')
 
 
+# ─── Document reader flow ────────────────────────────────────────────────
+# The marquee feature: drop a document, watch the extracted text render as
+# sentence spans, queue a read through the loaded engine, and confirm the
+# live sentence/word highlight advances while playback runs.
+
+# Injects a synthetic File into the hidden #document-upload input via a
+# DataTransfer and fires 'change' — the exact event path a real picker
+# upload takes (handleFile in src/ui/document-panel.ts). A raw CDP browser
+# has no filesystem access to the host, so DOM.setFileInputFiles cannot be
+# used against a remote container Chrome; a DataTransfer-built File is the
+# faithful alternative.
+INJECT_FILE_JS = """(function() {
+    const bin = atob(%(b64)s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], %(name)s, { type: %(mime)s });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const input = document.getElementById('document-upload');
+    if (!input) return { ok: false, msg: 'no #document-upload input' };
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, name: file.name, size: file.size };
+})()"""
+
+READER_STATE_JS = """(function() {
+    const view = document.getElementById('document-reader-view');
+    const overlay = document.getElementById('reader-overlay');
+    const active = document.querySelector('.reader-active-sentence');
+    const activeWord = document.querySelector('.reader-active-word');
+    return {
+        previewVisible: (() => {
+            const p = document.getElementById('document-preview');
+            return !!p && p.style.display !== 'none';
+        })(),
+        sentenceCount: view ? view.querySelectorAll('.reader-sentence').length : 0,
+        wordCount: view ? view.querySelectorAll('.reader-word').length : 0,
+        text: view ? (view.textContent || '') : '',
+        progressText: document.getElementById('document-progress')?.textContent || '',
+        overlayOpen: !!overlay && overlay.style.display !== 'none',
+        readerStatus: document.getElementById('reader-status')?.textContent || '',
+        overlayStatus: document.getElementById('reader-overlay-status')?.textContent || '',
+        pauseLabel: (document.getElementById('pause-document-btn') || {}).textContent || null,
+        readerError: document.querySelector('.reader-error')?.textContent
+            || document.getElementById('reader-error')?.textContent || null,
+        statusBanner: document.querySelector('.status-banner span')?.textContent || null,
+        jobCards: Array.from(document.querySelectorAll('.job-card')).map(c => ({
+            status: Array.from(c.classList).find(x => x.startsWith('job-card--'))
+                ?.replace('job-card--', ''),
+        })),
+        activeSentenceIndex: active ? Number(active.dataset.sentenceIndex) : null,
+        activeWordIndex: activeWord ? Number(activeWord.dataset.wordIndex) : null,
+    };
+})()"""
+
+
+def _inject_file(cdp, target_id, path: Path, mime: str):
+    import base64 as b64mod
+    b64 = b64mod.b64encode(path.read_bytes()).decode()
+    js = INJECT_FILE_JS % {'b64': json.dumps(b64), 'name': json.dumps(path.name), 'mime': json.dumps(mime)}
+    resp = cdp.eval(js, target_id, timeout=15)
+    r = v(resp)
+    if not r.get('ok'):
+        raise AssertionError(f'file injection failed: {r}')
+    print(f'      injected {path.name} ({path.stat().st_size} bytes)')
+
+
+def step_upload_txt_document(cdp_holder):
+    """Drop the TXT fixture and assert the reader view renders its sentences."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    _inject_file(cdp, target['id'], FIXTURES_DIR / 'sample.txt', 'text/plain')
+
+    extract_timeout = float(os.environ.get('YAPPER_EXTRACT_TIMEOUT', '60'))
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < extract_timeout:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        if s.get('previewVisible') and s.get('sentenceCount', 0) >= 3 \
+                and 'quick brown fox' in s.get('text', '') \
+                and 'liquor jugs' in s.get('text', ''):
+            print(f'      ✓ TXT extracted: {s["sentenceCount"]} sentences, '
+                  f'{s["wordCount"]} words, progress="{s["progressText"][:50]}"')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '05-txt-extracted.png')
+            return
+        time.sleep(1)
+    raise AssertionError(
+        f'TXT text did not render in the reader view within {extract_timeout}s: '
+        f'previewVisible={s.get("previewVisible")} sentences={s.get("sentenceCount")} '
+        f'text[:80]={s.get("text", "")[:80]!r}')
+
+
+def step_queue_reader_read(cdp_holder):
+    """Click 'Read aloud' with a trusted CDP mouse click so audio autoplay
+    counts as user-initiated, then confirm the reader session started."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    btn = cdp.find_element(target['id'], '#read-document-btn')
+    if not btn:
+        raise AssertionError('#read-document-btn not found')
+    box = cdp.get_box_model(target['id'], btn['objectId'])
+    if not box:
+        raise AssertionError('could not measure #read-document-btn position')
+    x, y = box[0] + 6, box[1] + 6
+    cdp.click_at(target['id'], x, y)
+    print(f'      clicked Read aloud at ({x:.0f}, {y:.0f})')
+
+    start_timeout = float(os.environ.get('YAPPER_READ_START_TIMEOUT', '90'))
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < start_timeout:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        if s.get('overlayOpen') or s.get('activeSentenceIndex') is not None:
+            print(f'      ✓ reading: overlayOpen={s.get("overlayOpen")} '
+                  f'status="{s.get("readerStatus")}" jobs={s.get("jobCards")}')
+            return
+        if s.get('readerStatus') == 'Finished':
+            raise AssertionError('reader finished instantly without playing')
+        time.sleep(1)
+    raise AssertionError(
+        f'reader did not start within {start_timeout}s: '
+        f'state={json.dumps(s, default=str)}'
+        f'. If this fails only in CI, launch Chrome '
+        f'with --autoplay-policy=no-user-gesture-required.')
+
+
+def step_assert_highlight_advances(cdp_holder):
+    """While the read plays, the highlighted sentence/word must move forward."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    # Budget covers worst-case first-chunk synthesis (~25s observed on CPU)
+    # plus playback to the second word/sentence; exits early on success.
+    window_s = float(os.environ.get('YAPPER_HIGHLIGHT_WINDOW', '120'))
+    start = time.time()
+    s: dict = {}
+    first = None
+    last = None
+    last_print = ''
+    while time.time() - start < window_s:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        cur = (s.get('activeSentenceIndex'), s.get('activeWordIndex'))
+        label = f'sentence={cur[0]} word={cur[1]}'
+        if label != last_print:
+            print(f'      [{int(time.time()-start):3d}s] highlight {label} '
+                  f'status="{s.get("readerStatus")}"')
+            last_print = label
+        if cur[0] is not None:
+            if first is None:
+                first = cur
+            last = cur
+            if (last[0] or 0) > (first[0] or 0) or (
+                    last[0] == first[0] and (last[1] or 0) > (first[1] or 0)):
+                print(f'      ✓ highlight advanced: {first} → {last}')
+                cdp.screenshot(target['id'], SCREENSHOT_DIR / '06-highlight-advanced.png')
+                return
+        if s.get('readerStatus') == 'Finished' and last is not None:
+            break
+        time.sleep(1)
+    raise AssertionError(
+        f'highlight never advanced within {window_s}s '
+        f'(first={first}, last={last}) state={json.dumps(s, default=str)}')
+
+
+def step_stop_reader(cdp_holder):
+    """Stop playback via the overlay Stop button and confirm teardown."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    btn = cdp.find_element(target['id'], '#reader-overlay-stop')
+    if not btn:
+        raise AssertionError('#reader-overlay-stop not found')
+    box = cdp.get_box_model(target['id'], btn['objectId'])
+    if not box:
+        raise AssertionError('could not measure #reader-overlay-stop position')
+    cdp.click_at(target['id'], box[0] + 6, box[1] + 6)
+    time.sleep(1)
+    resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+    s = v(resp)
+    if s.get('overlayOpen'):
+        raise AssertionError('reader overlay still open after Stop')
+    print(f'      ✓ reader stopped, overlay closed (status="{s.get("readerStatus")}")')
+
+
+def step_upload_pdf_document(cdp_holder):
+    """Drop the PDF fixture and assert pdfjs text extraction renders."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    _inject_file(cdp, target['id'], FIXTURES_DIR / 'sample.pdf', 'application/pdf')
+
+    extract_timeout = float(os.environ.get('YAPPER_EXTRACT_TIMEOUT', '120'))
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < extract_timeout:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        text = s.get('text', '')
+        if ('end-to-end test PDF' in text and 'Second line proves' in text
+                and s.get('previewVisible')):
+            print(f'      ✓ PDF extracted: {s["sentenceCount"]} sentences from '
+                  f'{s["progressText"][:60]!r}')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '07-pdf-extracted.png')
+            return
+        time.sleep(1)
+    raise AssertionError(
+        f'PDF text did not render within {extract_timeout}s: '
+        f'previewVisible={s.get("previewVisible")} '
+        f'progress="{s.get("progressText")}" banner={s.get("statusBanner")!r} '
+        f'text[:100]={s.get("text", "")[:100]!r}')
+
+
 # ─── Driver ──────────────────────────────────────────────────────────────
 
 def main():
@@ -494,6 +808,14 @@ def main():
         ('verify_worker_chunk_loaded', lambda: step_verify_worker_chunk_loaded(cdp_holder)),
         ('type_and_generate', lambda: step_type_and_generate(cdp_holder)),
         ('wait_for_audio', lambda: step_wait_for_audio(cdp_holder)),
+        # Document reader flow (marquee feature): upload TXT → render →
+        # queue read on the already-loaded kitten-nano model → highlight
+        # advances → stop, then upload PDF and confirm pdfjs extraction.
+        ('upload_txt_document', lambda: step_upload_txt_document(cdp_holder)),
+        ('queue_reader_read', lambda: step_queue_reader_read(cdp_holder)),
+        ('assert_highlight_advances', lambda: step_assert_highlight_advances(cdp_holder)),
+        ('stop_reader', lambda: step_stop_reader(cdp_holder)),
+        ('upload_pdf_document', lambda: step_upload_pdf_document(cdp_holder)),
     ]
 
     for name, fn in steps:

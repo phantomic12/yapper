@@ -1,0 +1,7 @@
+Yapper end-to-end reader fixture.
+
+This text file exercises the document reader path. Each paragraph becomes sentences that Yapper extracts, chunks, and reads aloud while highlighting the active sentence in the reader view.
+
+The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. How vexingly quick daft zebras jump!
+
+If this sentence is highlighted during playback, sentence tracking works.
