@@ -35,19 +35,33 @@ class MockEngine {
     return { sampleRate: this.sampleRate };
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }) {
+  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number; onSegmentProgress?: (progress: { segmentsDone: number; segmentsTotal?: number; audioSecondsSoFar?: number }) => void }) {
     this.calls.push({ voiceId, text, speed: options?.speed });
     if (this.block) await this.block;
-    if (this.failNext) {
-      const e = this.failNext;
-      this.failNext = null;
-      throw e;
+    // Honor generateMs with a real timer so fake-timer tests can drive
+    // mid-generation behavior (heartbeats, cancellation windows).
+    if (this.generateMs > 0) {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, this.generateMs);
+        if (this.failNext) {
+          clearTimeout(t);
+          reject(this.takeFailure());
+        }
+      });
+    } else if (this.failNext) {
+      throw this.takeFailure();
     }
     return {
       audio: new Float32Array(this.sampleRate),
       samplingRate: this.sampleRate,
       wordTimings: this.wordTimings,
     };
+  }
+
+  private takeFailure(): Error {
+    const e = this.failNext!;
+    this.failNext = null;
+    return e;
   }
 
   dispose() {
@@ -456,6 +470,169 @@ describe('TTSEngine — model switching mid-queue', () => {
     expect(stillPendingKitten).toBeUndefined();
     // And they should carry the "Model changed" reason
     expect(cancelled.every(j => j.error === 'Model changed before generation started')).toBe(true);
+  });
+});
+
+describe('TTSEngine — generation heartbeat (jobProgress)', () => {
+  let mock: MockEngine;
+  let engine: TTSEngine;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    mock = mockKitten();
+    registerCustomEngine('KittenML/kitten-tts-nano-0.8-int8', mock);
+    engine = new TTSEngine();
+    await engine.loadModel(findModel('kitten-nano'));
+  });
+
+  afterEach(() => {
+    // Drain the queue and restore real timers so no interval leaks between
+    // tests (a leaked heartbeat would fire into a disposed engine).
+    for (const j of engine.getJobs()) {
+      if (j.status === 'pending' || j.status === 'generating') engine.cancel(j.id);
+    }
+    engine.dispose();
+    vi.useRealTimers();
+  });
+
+  interface Harness {
+    progressEvents: { jobId: string; elapsedMs: number; phase: string }[];
+    completion: Promise<void>;
+  }
+
+  /** Enqueue with a slow mock and collect jobProgress events. */
+  function startSlowJob(generateMs: number): Harness {
+    mock.generateMs = generateMs;
+    const progressEvents: Harness['progressEvents'] = [];
+    engine.on('jobProgress', (p) => {
+      progressEvents.push({ jobId: p.jobId, elapsedMs: p.elapsedMs, phase: p.phase });
+    });
+    const job = engine.enqueue('slow job', { modelId: 'kitten-nano' });
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+    const poll = setInterval(() => {
+      const s = engine.getJobs().find(j => j.id === job.id)?.status;
+      if (s === 'done' || s === 'error' || s === 'cancelled') {
+        clearInterval(poll);
+        resolveCompletion();
+      }
+    }, 5);
+    return { progressEvents, completion };
+  }
+
+  it('emits an immediate first tick, then one every ~500ms while generating', async () => {
+    mock.generateMs = 1200;
+    const events: { jobId: string; elapsedMs: number }[] = [];
+    engine.on('jobProgress', p => events.push({ jobId: p.jobId, elapsedMs: p.elapsedMs }));
+    const job = engine.enqueue('tick test', { modelId: 'kitten-nano' });
+
+    await vi.advanceTimersByTimeAsync(1100);
+
+    expect(events.length).toBeGreaterThanOrEqual(3); // immediate + ≥2 ticks
+    expect(events[0].jobId).toBe(job.id);
+    // Elapsed time must actually move across ticks — this is the AC that
+    // kills the frozen "Generating… 0s" card.
+    expect(events[events.length - 1].elapsedMs).toBeGreaterThan(events[0].elapsedMs);
+    expect(engine.getJobs().find(j => j.id === job.id)?.status).toBe('generating');
+  });
+
+  it('stops ticking after the job reaches done', async () => {
+    const h = startSlowJob(700);
+    await vi.advanceTimersByTimeAsync(690);
+    const countBeforeDone = h.progressEvents.length;
+    expect(countBeforeDone).toBeGreaterThanOrEqual(2);
+
+    await vi.advanceTimersByTimeAsync(200); // job finishes at ~700ms
+    expect(engine.getJobs().every(j => j.status !== 'generating')).toBe(true);
+
+    const settled = h.progressEvents.length;
+    await vi.advanceTimersByTimeAsync(2000); // would produce ~4 more ticks if leaking
+    expect(h.progressEvents.length).toBe(settled);
+    await h.completion;
+  });
+
+  it('stops ticking when the job is cancelled mid-generation', async () => {
+    mock.block = new Promise<void>(() => {}); // never resolves
+    const events: unknown[] = [];
+    engine.on('jobProgress', p => events.push(p));
+    const job = engine.enqueue('cancel me', { modelId: 'kitten-nano' });
+    await vi.advanceTimersByTimeAsync(600);
+    const before = events.length;
+    expect(before).toBeGreaterThanOrEqual(2);
+
+    engine.cancel(job.id);
+    // cancel() itself must clear the interval synchronously.
+    expect((engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(events.length).toBe(before);
+    expect(engine.getJobs().find(j => j.id === job.id)?.status).toBe('cancelled');
+  });
+
+  it('stops ticking when the job errors', async () => {
+    mock.failNext = new Error('boom');
+    mock.block = new Promise<void>((resolve, reject) => {
+      setTimeout(() => reject(new Error('boom')), 800);
+    });
+    const events: unknown[] = [];
+    engine.on('jobProgress', p => events.push(p));
+    engine.enqueue('fail path', { modelId: 'kitten-nano' });
+    await vi.advanceTimersByTimeAsync(760);
+    const before = events.length;
+    await vi.advanceTimersByTimeAsync(300); // rejection fires at ~800ms
+    expect(engine.getJobs().some(j => j.status === 'error')).toBe(true);
+    const settled = events.length;
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(events.length).toBe(settled);
+    void before;
+  });
+
+  it('forwards segment progress from onSegmentProgress as jobProgress', async () => {
+    const events: { segmentsDone?: number; audioSecondsSoFar?: number }[] = [];
+    engine.on('jobProgress', p => events.push({ segmentsDone: p.segmentsDone, audioSecondsSoFar: p.audioSecondsSoFar }));
+
+    mock.generate = async (_m, _v, _t, options) => {
+      options?.onSegmentProgress?.({ segmentsDone: 1, segmentsTotal: undefined, audioSecondsSoFar: 1.25 });
+      options?.onSegmentProgress?.({ segmentsDone: 2, segmentsTotal: undefined, audioSecondsSoFar: 3.5 });
+      return { audio: new Float32Array(24000), samplingRate: 24000 };
+    };
+
+    engine.enqueue('segmented', { modelId: 'kitten-nano' });
+    await vi.advanceTimersByTimeAsync(50);
+
+    const segEvents = events.filter(e => e.segmentsDone !== undefined);
+    expect(segEvents).toEqual([
+      { segmentsDone: 1, audioSecondsSoFar: 1.25 },
+      { segmentsDone: 2, audioSecondsSoFar: 3.5 },
+    ]);
+  });
+
+  it('does not leave a heartbeat running after dispose()', async () => {
+    mock.block = new Promise<void>(() => {});
+    engine.enqueue('disposed mid-flight', { modelId: 'kitten-nano' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect((engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer).not.toBeNull();
+
+    engine.dispose();
+    expect((engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer).toBeNull();
+  });
+
+  it('keeps exactly one heartbeat when jobs run back-to-back', async () => {
+    mock.generateMs = 300;
+    engine.enqueue('one', { modelId: 'kitten-nano' });
+    engine.enqueue('two', { modelId: 'kitten-nano' });
+    await vi.advanceTimersByTimeAsync(150); // job one mid-flight
+    const first = (engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer;
+    expect(first).not.toBeNull();
+    // 150 + 300: job one finishes at ~300ms, job two runs ~300-600ms.
+    await vi.advanceTimersByTimeAsync(330);
+    const second = (engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer;
+    expect(second).not.toBeNull();
+    // New interval handle for the second job (old one was cleared).
+    expect(second).not.toBe(first);
+    await vi.advanceTimersByTimeAsync(400); // everything settles
+    expect(engine.getJobs().every(j => j.status === 'done')).toBe(true);
+    expect((engine as unknown as { heartbeatTimer: unknown }).heartbeatTimer).toBeNull();
   });
 });
 

@@ -128,6 +128,105 @@ describe('WorkerBackedEngine', () => {
     expect(Array.from(out.audio)).toEqual([0, 0.5, -0.5]);
   });
 
+  it('routes generate-progress segment messages to the onSegmentProgress callback without settling the request', async () => {
+    let messageHandler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+    const fakeWorker = {
+      postMessage(message: { id: number; type: string }) {
+        queueMicrotask(() => {
+          if (message.type === 'load') {
+            messageHandler?.({ data: { id: message.id, type: 'loaded', sampleRate: 24000 } } as MessageEvent);
+            return;
+          }
+          if (message.type !== 'generate') return;
+          // Two segment updates arrive BEFORE the terminal 'generated'.
+          messageHandler?.({
+            data: {
+              id: message.id,
+              type: 'generate-progress',
+              segmentsDone: 1,
+              audioSecondsSoFar: 2.4,
+            },
+          } as unknown as MessageEvent);
+          messageHandler?.({
+            data: {
+              id: message.id,
+              type: 'generate-progress',
+              segmentsDone: 2,
+              audioSecondsSoFar: 5.1,
+            },
+          } as unknown as MessageEvent);
+          messageHandler?.({
+            data: {
+              id: message.id,
+              type: 'generated',
+              audio: new Float32Array([0.1]),
+              samplingRate: 24000,
+            },
+          } as MessageEvent);
+        });
+      },
+      addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+        if (type === 'message') messageHandler = listener;
+      },
+      removeEventListener() {},
+      terminate: vi.fn(),
+    };
+
+    const engine = new WorkerBackedEngine(() => fakeWorker);
+    await engine.load(model);
+    const segments: { segmentsDone: number; audioSecondsSoFar?: number }[] = [];
+    const out = await engine.generate(model, 'v', 'two sentences', {
+      onSegmentProgress: s => segments.push(s),
+    });
+    // Both segment callbacks fired with the payloads from the worker.
+    expect(segments).toEqual([
+      { segmentsDone: 1, segmentsTotal: undefined, audioSecondsSoFar: 2.4 },
+      { segmentsDone: 2, segmentsTotal: undefined, audioSecondsSoFar: 5.1 },
+    ]);
+    // The generate promise still resolved with the final audio.
+    expect(out.audio.length).toBe(1);
+    expect(out.audio[0]).toBeCloseTo(0.1, 5);
+    expect(out.samplingRate).toBe(24000);
+  });
+
+  it('forwards a known segmentsTotal from generate-progress messages', async () => {
+    let messageHandler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+    const fakeWorker = {
+      postMessage(message: { id: number; type: string }) {
+        queueMicrotask(() => {
+          if (message.type === 'load') {
+            messageHandler?.({ data: { id: message.id, type: 'loaded', sampleRate: 16000 } } as MessageEvent);
+            return;
+          }
+          if (message.type !== 'generate') return;
+          messageHandler?.({
+            data: {
+              id: message.id,
+              type: 'generate-progress',
+              segmentsDone: 3,
+              segmentsTotal: 7,
+              audioSecondsSoFar: 9.9,
+            },
+          } as unknown as MessageEvent);
+          messageHandler?.({
+            data: { id: message.id, type: 'generated', audio: new Float32Array(0), samplingRate: 16000 },
+          } as MessageEvent);
+        });
+      },
+      addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+        if (type === 'message') messageHandler = listener;
+      },
+      removeEventListener() {},
+      terminate: vi.fn(),
+    };
+
+    const engine = new WorkerBackedEngine(() => fakeWorker);
+    await engine.load(model);
+    const segments: { segmentsDone?: number; segmentsTotal?: number }[] = [];
+    await engine.generate(model, 'v', 'x', { onSegmentProgress: s => segments.push(s) });
+    expect(segments[0]).toMatchObject({ segmentsDone: 3, segmentsTotal: 7 });
+  });
+
   it('constructs the worker via the canonical Vite-friendly URL', () => {
     // The default factory must use `new URL('./inference-worker.ts',
     // import.meta.url)` — Vite rewrites that at build time to point at

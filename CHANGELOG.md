@@ -5,6 +5,20 @@ All notable changes to Yapper are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+- **Live generation progress** on job cards. A `jobProgress` heartbeat
+  (~500ms) from `TTSEngine.processQueue` drives a ticking seconds counter,
+  an indeterminate progress bar, and — for Kokoro's streaming path — a
+  determinate "sentence N" readout forwarded over a new
+  `generate-progress` worker message (`worker-bridge` routes it to the
+  pending slot like load progress). Pending jobs show queue position
+  ("2nd in queue"). Updates touch only the card's hint/progress nodes;
+  no innerHTML re-render at 2Hz. Heartbeats clear on done/error/cancel
+  and on engine dispose.
+- **E2E coverage**: `assert_progress_ticks` (card text changes ≥2x in 3s
+  during kitten-nano generation) and `kokoro_segment_progress`
+  (multi-sentence input shows segment markers) steps in `e2e_test.py`.
+
 ### Fixed
 - **Kitten models failed to load on subpath deploys**: `publicLibUrl()`
   climbed three directory levels from the worker module URL, overshooting

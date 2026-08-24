@@ -1,4 +1,4 @@
-import type { CustomEngine, TTSModel } from '../engine';
+import type { CustomEngine, SegmentProgressCallback, TTSModel } from '../engine';
 import { KOKORO_MODEL_ID } from './kokoro';
 
 export type WorkerRequest =
@@ -8,6 +8,14 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { id: number; type: 'progress'; loaded: number; total: number }
+  | {
+      /** Mid-generation segment progress (e.g. Kokoro sentences). */
+      id: number;
+      type: 'generate-progress';
+      segmentsDone: number;
+      segmentsTotal?: number;
+      audioSecondsSoFar?: number;
+    }
   | { id: number; type: 'loaded'; sampleRate: number }
   | { id: number; type: 'generated'; audio: Float32Array; samplingRate: number; wordTimings?: number[] }
   | { id: number; type: 'disposed' }
@@ -51,6 +59,8 @@ type Pending = {
   resolve: (response: WorkerResponse) => void;
   reject: (error: Error) => void;
   progress?: (loaded: number, total: number) => void;
+  /** Mid-generation segment progress (see `generate`). */
+  segmentProgress?: SegmentProgressCallback;
 };
 
 export class WorkerBackedEngine implements CustomEngine {
@@ -82,9 +92,13 @@ export class WorkerBackedEngine implements CustomEngine {
     model: TTSModel,
     voiceId: string | undefined,
     text: string,
-    options?: { speed?: number },
+    options?: { speed?: number; onSegmentProgress?: SegmentProgressCallback },
   ): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
-    const response = await this.request(createGenerateRequest(model, voiceId, text, options?.speed));
+    const response = await this.request(
+      createGenerateRequest(model, voiceId, text, options?.speed),
+      undefined,
+      options?.onSegmentProgress,
+    );
     if (response.type !== 'generated') throw new Error(`Unexpected worker response: ${response.type}`);
     // Normalize in case the worker transferred a plain ArrayBuffer view oddly.
     const audio = response.audio instanceof Float32Array
@@ -113,6 +127,7 @@ export class WorkerBackedEngine implements CustomEngine {
   private request(
     message: WorkerRequest,
     progressCallback?: (loaded: number, total: number) => void,
+    segmentProgressCallback?: SegmentProgressCallback,
   ): Promise<WorkerResponse> {
     if (!this.worker) return Promise.reject(new Error('Inference worker is not available'));
 
@@ -121,7 +136,12 @@ export class WorkerBackedEngine implements CustomEngine {
         reject(new Error('Inference worker is not available'));
         return;
       }
-      this.pending.set(message.id, { resolve, reject, progress: progressCallback });
+      this.pending.set(message.id, {
+        resolve,
+        reject,
+        progress: progressCallback,
+        segmentProgress: segmentProgressCallback,
+      });
       this.worker.postMessage(message);
     });
 
@@ -139,6 +159,17 @@ export class WorkerBackedEngine implements CustomEngine {
     if (!slot) return;
     if (response.type === 'progress') {
       slot.progress?.(response.loaded, response.total);
+      return;
+    }
+    // Mid-generation segment progress: routed to the pending slot like load
+    // progress, but does NOT settle the request — the final 'generated'
+    // message still resolves it.
+    if (response.type === 'generate-progress') {
+      slot.segmentProgress?.({
+        segmentsDone: response.segmentsDone,
+        segmentsTotal: response.segmentsTotal,
+        audioSecondsSoFar: response.audioSecondsSoFar,
+      });
       return;
     }
     this.pending.delete(response.id);

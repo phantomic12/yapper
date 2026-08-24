@@ -135,7 +135,16 @@ export class KokoroCustomEngine implements CustomEngine {
     }
   }
 
-  async generate(_model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
+  async generate(
+    _model: TTSModel,
+    voiceId: string | undefined,
+    text: string,
+    options?: {
+      speed?: number;
+      /** Receives per-sentence progress while the stream is running. */
+      onSegmentProgress?: (progress: { segmentsDone: number; audioSecondsSoFar: number }) => void;
+    },
+  ): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }> {
     if (!this.tts) throw new Error('Kokoro model not loaded');
     const voice = voiceId ?? 'af_heart';
     const speed = options?.speed ?? 1.0;
@@ -156,6 +165,17 @@ export class KokoroCustomEngine implements CustomEngine {
     for await (const segment of this.tts.stream(text, { voice, speed })) {
       const segAudio = segment.audio.audio;
       chunks.push(segAudio);
+      // Accumulate the running audio length and report segment progress
+      // BEFORE the word-timing work below — segments that don't map to any
+      // remaining token (short inputs, zero-phoneme segments) must still
+      // report progress. kokoro-js streams sentence-by-sentence without a
+      // known total, so we report the running count; the UI renders this
+      // as "N sentences" (determinate only once a total is known).
+      audioOffsetSamples += segAudio.length;
+      options?.onSegmentProgress?.({
+        segmentsDone: chunks.length,
+        audioSecondsSoFar: audioOffsetSamples / KOKORO_SAMPLE_RATE,
+      });
 
       // Approximate: each phoneme = ~1 token boundary; we map phoneme positions
       // onto tokens proportionally. This isn't perfect (a token may have
@@ -178,7 +198,6 @@ export class KokoroCustomEngine implements CustomEngine {
         wordTimings.push(t);
         tokenIdx++;
       }
-      audioOffsetSamples += segAudio.length;
     }
 
     // Stitch the per-sentence audio into one array.

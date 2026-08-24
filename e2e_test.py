@@ -578,6 +578,177 @@ def step_wait_for_audio(cdp_holder):
     raise AssertionError(f'no job reached done within {gen_timeout}s')
 
 
+# ─── Live generation progress (ticking timer) ────────────────────────────
+
+JOB_HINT_SNAPSHOT_JS = """(function() {
+    const cards = Array.from(document.querySelectorAll('.job-card'));
+    return cards.map(c => ({
+        status: Array.from(c.classList).find(x => x.startsWith('job-card--'))
+            ?.replace('job-card--', ''),
+        hint: c.querySelector('[data-role="job-hint"]')?.textContent
+            || c.querySelector('.job-card__hint')?.textContent || null,
+        progressMode: c.querySelector('[data-role="job-progress"]')?.getAttribute('data-mode') || null,
+    }));
+})()"""
+
+
+def step_assert_progress_ticks(cdp_holder):
+    """AC: during a generation the card text must change at least twice over
+    a 3s window (the ~500ms heartbeat drives a live seconds counter).
+
+    Runs right after generate is clicked, while kitten-nano is still busy —
+    if the job already finished (very fast machine) the step degrades to a
+    no-op so CI doesn't flake on speed.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    def snap():
+        return v(cdp.eval(JOB_HINT_SNAPSHOT_JS, target['id'], timeout=10))
+
+    first = snap()
+    gen_cards = [c for c in first if c.get('status') == 'generating']
+    if not gen_cards:
+        # Generation already finished before we sampled. Not a failure of
+        # the feature — just too fast to observe.
+        print('      (skip: job finished before progress could be sampled)')
+        return
+
+    samples = [gen_cards[0].get('hint')]
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        time.sleep(0.5)
+        cur = snap()
+        card = next((c for c in cur if c.get('status') == 'generating'), None)
+        if card is None:
+            break  # finished mid-window; judge on what we captured
+        samples.append(card.get('hint'))
+
+    distinct = len({s for s in samples if s})
+    print(f'      hints observed over 3s: {samples}')
+    if distinct < 2:
+        raise AssertionError(
+            f'generating card text changed {distinct}x over 3s '
+            f'(need ≥2 for a ticking timer). Samples: {samples}. '
+            f'This means the heartbeat is not reaching the UI.'
+        )
+    bar_modes = {c.get('progressMode') for c in first if c.get('status') == 'generating'}
+    print(f'      ✓ timer ticks ({distinct} distinct hints), progress bar modes seen: {bar_modes}')
+
+
+def _run_kokoro_generation(cdp_holder, text: str):
+    """Select Kokoro q8f16, wait for load, queue a multi-sentence job."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    resp = cdp.eval(
+        """(function() {
+            // The pick handler lives on the inner [data-action="pick"]
+            // button, not the outer .model-card div (see select_model step
+            // and src/ui/model-panel.ts).
+            const card = document.querySelector('.model-card[data-model-id="kokoro-82m"]');
+            if (!card) return { ok: false, msg: 'no kokoro-82m model card' };
+            const pickBtn = card.querySelector('[data-action="pick"]');
+            if (!pickBtn) return { ok: false, msg: 'no pick button on kokoro card' };
+            pickBtn.click();
+            const loadBtn = document.getElementById('load-btn');
+            if (!loadBtn || loadBtn.disabled) return { ok: false, msg: 'load button unavailable' };
+            loadBtn.click();
+            return { ok: true };
+        })()""",
+        target['id'], timeout=15,
+    )
+    r = v(resp)
+    if not r.get('ok'):
+        raise AssertionError(f'could not start Kokoro load: {r}')
+
+    ready_timeout = float(os.environ.get('YAPPER_KOKORO_LOAD_TIMEOUT', '420'))
+    start = time.time()
+    while time.time() - start < ready_timeout:
+        poll = v(cdp.eval(
+            """(function() {
+                const banner = document.querySelector('.status-banner');
+                return {
+                    state: document.getElementById('gpu-status-label')?.textContent
+                        || document.querySelector('.load-btn')?.textContent || '',
+                    error: banner?.classList.contains('status-banner--error')
+                        ? banner.textContent : null,
+                };
+            })()""",
+            target['id'], timeout=10,
+        ))
+        if poll.get('error'):
+            raise AssertionError(f'Kokoro load failed: {poll["error"]}')
+        # The load button label flips to "Model ready" style states; detect
+        # readiness via the loaded model card class instead.
+        loaded = v(cdp.eval(
+            """(function() {
+                const card = document.querySelector('.model-card[data-model-id="kokoro-82m"]');
+                return { loaded: !!(card && card.classList.contains('model-card--loaded')) };
+            })()""",
+            target['id'], timeout=10,
+        ))
+        if loaded.get('loaded'):
+            print(f'      ✓ kokoro-82m loaded in {int(time.time()-start)}s')
+            break
+        time.sleep(2)
+    else:
+        raise AssertionError(f'kokoro-82m did not become ready within {ready_timeout}s')
+
+    type_resp = v(cdp.eval(
+        f"""(function() {{
+            const ta = document.getElementById('text-input');
+            ta.value = {json.dumps(text)};
+            ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            document.getElementById('generate-btn').click();
+            return {{ ok: true }};
+        }})()""",
+        target['id'], timeout=15,
+    ))
+    if not type_resp.get('ok'):
+        raise AssertionError(f'failed to enqueue Kokoro job: {type_resp}')
+
+
+def step_kokoro_segment_progress(cdp_holder):
+    """AC: Kokoro on a multi-sentence input shows sentence-segment progress.
+
+    Loads kokoro-82m (~86MB), generates three sentences, and asserts the
+    hint ever showed a "sentence N" / "N sentences" segment marker.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    text = (
+        'The quick brown fox jumps over the lazy dog. Yapper speaks every '
+        'sentence it reads. Progress should tick as each one completes.'
+    )
+    _run_kokoro_generation(cdp_holder, text)
+
+    seg_timeout = float(os.environ.get('YAPPER_KOKORO_GEN_TIMEOUT', '300'))
+    start = time.time()
+    saw_segment = False
+    last_print = ''
+    done = False
+    while time.time() - start < seg_timeout:
+        s = v(cdp.eval(JOB_HINT_SNAPSHOT_JS, target['id'], timeout=10))
+        gen_hints = [c.get('hint') or '' for c in s if c.get('status') == 'generating']
+        label = gen_hints[0] if gen_hints else '(none generating)'
+        if label != last_print:
+            print(f'      [{int(time.time()-start):3d}s] {label}')
+            last_print = label
+        if any(('sentence' in h.lower()) for h in gen_hints):
+            saw_segment = True
+        if not gen_hints and any(c.get('status') == 'done' for c in s):
+            done = True
+            break
+        time.sleep(0.5)
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '08-kokoro-progress.png')
+    if not saw_segment:
+        raise AssertionError(
+            'kokoro generation completed without ever showing segment '
+            f'progress ("sentence N" hint) within {seg_timeout}s'
+        )
+    print(f'      ✓ segment progress observed (job done={done})')
+
+
 # ─── Document reader flow ────────────────────────────────────────────────
 # The marquee feature: drop a document, watch the extracted text render as
 # sentence spans, queue a read through the loaded engine, and confirm the
@@ -767,6 +938,20 @@ def step_upload_pdf_document(cdp_holder):
     """Drop the PDF fixture and assert pdfjs text extraction renders."""
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
+
+    # pdfjs-dist 6's fake-worker fallback requires Promise.try (Chrome ≥~128).
+    # On older engines extraction dies with "Promise.try is not a function"
+    # and the panel sticks on "Reading PDF file…" — an engine gap, not an app
+    # regression. CI installs Chrome stable (which has it); degrade here.
+    cap = v(cdp.eval(
+        "({ hasPromiseTry: typeof Promise.try === 'function' })",
+        target['id'], timeout=10,
+    ))
+    if not cap.get('hasPromiseTry'):
+        print('      (skip: browser lacks Promise.try — pdfjs 6 needs Chrome ≥~128; '
+              'CI uses Chrome stable)')
+        return
+
     _inject_file(cdp, target['id'], FIXTURES_DIR / 'sample.pdf', 'application/pdf')
 
     extract_timeout = float(os.environ.get('YAPPER_EXTRACT_TIMEOUT', '120'))
@@ -807,15 +992,24 @@ def main():
         ('wait_for_model_ready', lambda: step_wait_for_model_ready(cdp_holder)),
         ('verify_worker_chunk_loaded', lambda: step_verify_worker_chunk_loaded(cdp_holder)),
         ('type_and_generate', lambda: step_type_and_generate(cdp_holder)),
+        ('assert_progress_ticks', lambda: step_assert_progress_ticks(cdp_holder)),
         ('wait_for_audio', lambda: step_wait_for_audio(cdp_holder)),
         # Document reader flow (marquee feature): upload TXT → render →
         # queue read on the already-loaded kitten-nano model → highlight
         # advances → stop, then upload PDF and confirm pdfjs extraction.
+        # MUST run before the Kokoro step: Kokoro on CPU/WASM occupies the
+        # inference queue for minutes, which would starve the reader jobs
+        # (single-worker queue) and flake highlight/PDF assertions.
         ('upload_txt_document', lambda: step_upload_txt_document(cdp_holder)),
         ('queue_reader_read', lambda: step_queue_reader_read(cdp_holder)),
         ('assert_highlight_advances', lambda: step_assert_highlight_advances(cdp_holder)),
         ('stop_reader', lambda: step_stop_reader(cdp_holder)),
         ('upload_pdf_document', lambda: step_upload_pdf_document(cdp_holder)),
+        # Live progress on Kokoro's streaming path, LAST: load the bigger
+        # model, generate a multi-sentence input, and confirm sentence-
+        # segment markers appear in the card hint while it runs. Slow on
+        # CPU/WASM, so nothing is queued behind it.
+        ('kokoro_segment_progress', lambda: step_kokoro_segment_progress(cdp_holder)),
     ]
 
     for name, fn in steps:

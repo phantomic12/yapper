@@ -253,6 +253,30 @@ export interface GenerationJob {
 export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
 
 /**
+ * Coarse generation phase for a job, published on every `jobProgress`
+ * event so the UI can show more than a bare timer.
+ */
+export type JobPhase = 'queued' | 'phonemizing' | 'synthesizing' | 'stitching';
+
+/** Payload of the `jobProgress` event (see TTSEngine.processQueue). */
+export interface JobProgress {
+  jobId: string;
+  status: 'generating';
+  phase: JobPhase;
+  /** Wall-clock ms since the job started generating. */
+  elapsedMs: number;
+  /** Segments (e.g. Kokoro sentences) completed, when the engine knows. */
+  segmentsDone?: number;
+  /** Total expected segments, when the engine knows it up front. */
+  segmentsTotal?: number;
+  /**
+   * Audio produced so far, in seconds. Engines that stream can report this
+   * incrementally; others leave it undefined until done.
+   */
+  audioSecondsSoFar?: number;
+}
+
+/**
  * Typed event surface. Consumers should prefer the `on()`/`off()` methods
  * on TTSEngine over mutating a callback bag directly. The legacy
  * `EngineEvents` callback map is still accepted by the constructor for
@@ -268,6 +292,13 @@ export type EngineEventMap = {
   engineError: (message: string) => void;
   jobUpdate: (job: GenerationJob) => void;
   jobDone: (job: GenerationJob) => void;
+  /**
+   * Emitted ~every 500ms while a job is generating (plus on each segment
+   * completion) so live UI can re-render without waiting for state changes.
+   * See `JobProgress` for payload shape. Fired from processQueue's
+   * heartbeat interval; cleared on done/error/cancel.
+   */
+  jobProgress: (progress: JobProgress) => void;
 } & Record<string, (...args: unknown[]) => void>;
 
 /** @deprecated Use `on('jobsChange', fn)` etc. instead. */
@@ -286,9 +317,28 @@ export interface EngineEvents {
 // Models with `custom: true` are handled by a custom integration
 // (e.g. Kitten TTS using onnxruntime-web directly). The custom engine
 // receives the raw job and returns a Float32Array + sample rate.
+
+/**
+ * Called by engines that generate in segments (e.g. kokoro-js's
+ * `stream()` yields one sentence at a time) so progress can cross the
+ * worker boundary while generation is still running.
+ */
+export type SegmentProgressCallback = (progress: {
+  /** Segments completed so far (1-based once the first lands). */
+  segmentsDone: number;
+  /**
+   * Total expected segments when known up front; undefined for engines
+   * that discover segments lazily (kokoro-js streams sentence-by-sentence
+   * without a total).
+   */
+  segmentsTotal?: number;
+  /** Audio produced so far, in seconds. */
+  audioSecondsSoFar?: number;
+}) => void;
+
 export interface CustomEngine {
   load(model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }>;
-  generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }>;
+  generate(model: TTSModel, voiceId: string | undefined, text: string, options?: { speed?: number; onSegmentProgress?: SegmentProgressCallback }): Promise<{ audio: Float32Array; samplingRate: number; wordTimings?: number[] }>;
   dispose(): void;
 }
 
@@ -331,6 +381,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   private jobs: GenerationJob[] = [];
   private processing = false;
   private nextJobId = 1;
+  /**
+   * Heartbeat interval handle for the currently generating job. Ticks
+   * every ~500ms emitting `jobProgress` so live UI (ticking timer) can
+   * re-render without waiting for a state change. Cleared on done,
+   * error, and cancel.
+   */
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** In-flight load loop promise. Concurrent loadModel() callers all await
    *  this single chain; the loop always ends on the latest requested model. */
   private loadingPromise: Promise<void> | null = null;
@@ -408,6 +465,56 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     this.emit('jobUpdate', job);
     if (job.status === 'done') {
       this.emit('jobDone', job);
+    }
+  }
+
+  // ─── Generation heartbeat ──────────────────────────────────────
+  /** Interval for the `jobProgress` heartbeat. 500ms ≈ smooth timer at
+   *  a tenth-of-a-second display resolution without flooding listeners. */
+  static readonly HEARTBEAT_INTERVAL_MS = 500;
+
+  /**
+   * Start emitting `jobProgress` every ~500ms for the given job so the UI
+   * re-renders (ticking timer) even when nothing else changes. Exactly one
+   * heartbeat exists at a time — starting a new one clears any previous.
+   */
+  private startHeartbeat(jobId: string, startedAt: number, phase: JobPhase = 'synthesizing'): void {
+    this.stopHeartbeat();
+    const emitProgress = (): void => {
+      this.emit('jobProgress', { jobId, status: 'generating', phase, elapsedMs: Date.now() - startedAt });
+    };
+    // Fire once immediately so the first frame of "Generating…" carries a
+    // real elapsed time instead of waiting a full interval.
+    emitProgress();
+    this.heartbeatTimer = setInterval(emitProgress, TTSEngine.HEARTBEAT_INTERVAL_MS);
+  }
+
+  /**
+   * Emit a one-off `jobProgress` carrying segment counts. Fired from the
+   * segment callback (worker path) so "sentence 2/5" style progress reaches
+   * the UI the moment a segment lands, not just on heartbeat ticks.
+   */
+  private emitSegmentProgress(
+    jobId: string,
+    startedAt: number,
+    progress: { segmentsDone: number; segmentsTotal?: number; audioSecondsSoFar?: number },
+  ): void {
+    this.emit('jobProgress', {
+      jobId,
+      status: 'generating',
+      phase: 'synthesizing',
+      elapsedMs: Date.now() - startedAt,
+      segmentsDone: progress.segmentsDone,
+      segmentsTotal: progress.segmentsTotal,
+      audioSecondsSoFar: progress.audioSecondsSoFar,
+    });
+  }
+
+  /** Stop the heartbeat. Idempotent; called on done/error/cancel/dispose. */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 
@@ -610,8 +717,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     const job = this.jobs.find(j => j.id === jobId);
     if (!job) return;
     if (job.status === 'pending' || job.status === 'generating') {
+      const wasGenerating = job.status === 'generating';
       job.status = 'cancelled';
       job.completedAt = Date.now();
+      // If the actively-generating job was cancelled, stop its progress
+      // heartbeat immediately rather than waiting for the in-flight
+      // generate() to settle (which can take seconds or hang forever).
+      if (wasGenerating) this.stopHeartbeat();
       // If this was the active job, the processQueue loop will see it on next tick
       this.notifyJobUpdate(job);
       this.notifyJobs();
@@ -655,6 +767,9 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         j => j.status === 'pending' || j.status === 'generating',
       ).length;
       startGenerationFeedback(activeJobs, 1);
+      // Live per-job progress: tick every ~500ms so the card timer moves.
+      // Cleared on done / error / cancel below — no interval outlives its job.
+      this.startHeartbeat(next.id, next.startedAt);
 
       try {
         const model = this.currentModel!;
@@ -668,7 +783,14 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         if (model.custom) {
           const custom = customEngines.get(model.modelId);
           if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
-          const result = await custom.generate(model, next.voiceId, next.text, { speed: next.speed });
+          const result = await custom.generate(model, next.voiceId, next.text, {
+            speed: next.speed,
+            onSegmentProgress: (segProgress) => {
+              // Segment granularity (e.g. Kokoro sentences). Emitted as a
+              // one-off `jobProgress`; the heartbeat keeps ticking alongside.
+              this.emitSegmentProgress(next.id, next.startedAt!, segProgress);
+            },
+          });
           audio = result.audio;
           samplingRate = result.samplingRate;
           // Engines that expose per-word start times (e.g. kokoro-js via
@@ -703,6 +825,7 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         // status during the await above; TS can't see that across methods.
         const liveStatus = next.status as JobStatus;
         if (liveStatus === 'cancelled') {
+          this.stopHeartbeat();
           this.processing = false;
           this.notifyJobs();
           continue;
@@ -724,6 +847,9 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         }
       }
 
+      // The job has settled (done or error); stop ticking. A cancelled job
+      // already stopped its own heartbeat above.
+      this.stopHeartbeat();
       this.processing = false;
       // Liveness: hide the indicator once no job is generating anymore.
       const stillActive = this.jobs.some(
@@ -736,6 +862,9 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   }
 
   dispose() {
+    // A generation in flight must not leave its heartbeat interval running
+    // after teardown.
+    this.stopHeartbeat();
     if (this.pipe && typeof this.pipe.dispose === 'function') {
       this.pipe.dispose();
     }
