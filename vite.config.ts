@@ -165,9 +165,15 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    // These pull in WASM + worker assets at runtime; pre-bundling breaks the
-    // dynamic import / ?url resolution paths they rely on.
-    exclude: ['@huggingface/transformers', 'tesseract.js', 'pdfjs-dist'],
+    // @huggingface/transformers and pdfjs-dist pull in WASM + worker assets
+    // at runtime; pre-bundling breaks the dynamic import / ?url resolution
+    // paths they rely on. Both ship real ESM, so serving them unbundled in
+    // dev works. NOTE: tesseract.js must NOT be listed here — it is plain
+    // CommonJS, and an unbundled CJS file cannot load as an ES module in
+    // the browser, which hard-crashes the whole module graph under the dev
+    // server (`npm run dev`). Vite's dep optimizer provides the CJS→ESM
+    // interop that Rollup applies automatically at build time.
+    exclude: ['@huggingface/transformers', 'pdfjs-dist'],
   },
   publicDir: 'public',
 });

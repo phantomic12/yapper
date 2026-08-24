@@ -27,20 +27,36 @@ const VOICES_FILE = 'voices.npz';
 // file (balas-world/kitten-tts-web-demo). Served from /lib/ at runtime —
 // no external repo dependency, fully self-contained.
 //
-// IMPORTANT: the URL is resolved RELATIVE TO THIS BUNDLE'S URL. This
-// file is imported by both main.ts (which Vite bundles into
-// /assets/index-XXX.js) and by inference-worker.ts (a Vite ?worker chunk
-// at /assets/inference-worker-XXX.js). Both bundles live one level deep
-// under /assets/, so `../lib/...` reaches /lib/... in either case.
-// The earlier version used `import.meta.env.BASE_URL + 'lib/...'` which
-// Vite resolved to `/assets/lib/...` (404 in production). The `../lib/`
-// path works whether the consumer is the main thread or a worker.
-const TOKENIZER_URL = new URL('../lib/kitten-tokenizer.json', import.meta.url).href;
+// IMPORTANT: how the /lib URL is resolved depends on where this code runs.
+// In production both consumers live one level deep (/assets/index-XXX.js and
+// /assets/inference-worker-XXX.js), so any "one level up" scheme reaches
+// /lib. Under the Vite DEV server, though, import.meta.url points at
+// /src/engines/kitten.ts, whose parent directories don't serve /lib — the
+// fetch would return index.html (SPA fallback) and die as invalid JSON.
+// On the main thread we therefore anchor on the document base URL (works
+// for both `/` and GitHub-Pages-style subpaths); workers have no document,
+// so there we strip two segments off the module URL instead. Either way the
+// resolved URLs are IDENTICAL to the previous `../lib` behaviour in
+// production builds.
+function publicLibUrl(file: string): string {
+  // Anchor on the document when on the main thread (correct for both `/`
+  // and GitHub-Pages-style subpaths). Workers have no document; there we
+  // climb from this module's own URL to the origin root. NOTE: the
+  // `'../'.repeat(3)` indirection is deliberate — a plain string literal
+  // as the first argument of `new URL(<literal>, import.meta.url)` gets
+  // statically rewritten by Vite's asset transform, which produces a
+  // broken /@fs/<absolute-build-path> URL whenever the literal escapes
+  // the project root (exactly our case).
+  const base = typeof document !== 'undefined'
+    ? document.baseURI
+    : new URL('../'.repeat(3), import.meta.url).href;
+  return new URL(`lib/${file}`, base).href;
+}
+const TOKENIZER_URL = publicLibUrl('kitten-tokenizer.json');
 // Phonemizer: eSpeak NG WASM wrapped by xenova/phonemizer.js.
 // Vendored to public/lib/phonemizer.js via scripts/copy-phonemizer.mjs
-// (postinstall). Resolved RELATIVE TO THIS BUNDLE — same gotcha as the
-// tokenizer: import.meta.env.BASE_URL + 'lib/...' would 404 under /assets/.
-const PHONEMIZER_URL = new URL('../lib/phonemizer.js', import.meta.url).href;
+// (postinstall).
+const PHONEMIZER_URL = publicLibUrl('phonemizer.js');
 const SAMPLE_RATE = 24000;
 
 interface VoiceEntry {
