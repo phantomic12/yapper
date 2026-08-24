@@ -5,7 +5,7 @@
 [![Deploy to GitHub Pages](https://github.com/phantomic12/yapper/actions/workflows/deploy.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/deploy.yml)
 <!-- GPU-smoke badge — add back when the Kaggle workflow is reliably green:
 [![GPU smoke test](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml)
--->
+--->
 
 **Browser text-to-speech with zero cloud.** Kokoro, Kitten, SpeechT5, and MMS-TTS run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
@@ -129,7 +129,17 @@ Useful scripts: `npm test`, `npm run test:links`, `npm run lint`, `npm run typec
 
 ### GPU testing
 
-Unit tests + build + link-health (`npm test`, `npm run test:links`) run in CI on GitHub-hosted runners. The **GPU smoke test** probes `navigator.gpu` and runs a real model load + inference on **Kaggle's free GPU tier** via `.github/workflows/gpu-smoke.yml` (weekly, on release, or manually).
+Unit tests + build + link-health (`npm test`, `npm run test:links`) run in CI on GitHub-hosted runners. The **GPU smoke test** goes further: on Kaggle's free GPU tier it launches headed Chromium over Xvfb and verifies **real WebGPU inference end-to-end** — `navigator.gpu` adapter available, model downloaded and loaded, and a full `generate()` round-trip that produces playable audio.
+
+The workflow ([`.github/workflows/gpu-smoke.yml`](.github/workflows/gpu-smoke.yml)) pushes the kernel script to Kaggle via the official `kaggle` CLI, polls until the kernel finishes, downloads its output, and gates the run on `gpu-smoke-report.json`: green requires WebGPU available + model load done + generation done with positive audio duration. Anything else — including missing or broken credentials, or a skipped generation — fails loudly. The kernel always tests the ref that triggered the run (PR merge commit, release tag, or branch).
+
+- Schedule: weekly, Sunday 06:00 UTC; also on release publish and manual dispatch
+- Credentials: repo secret `KAGGLE_API_TOKEN` = raw contents of `kaggle.json` (`{"username": ..., "key": ...}`)
+- Manual dispatch has a `break_token` input that corrupts the token on purpose, proving the run still fails loudly instead of skipping green
+- Every run attaches its report JSON + probe screenshots as the `gpu-smoke-kaggle-output` artifact
+- Kernel script: `.github/scripts/gpu_smoke_kaggle.py`
+
+Local equivalent:
 
 ```bash
 bash scripts/capture-gif.sh                                          # docker demo capture helper
@@ -137,8 +147,6 @@ docker run --rm --gpus all -v $(pwd)/out:/capture/out \
     --entrypoint python3 yapper-gif-capture \
     /capture/gpu_smoke_test.py --model kitten-nano                   # GPU probe
 ```
-
-The Kaggle kernel script is `.github/scripts/gpu_smoke_kaggle.py`. Enable the weekly run with a `KAGGLE_API_TOKEN` repo secret.
 
 ## Build
 

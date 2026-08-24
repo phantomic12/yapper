@@ -5,6 +5,16 @@ All notable changes to Yapper are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+- **GPU smoke test actually verifies inference**: the Kaggle kernel no
+  longer attempts Docker-in-Docker (impossible inside a kernel — every
+  scheduled run died with `KernelWorkerStatus.ERROR` in ~1 min while
+  Frederisk/kaggle-action crashed parsing the kernel log). The workflow
+  now drives the `kaggle` CLI directly, installs Chromium/Xvfb/Mesa in
+  the kernel, runs `docker/gif/gpu_smoke_test.py` in-process, and gates
+  green on real evidence: WebGPU adapter available + model load +
+  generation with positive audio duration in `gpu-smoke-report.json`.
+
 ### Added
 - **Honest capability banner** (`src/capability.ts`, documented in
   `docs/capability-banner.md`): three-class WebGPU detection — `none`
@@ -25,6 +35,10 @@ All notable changes to Yapper are recorded here. Versions follow
   progress" badge appears next to the queue while any job generates,
   including during main-thread synthesis that freezes timers — no silent
   state longer than 5s during load or generate.
+- **GPU smoke run proof**: manual dispatches get a `break_token` input
+  that corrupts `KAGGLE_API_TOKEN` to prove the run fails loudly; every
+  run uploads its report JSON + probe screenshots as an artifact; a
+  GPU smoke badge on the README tracks weekly kernel health.
 
 ### Architecture
 - **`docs/architecture.md`** — one-screen map of `engine`, `engines/`

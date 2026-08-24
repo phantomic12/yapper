@@ -2,35 +2,41 @@ name: GPU smoke test (Kaggle)
 
 # Runs the yapper GPU smoke test on Kaggle's free GPU tier.
 # This is the test path that requires a real GPU with display
-# passthrough — GitHub-hosted runners don't have that, so we use
-# Kaggle's GPU kernels via the `kaggle` CLI.
+# passthrough — GitHub-hosted runners don't have that, so we drive a
+# Kaggle GPU kernel directly via the official `kaggle` CLI.
 #
-# Why not Frederisk/kaggle-action anymore: that action could not
-# surface the real kernel failure (its log parser crashed with
-# "Conversion from JSON failed" on the kernel's NDJSON output), and
-# the scripts it drove relied on Docker-in-Docker, which Kaggle
-# kernels do not support. This workflow drives the same kernel
-# directly via the official `kaggle` CLI so any kernel failure is
-# reported verbatim from the Kaggle API.
-#
-# The kernel script (.github/scripts/gpu_smoke_kaggle.py) installs
-# Chromium + Xvfb + Mesa Vulkan directly in the kernel environment
-# and runs docker/gif/gpu_smoke_test.py in-process — no Docker
-# daemon required.
+# Why not Frederisk/kaggle-action: it crashed parsing the kernel's log
+# ("ConvertFrom-Json") after the kernel failed, hiding the actual error.
+# Driving the CLI ourselves reports failures verbatim and gates the run
+# on the JSON report's real verdict (model load + generation), so a
+# runner boot alone can never look green. The kernel script runs
+# docker/gif/gpu_smoke_test.py in-process — Kaggle kernels are already
+# containers, so Docker-in-Docker is impossible (that was the old bug:
+# every scheduled run died with KernelWorkerStatus.ERROR in ~1 minute).
 #
 # Triggered:
-#   - manual (workflow_dispatch)
+#   - manual (workflow_dispatch, optional break_token input to prove
+#     the run fails loudly on bad credentials)
 #   - weekly schedule (Sunday 06:00 UTC) to catch model/dependency rot
 #   - on release publish (so each release gets a GPU verification)
 #
+# The kernel clones this ref of the repo (pull/N/merge on PR runs, the
+# tag on release runs), so a dispatch actually exercises the code under
+# test — not just main.
+#
 # Required secrets:
-#   - KAGGLE_API_TOKEN: a kaggle API token (Settings → API → Create
-#     New Token). The raw JSON file contents ({ "username": ...,
-#     "key": ... }) pasted as the secret value. Add it at
+#   - KAGGLE_API_TOKEN: the raw contents of kaggle.json, i.e.
+#     { "username": "<kaggle user>", "key": "<token>" }. Create it at
+#     kaggle.com → Settings → API → Create New Token, then add it at
 #     https://github.com/phantomic12/yapper/settings/secrets/actions
 
 on:
   workflow_dispatch:
+    inputs:
+      break_token:
+        description: 'Corrupt KAGGLE_API_TOKEN to verify the run fails loudly'
+        type: boolean
+        default: false
   schedule:
     # Weekly, Sunday 06:00 UTC. Catches silent regressions in
     # transformers.js / onnxruntime-web / HF model availability.
@@ -39,14 +45,18 @@ on:
     types: [published]
 
 concurrency:
-  group: gpu-smoke
+  group: gpu-smoke-kaggle
   cancel-in-progress: false
 
 jobs:
   gpu-smoke:
     name: GPU smoke test on Kaggle
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Kernel side worst case: apt (slow-mirror retries) + Chromium download
+    # + clone + model load + generate ≈ 35 min; the poll loop allows 60 min
+    # of kernel time inside a 75-min job ceiling.
+    timeout-minutes: 75
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -54,117 +64,122 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install kaggle CLI
-        run: pip install --quiet kaggle
+        run: |
+          python -m pip install --quiet --disable-pip-version-check kaggle
 
-      - name: Configure kaggle credentials
+      # Writes ~/.kaggle/kaggle.json from the secret. Fails the run right
+      # here — with an actionable message — when the secret is missing,
+      # malformed, or deliberately corrupted (break_token: true).
+      - name: Write kaggle credentials
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          BREAK_TOKEN: ${{ inputs.break_token }}
         run: |
-          mkdir -p ~/.kaggle
-          python - "$KAGGLE_API_TOKEN" <<'EOF'
-          import json, pathlib, sys
-          token = sys.argv[1]
-          if not token:
-              raise SystemExit("KAGGLE_API_TOKEN secret is empty or not set")
-          try:
-              parsed = json.loads(token)
-          except json.JSONDecodeError:
-              raise SystemExit(
-                  "KAGGLE_API_TOKEN must be the raw JSON contents of the "
-                  "kaggle.json token file ({'username': ..., 'key': ...}). "
-                  "Get it at kaggle.com → Settings → API → Create New Token."
-              )
-          token_path = pathlib.Path.home().joinpath('.kaggle', 'kaggle.json')
-          token_path.write_text(json.dumps(parsed, indent=2))
-          token_path.chmod(0o600)
-          EOF
+          set -euo pipefail
+          ARGS=""
+          if [ "${BREAK_TOKEN}" = "true" ]; then ARGS="--break-token"; fi
+          python3 .github/scripts/write_kaggle_token.py ${ARGS}
 
-      # Driver for the kernel push + status polling. The kernel slug is
-      # derived from the title exactly like the CLI does (title → slug),
-      # so we keep the title stable and hard-code the computed slug.
+      # Ref the kernel should test. PR runs check out the merge commit via
+      # refs/pull/N/merge; release runs test the tag; everything else tests
+      # the branch that dispatched.
+      - name: Compute kernel git ref
+        id: ref
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF_NAME}"
+          FETCH=""
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            NUM=$(python3 .github/scripts/event_pr_number.py "${GITHUB_EVENT_PATH}")
+            REF="refs/pull/${NUM}/merge"
+            FETCH="+refs/pull/${NUM}/merge:${REF}"
+          fi
+          echo "kernel_ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "kernel_fetch=${FETCH}" >> "$GITHUB_OUTPUT"
+
       - name: Push kernel to Kaggle
-        env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
-          KERNEL_DIR="$RUNNER_TEMP/yapper-kaggle-kernel"
+          set -euo pipefail
+          KERNEL_DIR="$RUNNER_TEMP/yapper-gpu-smoke-kernel"
           mkdir -p "$KERNEL_DIR"
-          cp .github/scripts/gpu_smoke_kaggle.py "$KERNEL_DIR/main.py"
-          cat > "$KERNEL_DIR/kernel-metadata.json" <<JSON
-          {
-            "id": "phantomic/yappergpusmoke",
-            "title": "YapperGpuSmoke",
-            "code_file": "main.py",
-            "language": "python",
-            "kernel_type": "script",
-            "is_private": true,
-            "enable_gpu": true,
-            "enable_internet": true,
-            "competition_sources": [],
-            "dataset_sources": [],
-            "kernel_sources": []
-          }
-          JSON
+
+          # Kernel id must be <kaggle-username>/<slug>; derive the
+          # username from the token instead of hardcoding an account.
+          USERNAME=$(python3 .github/scripts/kaggle_username.py)
+          SLUG="yappergpusmoke"
+          echo "KERNEL_SLUG=${USERNAME}/${SLUG}" >> "$GITHUB_ENV"
+
+          python3 .github/scripts/make_kernel_script.py \
+            --script .github/scripts/gpu_smoke_kaggle.py \
+            --out "$KERNEL_DIR/kernel-script.py" \
+            --git-ref "${{ steps.ref.outputs.kernel_ref }}" \
+            --git-fetch "${{ steps.ref.outputs.kernel_fetch }}"
+
+          python3 .github/scripts/make_kernel_metadata.py \
+            --out "$KERNEL_DIR/kernel-metadata.json" \
+            --id "${USERNAME}/${SLUG}" \
+            --title "YapperGpuSmoke" \
+            --code-file "kernel-script.py"
+
           kaggle kernels push -p "$KERNEL_DIR"
 
-      - name: Poll kernel status and fetch output
+      # Poll until the kernel reaches a terminal state. Any non-complete
+      # terminal status fails this step immediately with the verbatim API
+      # output — no swallowing.
+      - name: Poll kernel status
         env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          POLL_ATTEMPTS: 120
+          POLL_INTERVAL_SECONDS: 30
         run: |
-          SLUG="phantomic/yappergpusmoke"
-          for i in $(seq 1 60); do
-            STATUS=$(kaggle kernels status "$SLUG" 2>&1)
-            echo "poll $i: $STATUS"
+          set -u
+          ok=""
+          for i in $(seq 1 "$POLL_ATTEMPTS"); do
+            STATUS="$(kaggle kernels status "$KERNEL_SLUG" 2>&1)" || true
+            echo "[poll ${i}/${POLL_ATTEMPTS}] $STATUS"
             case "$STATUS" in
-              *complete*) break ;;
-              *error*|*canceled*|*"not found"*)
-                echo "::error::Kernel failed: $STATUS"
-                if ! kaggle kernels output "$SLUG" -p "$RUNNER_TEMP/kernel-output" 2>/dev/null; then
-                  echo "  (no output artifacts available)"
-                fi
-                exit 1
-                ;;
+              *COMPLETE*)
+                ok="yes"; break ;;
+              *ERROR*|*CANCELED*|*CANCELLED*|*"404"*|*"401"*|*"403"*)
+                echo "::error::Kaggle kernel did not complete: $STATUS"
+                break ;;
             esac
-            sleep 30
+            sleep "$POLL_INTERVAL_SECONDS"
           done
-          # Fetch the report + screenshots from the completed kernel
-          mkdir -p "$RUNNER_TEMP/kernel-output"
-          kaggle kernels output "$SLUG" -p "$RUNNER_TEMP/kernel-output"
-          ls -la "$RUNNER_TEMP/kernel-output"
-
-      - name: Verify GPU smoke report
-        run: |
-          REPORT="$RUNNER_TEMP/kernel-output/gpu-smoke-report.json"
-          if [ ! -f "$REPORT" ]; then
-            echo "::error::gpu-smoke-report.json not found in kernel output"
-            ls -la "$RUNNER_TEMP/kernel-output" || true
+          if [ -z "$ok" ]; then
+            echo "::error::GPU smoke kernel did not complete within $((POLL_ATTEMPTS * POLL_INTERVAL_SECONDS / 60)) min — see polls above; if still RUNNING the kernel was stalled and its log will show where."
             exit 1
           fi
-          python - "$REPORT" <<'EOF'
-          import json, sys
-          report = json.load(open(sys.argv[1]))
-          webgpu = report.get("webgpu", {})
-          model_load = report.get("modelLoad", {})
-          gen = report.get("generate", {})
-          print(f"WebGPU:    available={webgpu.get('available')}  vendor={webgpu.get('vendor')!r}")
-          print(f"Model load: {model_load.get('loaded')} in {model_load.get('secondsTotal', '?')}s")
-          print(f"Generate:  {gen.get('done')} in {gen.get('secondsTotal', '?')}s")
-          failed = (
-              not webgpu.get("available")
-              or not model_load.get("loaded")
-              or gen.get("done") is False
-          )
-          if failed:
-              raise SystemExit("GPU smoke test FAILED — see report for details")
-          print("GPU smoke test PASSED")
-          EOF
+
+      - name: Fetch kernel output
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/kernel-output"
+          if ! kaggle kernels output "$KERNEL_SLUG" -p "$RUNNER_TEMP/kernel-output"; then
+            echo "::warning::could not download kernel output"
+          fi
+          ls -la "$RUNNER_TEMP/kernel-output" || true
+
+      # The gate. PASS requires the kernel's own JSON report to show:
+      # WebGPU adapter available AND the model loaded AND generation done
+      # AND at least one job produced audio with a positive duration.
+      - name: Verify GPU smoke report
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/kernel-output/gpu-smoke-report.json"
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::gpu-smoke-report.json missing from kernel output — kernel never reached the probe."
+            exit 1
+          fi
+          python3 .github/scripts/verify_gpu_report.py "$REPORT"
 
       - name: Upload kernel output artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: kaggle-gpu-smoke-output
+          name: gpu-smoke-kaggle-output
           path: ${{ runner.temp }}/kernel-output/
           if-no-files-found: ignore
