@@ -1,13 +1,20 @@
 import { MODELS, LANGUAGE_NAMES, getSupportedLanguages } from '../engine';
+import { CAPABILITY_INFO, type CapabilityClass } from '../capability';
 
 export interface LayoutOptions {
-  webgpuAvailable: boolean;
+  /** Three-class WebGPU capability of this browser ('none' | 'partial' | 'full'). */
+  capability: CapabilityClass;
   selectedModelId: string;
 }
 
 /** Build the full app markup (shell + panels). Behavior-preserving extract from main. */
 export function buildAppMarkup(opts: LayoutOptions): string {
-  const { webgpuAvailable, selectedModelId } = opts;
+  const { capability, selectedModelId } = opts;
+  const capInfo = CAPABILITY_INFO[capability];
+  const selectedModel = MODELS.find(m => m.id === selectedModelId);
+  // Main-thread models (SpeechT5, MMS) freeze the UI during synthesis —
+  // warn up front so the choice is honest (see docs/capability-banner.md).
+  const showMainThreadWarning = !!selectedModel?.runsOnMainThread;
 
   return `
     <div class="app">
@@ -40,9 +47,16 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       </header>
 
       <!-- GPU Status -->
-      <div class="gpu-status" role="status" aria-live="polite">
-        <div class="gpu-status__dot ${webgpuAvailable ? 'gpu-status__dot--on' : 'gpu-status__dot--off'}"></div>
-        <span class="gpu-status__label">${webgpuAvailable ? 'WebGPU detected — GPU-accelerated inference' : 'WebGPU unavailable — using CPU fallback (WASM)'}</span>
+      <div class="gpu-status" role="status" aria-live="polite" title="${capInfo.detail}">
+        <div class="gpu-status__dot ${capability === 'full' ? 'gpu-status__dot--on' : capability === 'partial' ? 'gpu-status__dot--partial' : 'gpu-status__dot--off'}"></div>
+        <span class="gpu-status__label">${capInfo.label}</span>
+      </div>
+
+      <!-- Main-thread warning: honest about UI freezes during synthesis (AC2).
+           Hidden by default; re-shown/hidden when the selection changes. -->
+      <div class="main-thread-warning" id="main-thread-warning" role="alert" style="${showMainThreadWarning ? '' : 'display:none'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>${selectedModel?.name ?? 'This model'} runs on the main thread — generation may briefly freeze the page while it synthesizes audio. Kokoro and Kitten stay responsive in a background worker.</span>
       </div>
 
       <!-- Model Selection -->
@@ -149,7 +163,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </label>
             <label class="ocr-mode-option">
               <input type="radio" name="ocr-mode" value="llm" />
-              <span>Florence-2 LLM (smart, ~200MB download)${!webgpuAvailable ? ' — slow on CPU' : ''}</span>
+              <span>Florence-2 LLM (smart, ~200MB download)${capability !== 'full' ? ' — slow on CPU' : ''}</span>
             </label>
           </div>
           <div class="document-progress-row" id="document-progress-row" hidden>
@@ -184,6 +198,12 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
           <span id="generate-btn-label">Add to queue</span>
         </button>
+        <!-- Generation liveness (AC4): visible the whole time a job is
+             generating, even when a main-thread model freezes timers. -->
+        <div class="generation-feedback" id="generation-feedback" role="status" aria-live="polite">
+          <span class="generation-feedback__dot" aria-hidden="true"></span>
+          <span id="generation-feedback-text">Generating…</span>
+        </div>
         <span class="queue-count" id="queue-count" hidden></span>
         <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
       </div>

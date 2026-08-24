@@ -156,7 +156,14 @@ export function bindModelPanelEvents(
       await state.engine!.loadModel(state.selectedModel);
       opts.onModelLoaded?.();
     } catch (err) {
-      showStatus('error', `Load failed: ${err instanceof Error ? err.message : String(err)}`, true);
+      // Retry affordance: a failed HF download must not be a dead end —
+      // the button re-runs loadModel for the same model (acceptance #1).
+      showStatus(
+        'error',
+        `Load failed: ${err instanceof Error ? err.message : String(err)}`,
+        true,
+        { label: 'Retry', onClick: () => retryLoadSelectedModel(state) },
+      );
     } finally {
       loadBtn.disabled = false;
     }
@@ -183,6 +190,30 @@ function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): vo
   card.setAttribute('aria-checked', 'true');
   renderVoiceSection(state);
   renderModelCardStatuses(state);
+  updateMainThreadWarning(state);
+}
+
+/**
+ * Show the prominent in-app warning while a main-thread model (SpeechT5,
+ * MMS) is selected — generation with those models freezes the page, which
+ * contradicts the non-blocking promise that holds for worker-backed models
+ * unless we say so up front (acceptance criterion 2).
+ */
+export function updateMainThreadWarning(state: AppState): void {
+  const warning = document.getElementById('main-thread-warning');
+  if (!warning) return;
+  if (state.selectedModel.runsOnMainThread) {
+    warning.style.display = '';
+    const span = warning.querySelector('span');
+    if (span) {
+      span.textContent =
+        `${state.selectedModel.name} runs on the main thread — generation may `
+        + 'briefly freeze the page while it synthesizes audio. Kokoro and Kitten '
+        + 'stay responsive in a background worker.';
+    }
+  } else {
+    warning.style.display = 'none';
+  }
 }
 
 function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1): void {
@@ -191,6 +222,17 @@ function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1): void {
   const idx = visible.indexOf(current);
   const next = visible[idx + direction];
   next?.focus();
+}
+
+/**
+ * Re-run the load for the currently selected model (Retry button target).
+ * Reuses the load button's handler path so all the same disabled/label
+ * bookkeeping applies; returns silently when no engine is wired yet.
+ */
+async function retryLoadSelectedModel(state: AppState): Promise<void> {
+  if (!state.engine) return;
+  const loadBtn = document.getElementById('load-btn') as HTMLButtonElement | null;
+  if (loadBtn && !loadBtn.disabled) loadBtn.click();
 }
 
 export function handleEngineStateChange(
@@ -258,9 +300,20 @@ export function handleLoadProgress(loaded: number, total: number, modelName: str
   const sizeMB = total > 0 ? (total / 1024 / 1024).toFixed(1) : '?';
 
   fill.style.width = `${pct}%`;
-  text.textContent = `Downloading ${modelName}… ${pct}% (${sizeMB} MB)`;
+  // Before the first byte arrives there is no percentage to show — say what
+  // we're doing instead of leaving a bare bar (no silent state >5s).
+  if (loaded <= 0) {
+    text.textContent = `Contacting huggingface.co for ${modelName}…`;
+  } else {
+    text.textContent = `Downloading ${modelName}… ${pct}% (${sizeMB} MB)`;
+  }
 }
 
 export function handleEngineError(msg: string): void {
-  showStatus('error', msg);
+  // Assertive + Retry affordance: download failures (flaky network,
+  // blocked huggingface.co) must be recoverable in one click.
+  showStatus('error', msg, true, { label: 'Retry', onClick: () => {
+    const loadBtn = document.getElementById('load-btn') as HTMLButtonElement | null;
+    loadBtn?.click();
+  } });
 }

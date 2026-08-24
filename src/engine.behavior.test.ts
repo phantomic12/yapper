@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   TTSEngine,
   MODELS,
@@ -31,7 +31,7 @@ class MockEngine {
   /** Optional timings to attach to each generated job. */
   wordTimings?: number[];
 
-  async load(_model: TTSModel): Promise<{ sampleRate: number }> {
+  async load(_model: TTSModel, _progress?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }> {
     return { sampleRate: this.sampleRate };
   }
 
@@ -456,5 +456,84 @@ describe('TTSEngine — model switching mid-queue', () => {
     expect(stillPendingKitten).toBeUndefined();
     // And they should carry the "Model changed" reason
     expect(cancelled.every(j => j.error === 'Model changed before generation started')).toBe(true);
+  });
+});
+
+// ─── Load watchdog + generation liveness (AC4) ───────────────────
+describe('TTSEngine — no silent states', () => {
+  let mock: MockEngine;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    unregisterCustomEngine('KittenML/kitten-tts-nano-0.8-int8');
+  });
+
+  it('emits engineError when a load stalls with no progress for >5s (AC1/AC4)', async () => {
+    mock = new MockEngine();
+    // Load hangs forever — simulates a stalled HF download on a flaky
+    // network or blocked huggingface.co.
+    mock.load = () => new Promise<{ sampleRate: number }>(() => {});
+    registerCustomEngine('KittenML/kitten-tts-nano-0.8-int8', mock);
+
+    const errors: string[] = [];
+    const engine = new TTSEngine({ onEngineError: (m) => { errors.push(m); } });
+
+    void engine.loadModel(findModel('kitten-nano'));
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(errors).toEqual([]); // no premature firing, no silent success either
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toContain('stalled');
+    expect(errors[0]).toContain('retry');
+
+    // The engine surfaces the error state so the UI can show Retry.
+    expect(engine.getEngineState()).toBe('error');
+  });
+
+  it('does not fire the watchdog when progress keeps arriving', async () => {
+    mock = new MockEngine();
+    mock.generateMs = 5;
+    registerCustomEngine('KittenML/kitten-tts-nano-0.8-int8', mock);
+    // Slow but alive: progress callbacks every second keep the watchdog fed.
+    mock.load = (_model, progress) =>
+      new Promise<{ sampleRate: number }>((resolve) => {
+        let n = 0;
+        const iv = setInterval(() => {
+          n += 1;
+          progress?.(n * 10, 100);
+          if (n >= 7) {
+            clearInterval(iv);
+            resolve({ sampleRate: 24000 });
+          }
+        }, 1000);
+      });
+
+    const errors: string[] = [];
+    const engine = new TTSEngine({ onEngineError: (m) => { errors.push(m); } });
+
+    const loading = engine.loadModel(findModel('kitten-nano'));
+    await vi.advanceTimersByTimeAsync(8000);
+    await loading;
+
+    expect(errors).toEqual([]);
+    expect(engine.getEngineState()).toBe('ready');
+  });
+
+  it('a failed load still reaches error state promptly (retry path)', async () => {
+    mock = new MockEngine();
+    mock.load = () => Promise.reject(new Error('unable to connect to huggingface.co'));
+    registerCustomEngine('KittenML/kitten-tts-nano-0.8-int8', mock);
+
+    const errors: string[] = [];
+    const engine = new TTSEngine({ onEngineError: (m) => { errors.push(m); } });
+
+    await engine.loadModel(findModel('kitten-nano')).catch(() => {});
+    expect(errors.some(m => m.includes('Load failed'))).toBe(true);
+    expect(engine.getEngineState()).toBe('error');
   });
 });

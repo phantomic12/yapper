@@ -10,7 +10,7 @@
        (model downloads). wasm-unsafe-eval is required for ONNX Runtime Web
        and Tesseract.js WASM. blob: is needed for Worker creation and audio
        playback. data: is used for data URIs in SVG icons and audio. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co blob:; img-src 'self' data: https://huggingface.co; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; font-src 'self' data:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; connect-src 'self' https://huggingface.co https://cdn-lfs.huggingface.co https://us.aws.cdn.hf.co blob:; img-src 'self' data: https://huggingface.co; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; font-src 'self' data:;" />
   <!-- Favicons. Browsers prefer 32x32 PNG for the tab; SVG is the fallback
        for browsers that support vector favicons. See public/icons/ for the
        full set (16, 32, 48, 152, 167, 180, 192, 256, 512, 1024). -->

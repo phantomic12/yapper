@@ -102,26 +102,41 @@ function copyOrtWasmPlugin(): Plugin {
     apply: 'build',
     closeBundle() {
       const projectRoot = process.cwd();
-      const ortDist = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
+      // Prefer the ORT version transformers.js actually pins (nested dep);
+      // fall back to the top-level install when hoisted.
+      const hfOrtDist = resolve(
+        projectRoot, 'node_modules', '@huggingface', 'transformers',
+        'node_modules', 'onnxruntime-web', 'dist',
+      );
+      const topLevelDist = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
+      const ortDist = existsSync(hfOrtDist) ? hfOrtDist : topLevelDist;
       const destDir = resolve(projectRoot, 'public', 'ort-wasm');
-      if (!existsSync(ortDist)) {
-        // onnxruntime-web is a dep, so this shouldn't fire on a healthy
-        // checkout. Fail loud rather than silently ship a broken dist.
-        throw new Error(
-          `onnxruntime-web dist not found at ${ortDist}. ` +
-          `Run \`npm install\` or check the dependency.`,
-        );
-      }
       mkdirSync(destDir, { recursive: true });
-      const files = readdirSync(ortDist).filter((f) => f.endsWith('.wasm'));
+      // Runtime loaders (.mjs) + binaries (.wasm): engine.ts sets
+      // env.backends.onnx.wasm.wasmPaths to /ort-wasm/ so main-thread
+      // pipelines never touch the jsdelivr CDN (blocked by CSP script-src).
+      const files = readdirSync(ortDist)
+        .filter((f) => f.startsWith('ort-wasm') && (f.endsWith('.wasm') || f.endsWith('.mjs')));
       let copied = 0;
+      // Vite rewrites BASE_URL ('./') relative to the importing bundle, so at
+      // runtime ORT requests <bundle-dir>/ort-wasm/* (i.e. dist/assets/…).
+      // Cover every location the runtime can plausibly ask for.
+      const assetDestDir = resolve(projectRoot, 'dist', 'assets', 'ort-wasm');
+      const distDestDir = resolve(projectRoot, 'dist', 'ort-wasm');
+      mkdirSync(assetDestDir, { recursive: true });
+      mkdirSync(distDestDir, { recursive: true });
       for (const file of files) {
         const src = resolve(ortDist, file);
-        const dest = resolve(destDir, file);
-        copyFileSync(src, dest);
+        // public/ keeps the files for the next `vite preview`/dev serve;
+        // dist/ is written too because Vite copies public/ → dist/ at the
+        // START of a build (closeBundle runs after that copy), so without
+        // this a fresh CI build would ship no ort-wasm directory at all.
+        copyFileSync(src, resolve(destDir, file));
+        copyFileSync(src, resolve(distDestDir, file));
+        copyFileSync(src, resolve(assetDestDir, file));
         copied++;
       }
-      console.log(`[copy-ort-wasm] copied ${copied} WASM files → public/ort-wasm/`);
+      console.log(`[copy-ort-wasm] copied ${copied} ORT loader/WASM files → public|dist|dist/assets /ort-wasm/`);
     },
   };
 }

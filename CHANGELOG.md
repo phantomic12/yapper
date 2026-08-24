@@ -6,6 +6,27 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **Honest capability banner** (`src/capability.ts`, documented in
+  `docs/capability-banner.md`): three-class WebGPU detection — `none`
+  (no API: Firefox stable, iOS Safari), `partial` (API present but adapter
+  unusable/stalled: Firefox Nightly behind its flag), `full` — each with
+  distinct truthful banner wording, a colored status dot, and a hover
+  explanation. Detection never hangs boot: adapter requests race a 2s
+  timeout.
+- **Download failure recovery**: failed Hugging Face downloads surface an
+  assertive error banner with a one-click **Retry** button, and an engine
+  watchdog reports a stalled download ("no progress for 5s") instead of
+  hanging silently on flaky networks or blocked huggingface.co.
+- **Main-thread model warning**: selecting SpeechT5 or an MMS-TTS model
+  shows a prominent in-app warning that generation may briefly freeze the
+  page (those models run Transformers.js on the main thread), so the
+  non-blocking promise stays honest about which models are worker-backed.
+- **Generation liveness indicator**: a pulsing "Generating audio… N jobs in
+  progress" badge appears next to the queue while any job generates,
+  including during main-thread synthesis that freezes timers — no silent
+  state longer than 5s during load or generate.
+
+### Architecture
 - **`docs/architecture.md`** — one-screen map of `engine`, `engines/`
   (including `WorkerBackedEngine`), `document-reader`, `reader`, and
   the optional `docs`/`ocr` path.
@@ -32,6 +53,13 @@ All notable changes to Yapper are recorded here. Versions follow
   `copy-ort-wasm` Vite plugin.
 
 ### Fixed
+- **CSP blocks Hugging Face xet CDN**: model weights for xet-backed repos
+  (`Xenova/mms-tts-*`, SpeechT5, etc.) are served from
+  `https://us.aws.cdn.hf.co`, which the Content-Security-Policy did not
+  allow in `connect-src` — downloads failed with `Failed to fetch` on any
+  fresh browser (no cache), making retry recovery impossible. The origin is
+  now whitelisted alongside `cdn-lfs.huggingface.co`. Found by the AC1
+  blocked-network live test (`qa/verify_capability_ux.py`).
 - **New `copy-ort-wasm` Vite plugin** (`vite.config.ts`) copies every
   onnxruntime-web WASM flavor into `public/ort-wasm/` with stable
   names. Belt-and-braces fallback: the Vite-emitted content-hashed

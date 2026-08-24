@@ -1,0 +1,44 @@
+{
+  "browser": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36",
+  "url": "http://10.99.0.18:5199/",
+  "all_pass": true,
+  "checks": {
+    "AC3_banner_wording_matches_capability": {
+      "ok": true,
+      "detail": "banner='WebGPU unavailable \u2014 using CPU fallback (WASM)' navigator.gpu=False"
+    },
+    "AC2_warning_hidden_on_worker_model": {
+      "ok": true,
+      "detail": "initial model=kitten-nano, display=display:none"
+    },
+    "AC2_warning_shown_for_speecht5": {
+      "ok": true,
+      "detail": "SpeechT5 runs on the main thread \u2014 generation may briefly freeze the page while it synthesizes audio. Kokoro and Kitten "
+    },
+    "AC2_warning_hides_again": {
+      "ok": true,
+      "detail": ""
+    },
+    "AC1_error_state_with_retry_when_blocked": {
+      "ok": true,
+      "detail": "after 0.1s banner='Load failed: Failed to fetch\\nRetry'"
+    },
+    "AC1_recovery_after_unblock_via_retry": {
+      "ok": true,
+      "detail": "generate enabled 4.9s after retry; banner='MMS-TTS (English) is ready. Type something and hit Generate (or queue several).'"
+    },
+    "AC4_generation_liveness_badge_visible": {
+      "ok": true,
+      "detail": "badge up while kitten-nano (worker-backed, non-blocking) generates"
+    },
+    "generation_completes": {
+      "ok": true,
+      "detail": "audio=1.6s (kitten-nano; earlier mms-tts-eng job also completed post-recovery)"
+    },
+    "AC4_liveness_badge_hidden_after_done": {
+      "ok": true,
+      "detail": ""
+    }
+  },
+  "console_errors": []
+}

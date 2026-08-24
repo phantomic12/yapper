@@ -1,5 +1,5 @@
 import './style.css';
-import { detectWebGPU } from './engine';
+import { detectCapability } from './capability';
 import { registerEngines, createAppEngine } from './app-bootstrap';
 import { createAppState } from './app-state';
 import { buildAppMarkup } from './ui/layout';
@@ -27,7 +27,10 @@ const root = document.getElementById('app') as HTMLDivElement;
 const state = createAppState();
 
 async function render(): Promise<void> {
-  state.webgpuAvailable = await detectWebGPU();
+  // Three-class capability detection ('none' | 'partial' | 'full') drives
+  // the honest banner wording — see src/capability.ts and
+  // docs/capability-banner.md.
+  state.capability = (await detectCapability()).capability;
 
   state.engine = createAppEngine({
     onJobsChange: (jobs) => {
@@ -44,7 +47,7 @@ async function render(): Promise<void> {
   });
 
   root.innerHTML = buildAppMarkup({
-    webgpuAvailable: state.webgpuAvailable,
+    capability: state.capability,
     selectedModelId: state.selectedModel.id,
   });
 

@@ -1,5 +1,7 @@
-import { pipeline } from '@huggingface/transformers';
+import { pipeline, env } from '@huggingface/transformers';
 import { EventEmitter } from './events';
+import { detectCapability } from './capability';
+import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
 
@@ -76,6 +78,14 @@ export interface TTSModel {
    * between nano/mini/micro). Defaults to the repo's standard file.
    */
   modelFile?: string;
+  /**
+   * True when inference for this model runs on the MAIN thread via
+   * Transformers.js (SpeechT5, MMS-TTS). Long generations freeze the UI
+   * while they synthesize — the UI shows a warning when such a model is
+   * selected, and the queue shows a liveness indicator while generating.
+   * Custom worker-backed models (Kokoro, Kitten) leave this unset.
+   */
+  runsOnMainThread?: boolean;
 }
 
 export const MODELS: TTSModel[] = [
@@ -119,6 +129,7 @@ export const MODELS: TTSModel[] = [
     dtype: 'fp32',
     language: 'en',
     sizeMB: 330,
+    runsOnMainThread: true,
     voices: [
       {
         id: 'cmarctic',
@@ -188,15 +199,15 @@ export const MODELS: TTSModel[] = [
   //    test (`src/links.test.ts`) skips auth-failed URLs, so an
   //    anonymous probe failure (401/403) won't break CI; a clean 200
   //    is required to be added here.
-  { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-deu', name: 'MMS-TTS (German)',      modelId: 'Xenova/mms-tts-deu', description: 'Meta MMS for German.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'de', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-por', name: 'MMS-TTS (Portuguese)',  modelId: 'Xenova/mms-tts-por', description: 'Meta MMS for Portuguese.',  category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pt', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-rus', name: 'MMS-TTS (Russian)',     modelId: 'Xenova/mms-tts-rus', description: 'Meta MMS for Russian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ru', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-kor', name: 'MMS-TTS (Korean)',      modelId: 'Xenova/mms-tts-kor', description: 'Meta MMS for Korean.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ko', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-hin', name: 'MMS-TTS (Hindi)',       modelId: 'Xenova/mms-tts-hin', description: 'Meta MMS for Hindi.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'hi', sizeMB: 50, voices: [], defaultVoiceId: '' },
-  { id: 'mms-tts-ara', name: 'MMS-TTS (Arabic)',      modelId: 'Xenova/mms-tts-ara', description: 'Meta MMS for Arabic.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ar', sizeMB: 50, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-deu', name: 'MMS-TTS (German)',      modelId: 'Xenova/mms-tts-deu', description: 'Meta MMS for German.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'de', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-por', name: 'MMS-TTS (Portuguese)',  modelId: 'Xenova/mms-tts-por', description: 'Meta MMS for Portuguese.',  category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'pt', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-rus', name: 'MMS-TTS (Russian)',     modelId: 'Xenova/mms-tts-rus', description: 'Meta MMS for Russian.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ru', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-kor', name: 'MMS-TTS (Korean)',      modelId: 'Xenova/mms-tts-kor', description: 'Meta MMS for Korean.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ko', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-hin', name: 'MMS-TTS (Hindi)',       modelId: 'Xenova/mms-tts-hin', description: 'Meta MMS for Hindi.',       category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'hi', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
+  { id: 'mms-tts-ara', name: 'MMS-TTS (Arabic)',      modelId: 'Xenova/mms-tts-ara', description: 'Meta MMS for Arabic.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'ar', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
 ];
 
 // ─── Job queue ───────────────────────────────────────────────────
@@ -291,20 +302,23 @@ export function unregisterCustomEngine(modelId: string): void {
   customEngines.delete(modelId);
 }
 
+// ─── Transformers.js runtime configuration ───────────────────────
+// Main-thread pipelines (SpeechT5, MMS) resolve their ONNX Runtime loader
+// + WASM from env.backends.onnx.wasm.wasmPaths. Without this they default
+// to the jsdelivr CDN, which the app's CSP (script-src 'self') blocks —
+// so every main-thread load failed with "no available backend found" on
+// cold browsers. `copy-ort-wasm` (vite.config.ts) ships the exact ORT
+// build transformers.js pins under /ort-wasm/ at build time.
+env.backends.onnx!.wasm!.wasmPaths = `${import.meta.env.BASE_URL}ort-wasm/`;
+
 // ─── GPU detection ───────────────────────────────────────────────
+/**
+ * Boolean convenience wrapper over `detectCapability()`. The banner and
+ * docs use the richer three-class classification (see src/capability.ts);
+ * most call sites only need "is WebGPU usable at all".
+ */
 export async function detectWebGPU(): Promise<boolean> {
-  if (!('gpu' in navigator)) return false;
-  try {
-    // Cast to the WebGPU-augmented Navigator defined in lib.dom.d.ts.
-    // This avoids `as any` while staying compatible across TS versions
-    // where the WebGPU types may be partial.
-    const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-    if (!gpu) return false;
-    const adapter = await gpu.requestAdapter();
-    return !!adapter;
-  } catch {
-    return false;
-  }
+  return (await detectCapability()).capability === 'full';
 }
 
 // ─── TTS Engine ──────────────────────────────────────────────────
@@ -322,6 +336,38 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   private loadingPromise: Promise<void> | null = null;
   /** Most recently requested model (latest-wins while a load loop runs). */
   private pendingLoadModel: TTSModel | null = null;
+
+  // ─── Load watchdog (no silent state >5s) ──────────────────────
+  // HF downloads can stall on flaky networks or blocked huggingface.co.
+  // If no progress event arrives within this window, surface an error
+  // state with a Retry affordance instead of hanging silently forever.
+  private static readonly LOAD_STALL_TIMEOUT_MS = 5000;
+  private loadStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastLoadActivityAt = 0;
+
+  private startLoadStallWatchdog(onStalled: () => void): void {
+    this.stopLoadStallWatchdog();
+    this.lastLoadActivityAt = Date.now();
+    const tick = () => {
+      if (Date.now() - this.lastLoadActivityAt >= TTSEngine.LOAD_STALL_TIMEOUT_MS) {
+        onStalled();
+        return; // fired once; cleared by the caller's finally
+      }
+      this.loadStallTimer = setTimeout(tick, TTSEngine.LOAD_STALL_TIMEOUT_MS / 5);
+    };
+    this.loadStallTimer = setTimeout(tick, TTSEngine.LOAD_STALL_TIMEOUT_MS);
+  }
+
+  private touchLoadActivity(): void {
+    this.lastLoadActivityAt = Date.now();
+  }
+
+  private stopLoadStallWatchdog(): void {
+    if (this.loadStallTimer !== null) {
+      clearTimeout(this.loadStallTimer);
+      this.loadStallTimer = null;
+    }
+  }
 
   constructor(events: EngineEvents = {}) {
     super();
@@ -421,6 +467,20 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
 
       this.setEngineState('loading');
       this.emit('loadProgress', 0, 1, model.name);
+      // No silent state >5s: if no download progress arrives within the
+      // window (flaky network, blocked huggingface.co), surface an error
+      // with a Retry affordance instead of hanging silently.
+      this.startLoadStallWatchdog(() => {
+        // Surface BOTH the message (drives the Retry banner) and the state
+        // transition (re-enables the load button, hides the progress bar).
+        this.emit(
+          'engineError',
+          `Loading ${model.name} stalled — no download progress for `
+          + `${Math.round(TTSEngine.LOAD_STALL_TIMEOUT_MS / 1000)}s. `
+          + 'Check your network connection (is huggingface.co reachable?) and retry.',
+        );
+        this.setEngineState('error');
+      });
 
       try {
         await this.doLoad(model);
@@ -429,6 +489,8 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         // stale failure as terminal — doLoad already emitted engineError.
         if (!this.pendingLoadModel) throw err;
         continue;
+      } finally {
+        this.stopLoadStallWatchdog();
       }
 
       // Concurrent loadModel(same) only sets pendingLoadModel — don't reload
@@ -465,6 +527,7 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           throw new Error(`No custom engine registered for model ${model.modelId}`);
         }
         const { sampleRate } = await custom.load(model, (loaded, total) => {
+          this.touchLoadActivity();
           this.emit('loadProgress', loaded, total, model.name);
         });
         this.currentSampleRate = sampleRate;
@@ -484,12 +547,14 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           dtype: model.dtype ?? 'q8',
           progress_callback: (progress: LoadProgress) => {
             if (progress.status === 'progress') {
+              this.touchLoadActivity();
               this.emit('loadProgress',
                 progress.loaded ?? 0,
                 progress.total ?? 1,
                 model.name,
               );
             } else if (progress.status === 'done') {
+              this.touchLoadActivity();
               this.emit('loadProgress', 1, 1, model.name);
             }
           },
@@ -583,6 +648,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
       next.startedAt = Date.now();
       this.notifyJobUpdate(next);
       this.notifyJobs();
+      // Liveness: show the pulsing indicator immediately so even a
+      // main-thread model that freezes the page during synthesis never
+      // leaves a silent queue (acceptance: no silent state >5s).
+      const activeJobs = this.jobs.filter(
+        j => j.status === 'pending' || j.status === 'generating',
+      ).length;
+      startGenerationFeedback(activeJobs, 1);
 
       try {
         const model = this.currentModel!;
@@ -653,6 +725,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
       }
 
       this.processing = false;
+      // Liveness: hide the indicator once no job is generating anymore.
+      const stillActive = this.jobs.some(
+        j => j.status === 'pending' || j.status === 'generating',
+      );
+      if (!stillActive) stopGenerationFeedback();
       this.notifyJobUpdate(next);
       this.notifyJobs();
     }
