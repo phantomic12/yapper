@@ -1442,7 +1442,7 @@ body {
   gap: 8px 16px;
   margin-top: 10px;
   padding: 10px 12px;
-  background: var(--surface);
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.85rem;
@@ -1459,6 +1459,125 @@ body {
 .ocr-mode-option input:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+/* ─── Mobile & touch polish ─────────────────────────────────
+   Phone-width fixes from the t_88fd1f4b audit (360x800 / 390x844):
+   tap targets below the 44px comfort / 24px accessibility floor,
+   iOS safe areas, and one-handed reader overlay ergonomics. */
+@media (max-width: 600px) {
+  /* Job card cancel "×" measured 22x22 — well under any tap minimum.
+     Enlarge to a 36x36 box and pull in surrounding whitespace with
+     negative margins so the effective hit area is ~48px without
+     growing the header row. */
+  .job-card__cancel {
+    width: 36px;
+    height: 36px;
+    margin: -6px;
+    font-size: 1.5rem;
+  }
+
+  /* Footer attribution links rendered at 16px tall — impossible taps.
+     Give the links inline-block padding to reach a 44px row without
+     changing the footer's visual density. */
+  .footer { padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+  .footer a {
+    display: inline-block;
+    padding: 12px 2px;
+    margin: -8px 0;
+  }
+
+  /* Speed slider track was 4px tall — unusable as a thumb target and
+     invisible against dark backgrounds. Thicken track + thumb. */
+  #speed-slider {
+    min-width: 160px;
+    height: 28px;
+    background: transparent;
+  }
+  #speed-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-hover);
+  }
+  #speed-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 26px;
+    height: 26px;
+    margin-top: -10px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: 2px solid var(--bg-elevated);
+  }
+  #speed-slider::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-hover);
+  }
+  #speed-slider::-moz-range-thumb {
+    width: 26px;
+    height: 26px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: 2px solid var(--bg-elevated);
+  }
+
+  /* "Try sample" pill measured 25px tall. Pad up to a 40px row. */
+  .model-card__sample {
+    min-height: 40px;
+    padding: 9px 16px;
+    margin-top: 10px;
+  }
+
+  /* Job card action button ("Download WAV") measured ~30px tall. */
+  .job-card__btn { min-height: 40px; }
+
+  /* Language select measured 40px tall; nudge to 46px on phones. */
+  .lang-select {
+    max-width: none;
+    padding-top: 13px;
+    padding-bottom: 13px;
+  }
+
+  /* Voice cards measured 43px tall; pad to 48px for comfortable radio
+     selection with a thumb. */
+  .voice-card { padding: 14px 14px; }
+
+  /* Generating overlay card padding (48/56) nearly filled small screens.
+     Tighten and cap width. */
+  .gen-overlay__card {
+    padding: 28px 24px;
+    max-width: calc(100vw - 32px);
+  }
+
+  /* Document action buttons wrap into a column; make them full-width,
+     thumb-sized rows when they do. */
+  .document-actions { gap: 10px; }
+  .document-btn { flex: 1 1 auto; justify-content: center; min-height: 46px; }
+
+  /* Reader overlay: controls were cramped top-right (~40px tall).
+     Stack the title above a full-width control row of ≥46px buttons
+     within thumb reach. */
+  .reader-overlay__header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-top));
+  }
+  .reader-overlay__title { text-align: center; }
+  .reader-overlay__header-controls { justify-content: center; }
+  .reader-overlay__header-controls .document-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 46px;
+    padding: 10px 18px;
+  }
+
+  /* Legend items are informational (not interactive) but sit in thumb
+     range; keep them out of accidental-tap territory by pinning them
+     to the very bottom edge with safe-area padding. */
+  .reader-overlay__legend {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 
 /* Reduced motion */

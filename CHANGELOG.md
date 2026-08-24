@@ -60,6 +60,26 @@ All notable changes to Yapper are recorded here. Versions follow
   fresh browser (no cache), making retry recovery impossible. The origin is
   now whitelisted alongside `cdn-lfs.huggingface.co`. Found by the AC1
   blocked-network live test (`qa/verify_capability_ux.py`).
+- **Mobile polish pass** (audited at 360x800 and 390x844): phone-width
+  tap targets brought to comfortable sizes — job-card cancel "×"
+  (~48px effective hit area), speed slider track/thumb, reader-overlay
+  Pause/Stop/Close buttons (≥46px, stacked full-width), document
+  action buttons, voice cards, language select, "Try sample" and
+  "Download WAV" buttons; footer attribution links given 44px-tall
+  hit areas; generating overlay card no longer fills small screens.
+- **Service worker offline shell actually works now**: `favicon.svg`
+  lived at the repo root (outside `public/`) so it was never emitted
+  into `dist/` and returned 404 in production; `sw.js`
+  `cache.addAll([...])` therefore failed on install and the worker
+  went redundant — no offline caching at all. Moved the file into
+  `public/`; verified offline reload now serves the cached shell
+  (SW active, 9 assets cached).
+- **iOS safe areas**: `viewport-fit=cover` added to the viewport meta;
+  reader overlay header/legend and footer respect
+  `env(safe-area-inset-*)`.
+- **Broken CSS variable** in `.ocr-mode-selector`: referenced
+  non-existent `var(--surface)` (transparent background); now
+  `var(--bg-surface)`.
 - **New `copy-ort-wasm` Vite plugin** (`vite.config.ts`) copies every
   onnxruntime-web WASM flavor into `public/ort-wasm/` with stable
   names. Belt-and-braces fallback: the Vite-emitted content-hashed
