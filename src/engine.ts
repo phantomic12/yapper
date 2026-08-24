@@ -4,6 +4,7 @@ import { detectCapability } from './capability';
 import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
+import { REQUEST_TIMEOUTS, TimeoutError, formatGenerateTimeout } from './engines/timeouts';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -724,7 +725,22 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
       // heartbeat immediately rather than waiting for the in-flight
       // generate() to settle (which can take seconds or hang forever).
       if (wasGenerating) this.stopHeartbeat();
-      // If this was the active job, the processQueue loop will see it on next tick
+      // If the cancelled job is the one currently generating, tear down its
+      // inference session NOW instead of waiting for the straggler: a hung or
+      // merely slow generation would otherwise keep the queue blocked (and,
+      // with a wedged WebGPU call, blocked forever) even though the user has
+      // already given up on it. The custom engine rejects its pending request
+      // and disposes itself; the next generate lazily reloads a fresh session.
+      // Non-custom engines run on the main thread and cannot be aborted, but
+      // they're bounded by the generate watchdog in processQueue, so at worst
+      // they convert to a TimeoutError instead of stalling the queue forever.
+      if (this.processing && this.currentModel && job.modelId === this.currentModel.id) {
+        const active = customEngines.get(this.currentModel.modelId);
+        const cancellable = active as unknown as { cancelActiveGenerate?: () => void } | undefined;
+        if (typeof cancellable?.cancelActiveGenerate === 'function') {
+          cancellable.cancelActiveGenerate();
+        }
+      }
       this.notifyJobUpdate(job);
       this.notifyJobs();
     }
@@ -780,17 +796,39 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         let audio: Float32Array;
         let samplingRate: number;
 
+        // Watchdog for the generation below. Custom (worker) engines already
+        // enforce their own per-request bound internally, so the race here is
+        // a no-op for them; main-thread pipe() calls have no internal bound,
+        // and this is the only thing standing between a wedged transformers.js
+        // call and a forever-'generating' job. On expiry the straggler promise
+        // is abandoned (not cancellable), but the queue moves on — the next
+        // job runs against whatever session survives; if the engine itself is
+        // wedged, its own worker-level watchdog has killed + respawned it.
+        const genStartedAt = Date.now();
+        const withWatchdog = <T,>(p: Promise<T>): Promise<T> => Promise.race([
+          p,
+          new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              const elapsedMs = Date.now() - genStartedAt;
+              reject(new TimeoutError(
+                formatGenerateTimeout(elapsedMs),
+                { elapsedMs, engineKind: model.custom ? 'custom' : 'transformers.js', requestType: 'generate' },
+              ));
+            }, REQUEST_TIMEOUTS.generate);
+          }),
+        ]);
+
         if (model.custom) {
           const custom = customEngines.get(model.modelId);
           if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
-          const result = await custom.generate(model, next.voiceId, next.text, {
+          const result = await withWatchdog(custom.generate(model, next.voiceId, next.text, {
             speed: next.speed,
             onSegmentProgress: (segProgress) => {
               // Segment granularity (e.g. Kokoro sentences). Emitted as a
               // one-off `jobProgress`; the heartbeat keeps ticking alongside.
               this.emitSegmentProgress(next.id, next.startedAt!, segProgress);
             },
-          });
+          }));
           audio = result.audio;
           samplingRate = result.samplingRate;
           // Engines that expose per-word start times (e.g. kokoro-js via
@@ -809,7 +847,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           if (embeddingUrl) {
             callOptions.speaker_embeddings = embeddingUrl;
           }
-          const result = await this.pipe(next.text, callOptions);
+          const pipeCall = this.pipe(next.text, callOptions) as Promise<{
+            audio: Float32Array;
+            sampling_rate?: number;
+          }>;
+          const result = await withWatchdog(pipeCall);
           audio = result.audio;
           samplingRate = result.sampling_rate ?? this.currentSampleRate;
         }
@@ -840,7 +882,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         next.durationMs = next.completedAt - (next.startedAt ?? next.completedAt);
       } catch (err) {
         if ((next.status as JobStatus) !== 'cancelled') {
-          const msg = err instanceof Error ? err.message : String(err);
+          // Timeouts get the canonical human-facing wording (with recovery
+          // hints); everything else surfaces its raw message.
+          const msg = err instanceof TimeoutError && err.requestType === 'generate'
+            ? formatGenerateTimeout(err.elapsedMs)
+            : err instanceof Error ? err.message : String(err);
           next.status = 'error';
           next.error = msg;
           next.completedAt = Date.now();

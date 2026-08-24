@@ -6,6 +6,7 @@ import {
   selectWorkerEngineKind,
   WorkerBackedEngine,
 } from './worker-bridge';
+import { REQUEST_TIMEOUTS, TimeoutError } from './timeouts';
 import type { TTSModel } from '../engine';
 import { KOKORO_MODEL_ID } from './kokoro';
 
@@ -247,5 +248,216 @@ describe('WorkerBackedEngine', () => {
     );
     // Worker must be a module worker — ORT is ESM-only.
     expect(src).toMatch(/type:\s*'module'/);
+  });
+});
+
+// ─── Hang watchdog ───────────────────────────────────────────────
+//
+// The acceptance criterion is that a worker which NEVER replies must still
+// convert into a visible error within the configured bound, and the NEXT
+// request must succeed on a freshly-respawned worker.
+
+/** Short timeout table so tests exercise real timers in milliseconds. */
+const testTimeouts = {
+  load: 60,
+  generate: 60,
+  dispose: 10,
+};
+
+function makeNeverReplyingWorker() {
+  let handler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+  return {
+    postMessage(_message: unknown) {
+      /* swallow every request — simulates a hung WebGPU/ORT call */
+      void handler;
+    },
+    addEventListener(_type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+      handler = listener;
+    },
+    removeEventListener() {
+      handler = null;
+    },
+    terminate: vi.fn(),
+  };
+}
+
+/** Worker that answers `load` promptly but hangs every `generate`. */
+function makeLoadOnlyWorker() {
+  let handler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+  return {
+    postMessage(message: { id: number; type: string }) {
+      queueMicrotask(() => {
+        if (message.type === 'load') {
+          handler?.({ data: { id: message.id, type: 'loaded', sampleRate: 24000 } } as MessageEvent);
+        }
+        // 'generate' requests are swallowed — the hung-call simulation.
+      });
+    },
+    addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+      if (type === 'message') handler = listener;
+    },
+    removeEventListener() {},
+    terminate: vi.fn(),
+  };
+}
+
+describe('WorkerBackedEngine — hang watchdog', () => {
+  it('rejects a never-replying load with a typed TimeoutError and terminates the worker', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = makeNeverReplyingWorker();
+      const engine = new WorkerBackedEngine(() => worker, testTimeouts);
+      const loadPromise = engine.load(model);
+
+      const expectation = expect(loadPromise).rejects.toBeInstanceOf(TimeoutError);
+      await vi.advanceTimersByTimeAsync(testTimeouts.load + 10);
+      await expectation;
+
+      expect(worker.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('carries elapsedMs and engine kind on the TimeoutError', async () => {
+    vi.useFakeTimers();
+    try {
+      // Worker answers loads (so lazy respawn completes) but hangs generates —
+      // isolates the generate watchdog.
+      const engine = new WorkerBackedEngine(() => makeLoadOnlyWorker(), testTimeouts);
+      const promise = engine.generate(model, 'v', 'hi');
+      const expectation = expect(promise).rejects.toBeInstanceOf(TimeoutError);
+      await vi.advanceTimersByTimeAsync(testTimeouts.generate + 10);
+      const err: TimeoutError = await promise.catch(e => e);
+      expect(err.name).toBe('TimeoutError');
+      expect(err.requestType).toBe('generate');
+      expect(err.engineKind).toBe('kitten'); // stamped by the respawned load
+      expect(err.elapsedMs).toBeGreaterThanOrEqual(testTimeouts.generate - 1);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a subsequent generate succeeds after a stalled generate killed the first worker (lazy respawn)', async () => {
+    // First worker never replies; the factory hands out a healthy one for
+    // the respawn. This is the exact acceptance-criterion shape.
+    vi.useFakeTimers();
+    try {
+      let messageHandler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+      const dead = makeNeverReplyingWorker();
+      const healthy = {
+        postMessage(message: { id: number; type: string }) {
+          queueMicrotask(() => {
+            if (message.type === 'load') {
+              messageHandler?.({ data: { id: message.id, type: 'loaded', sampleRate: 24000 } } as MessageEvent);
+            } else if (message.type === 'generate') {
+              messageHandler?.({
+                data: {
+                  id: message.id,
+                  type: 'generated',
+                  audio: new Float32Array([0.1, 0.2]),
+                  samplingRate: 24000,
+                },
+              } as MessageEvent);
+            }
+          });
+        },
+        addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+          if (type === 'message') messageHandler = listener;
+        },
+        removeEventListener() {},
+        terminate: vi.fn(),
+      };
+
+      const workers = [dead, healthy];
+      const engine = new WorkerBackedEngine(() => workers.shift() ?? healthy, testTimeouts);
+
+      // First generation wedges and hits the watchdog.
+      const stalled = engine.generate(model, 'v', 'stalled text');
+      const stallExpectation = expect(stalled).rejects.toBeInstanceOf(TimeoutError);
+      await vi.advanceTimersByTimeAsync(testTimeouts.generate + 10);
+      await stallExpectation;
+      expect(dead.terminate).toHaveBeenCalledTimes(1);
+
+      // The next generate transparently respawns + reloads the fresh worker.
+      const recovered = engine.generate(model, 'v', 'next job');
+      await vi.advanceTimersByTimeAsync(50);
+      const result = await recovered;
+      expect(result.audio.length).toBe(2);
+      expect(result.samplingRate).toBe(24000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancelActiveGenerate rejects the pending request immediately and disposes the session', async () => {
+    // No fake timers needed: the worker hangs generates, so the watchdog
+    // never fires — cancel() must settle the request on its own.
+    let messageHandler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+    const terminate = vi.fn();
+    const fakeWorker = {
+      postMessage(message: { id: number; type: string }) {
+        queueMicrotask(() => {
+          if (message.type === 'load') {
+            messageHandler?.({ data: { id: message.id, type: 'loaded', sampleRate: 24000 } } as MessageEvent);
+          }
+          // generates are swallowed
+        });
+      },
+      addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+        if (type === 'message') messageHandler = listener;
+      },
+      removeEventListener() {},
+      terminate,
+    };
+    const engine = new WorkerBackedEngine(() => fakeWorker, testTimeouts);
+    // Load first (worker replies) so the generate below is the request that
+    // hangs — matching the real cancel-mid-generation sequence.
+    await engine.load(model);
+    const pending = engine.generate(model, 'v', 'straggler');
+    // Let the serialized request chain actually post the generate and
+    // register its pending slot (run() executes on a microtask).
+    await new Promise(r => setTimeout(r, 0));
+
+    // Attach the rejection assertion before cancelling to avoid an unhandled
+    // rejection; cancelActiveGenerate() itself is synchronous.
+    const expectation = expect(pending).rejects.toThrow(/cancelled/i);
+    engine.cancelActiveGenerate(); // no waiting — returns synchronously
+    await expectation;
+
+    // Session torn down so different-model work can start right away; the
+    // next generate lazily respawns via the factory.
+    expect(terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('disarms the watchdog when the worker replies before the bound (no spurious kill)', async () => {
+    let messageHandler: ((event: MessageEvent | ErrorEvent) => void) | null = null;
+    const terminate = vi.fn();
+    const fakeWorker = {
+      postMessage(message: { id: number; type: string }) {
+        queueMicrotask(() => {
+          if (message.type === 'load') {
+            messageHandler?.({ data: { id: message.id, type: 'loaded', sampleRate: 16000 } } as MessageEvent);
+          }
+        });
+      },
+      addEventListener(type: string, listener: (event: MessageEvent | ErrorEvent) => void) {
+        if (type === 'message') messageHandler = listener;
+      },
+      removeEventListener() {},
+      terminate,
+    };
+    const engine = new WorkerBackedEngine(() => fakeWorker, testTimeouts);
+    await engine.load(model);
+    // Well past the load bound now — a leaked timer would have terminated.
+    await new Promise(r => setTimeout(r, 80));
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it('exposes the default per-type bounds from REQUEST_TIMEOUTS', () => {
+    expect(REQUEST_TIMEOUTS.load).toBe(300_000);
+    expect(REQUEST_TIMEOUTS.generate).toBe(180_000);
+    expect(REQUEST_TIMEOUTS.dispose).toBe(10_000);
   });
 });
