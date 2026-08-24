@@ -3,7 +3,7 @@
 All notable changes to Yapper are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-24
 
 ### Fixed
 - **GPU smoke test actually verifies inference**: the Kaggle kernel no
@@ -16,6 +16,12 @@ All notable changes to Yapper are recorded here. Versions follow
   generation with positive audio duration in `gpu-smoke-report.json`.
 
 ### Added
+- **End-to-end test harness** (`e2e_test.py`, driven by
+  `scripts/run_e2e.sh`): a raw-CDP headless-Chrome suite covering the
+  document reader flow — TXT/PDF fixture upload, extracted-text
+  rendering, read-aloud queueing, live highlight advance, stop
+  teardown, and worker-backed inference — run in CI (`.github/workflows/e2e.yml`)
+  against both the dev server and the production build.
 - **Honest capability banner** (`src/capability.ts`, documented in
   `docs/capability-banner.md`): three-class WebGPU detection — `none`
   (no API: Firefox stable, iOS Safari), `partial` (API present but adapter
@@ -65,8 +71,19 @@ All notable changes to Yapper are recorded here. Versions follow
   actually run inside `WorkerBackedEngine` → `inference-worker.ts`.
   New comments describe the worker path explicitly and point at the
   `copy-ort-wasm` Vite plugin.
+- **README launch polish**: CI/e2e/Pages status badges, a supported
+  browsers section sourced from the cross-browser QA matrix, and demo
+  GIF/MP4 re-captured against the current UI (`docs/demo.gif`,
+  `docs/demo.mp4`). The GPU-smoke badge is deferred until the Kaggle
+  workflow is reliably green.
 
 ### Fixed
+- **Dead "Download WAV" button (#38)**: `wireCardButtons()` guarded all
+  listener wiring behind a one-time card-level flag, but the job list
+  re-renders when a job flips to done — so buttons on cards that
+  finished after initial render had no click listener. Wiring is now
+  idempotent per element (`data-wired`), found by cross-browser live
+  QA.
 - **CSP blocks Hugging Face xet CDN**: model weights for xet-backed repos
   (`Xenova/mms-tts-*`, SpeechT5, etc.) are served from
   `https://us.aws.cdn.hf.co`, which the Content-Security-Policy did not
@@ -94,6 +111,13 @@ All notable changes to Yapper are recorded here. Versions follow
 - **Broken CSS variable** in `.ocr-mode-selector`: referenced
   non-existent `var(--surface)` (transparent background); now
   `var(--bg-surface)`.
+- **Dev/production parity fixes** surfaced by running the new e2e suite
+  against both servers: `tesseract.js` (CommonJS) removed from Vite's
+  `optimizeDeps.exclude` — unbundled CJS crashed the dev-server module
+  graph with a blank page; tokenizer/lib assets under `/lib` now anchor
+  on `document.baseURI` so `npm run dev` no longer fetched `index.html`
+  instead of JSON; the CSP allows Hugging Face's xet CDN used by
+  main-thread pipelines.
 - **New `copy-ort-wasm` Vite plugin** (`vite.config.ts`) copies every
   onnxruntime-web WASM flavor into `public/ort-wasm/` with stable
   names. Belt-and-braces fallback: the Vite-emitted content-hashed
@@ -102,7 +126,7 @@ All notable changes to Yapper are recorded here. Versions follow
   non-hashed URL on stable filenames. Stops "no available backend
   found" regressions if the WASM hash strategy ever changes.
 
-### Also unreleased (prior integration work)
+### Prior integration work (also in this release)
 
 #### Added
 - **Vitest test suite** with 94 tests covering the WAV encoder, speed
