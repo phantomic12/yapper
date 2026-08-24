@@ -1333,6 +1333,24 @@ body {
 }
 .document-preview { margin-bottom: 8px; }
 .textarea--readonly { background: var(--bg-surface); }
+/* Inline extraction-failure state inside the reader panel. The top status
+   banner disappears on the next showStatus() call, so persistent errors
+   (unreadable PDF, stalled engine) also render here where the user is
+   looking. Hidden via the [hidden] attribute until a failure occurs. */
+.reader-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.reader-error[hidden] { display: none; }
 .document-hint {
   margin-top: 6px;
   font-size: 0.72rem;

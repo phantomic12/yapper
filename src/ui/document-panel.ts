@@ -32,6 +32,7 @@ export function bindDocumentEvents(state: AppState): void {
   const pauseBtn = document.getElementById('pause-document-btn') as HTMLButtonElement;
   const stopBtn = document.getElementById('stop-document-btn') as HTMLButtonElement;
   const readerStatus = document.getElementById('reader-status') as HTMLElement;
+  const readerError = document.getElementById('reader-error') as HTMLElement;
   const readerOverlay = document.getElementById('reader-overlay') as HTMLElement;
   const readerOverlayContent = document.getElementById('reader-overlay-content') as HTMLElement;
   const readerOverlayStatus = document.getElementById('reader-overlay-status') as HTMLElement;
@@ -133,6 +134,7 @@ export function bindDocumentEvents(state: AppState): void {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
       return;
     }
+    clearReaderError();
     setProgress('Extracting text…');
     const useOcr = ocrToggle.checked && file.name.toLowerCase().endsWith('.pdf');
     extractDocument(file, { useOcr, ocrMode: state.ocrMode, onProgress: setProgress })
@@ -151,8 +153,23 @@ export function bindDocumentEvents(state: AppState): void {
       })
       .catch(err => {
         clearProgress();
-        showStatus('error', `Could not read document: ${err instanceof Error ? err.message : String(err)}`, true);
+        // Surface the failure in the reader panel itself, not just the
+        // transient top banner: extraction errors (corrupt file, engine
+        // missing Promise.try, stalled pdfjs worker) used to leave this
+        // panel stuck on "Reading PDF file…" with no visible explanation.
+        showReaderError(err instanceof Error ? err.message : String(err));
       });
+  }
+
+  function showReaderError(message: string) {
+    readerError.textContent = `⚠️ ${message}`;
+    readerError.hidden = false;
+    showStatus('error', `Could not read document: ${message}`, true);
+  }
+
+  function clearReaderError() {
+    readerError.hidden = true;
+    readerError.textContent = '';
   }
 
   drop.addEventListener('click', () => input.click());

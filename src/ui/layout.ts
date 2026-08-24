@@ -182,6 +182,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
             <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
           </div>
+          <div class="reader-error" id="reader-error" role="alert" hidden></div>
           <label class="section-label" for="document-reader-view">Extracted text</label>
           <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
           <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>

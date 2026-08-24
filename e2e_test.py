@@ -776,6 +776,12 @@ def step_upload_pdf_document(cdp_holder):
         resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
         s = v(resp)
         text = s.get('text', '')
+        # The app now fails fast with an inline reader-panel error when the
+        # engine can't run pdfjs 6 (missing Promise.try) or extraction
+        # stalls — either way that's an environment failure worth flagging
+        # loudly instead of waiting out the clock.
+        if s.get('readerError'):
+            raise AssertionError(f'reader panel surfaced an error: {s.get("readerError")!r}')
         if ('end-to-end test PDF' in text and 'Second line proves' in text
                 and s.get('previewVisible')):
             print(f'      ✓ PDF extracted: {s["sentenceCount"]} sentences from '
@@ -787,6 +793,7 @@ def step_upload_pdf_document(cdp_holder):
         f'PDF text did not render within {extract_timeout}s: '
         f'previewVisible={s.get("previewVisible")} '
         f'progress="{s.get("progressText")}" banner={s.get("statusBanner")!r} '
+        f'readerError={s.get("readerError")!r} '
         f'text[:100]={s.get("text", "")[:100]!r}')
 
 

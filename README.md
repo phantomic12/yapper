@@ -94,6 +94,11 @@ generate + audio, WAV download, document reader (TXT + PDF), clean console.
 Real Safari (macOS/iOS) wasn't reachable from the QA host — WebKitGTK is the proxy;
 other mobile viewports were not tested.
 
+PDF extraction (pdfjs 6) additionally requires `Promise.try` — Chrome/Edge
+128+, Firefox 134+, Safari 18.3+. Older engines can still use every other
+format; the reader panel shows an explanatory message instead of a broken
+spinner.
+
 ## Tech Stack
 
 - [Transformers.js](https://huggingface.co/docs/transformers.js) — SpeechT5 + MMS-TTS in the browser

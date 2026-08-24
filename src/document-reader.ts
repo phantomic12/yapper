@@ -2,6 +2,7 @@ import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { getOcrEngine } from './ocr';
 import { getLlmOcrEngine } from './engines/llm-ocr';
+import { engineSupportsPdfJs, pdfUnsupportedMessage } from './pdf-capability';
 import { getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox, stripRtfControlWords, parseCsv, type OcrMode, type BboxWord, type QuadWord } from './document-types';
 export { getMimeType, getFileExtension, MAX_PDF_PAGES, type OcrMode, type BboxWord, type QuadWord, quadToBbox, stripRtfControlWords, parseCsv } from './document-types';
 
@@ -53,6 +54,97 @@ export interface ExtractOptions {
    * document is small (e.g. tests) by passing a lower number.
    */
   maxPdfPages?: number;
+  /**
+   * Kill-switch for the extraction stall watchdog (see withProgressWatchdog).
+   * Defaults to enabled; tests may pass false to avoid real timers.
+   */
+  watchdogEnabled?: boolean;
+  /** Override the stall deadline (ms). Defaults to EXTRACT_STALL_TIMEOUT_MS. */
+  stallTimeoutMs?: number;
+}
+
+/** Default time without a progress event before extraction is declared hung. */
+export const EXTRACT_STALL_TIMEOUT_MS = 30_000;
+
+export class ExtractionStalledError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `Document extraction stalled (no progress for ${Math.round(timeoutMs / 1000)}s). ` +
+      `The file may be corrupted, or the browser's document engine is too old — ` +
+      `try a different browser or another format.`,
+      );
+    this.name = 'ExtractionStalledError';
+  }
+}
+
+/**
+ * Race `work` against a stall watchdog that fires when `onProgress` goes
+ * quiet for longer than `timeoutMs`.
+ *
+ * Why this exists: pdfjs's worker protocol can hang without ever rejecting.
+ * The known case is an engine without Promise.try running pdfjs 6 — every
+ * worker round-trip throws before a reply is posted, so
+ * `getDocument().promise` never settles and a plain try/catch in the caller
+ * never runs (the await just hangs). Any progress-carrying extraction can be
+ * wrapped; OCR paths call onProgress frequently enough that normal operation
+ * resets the timer many times over.
+ *
+ * When the watchdog wins the race the returned promise rejects with
+ * ExtractionStalledError; if `work` later settles it loses silently (its
+ * value/error is dropped) — callers treat the rejection as terminal.
+ */
+export function withProgressWatchdog<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  onProgress?: (message: string) => void,
+): { promise: Promise<T>; onProgress: ((message: string) => void) | undefined } {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let settled = false;
+  let resolveWork: (value: T) => void;
+  let rejectWork: (reason: unknown) => void;
+
+  const fail = () => {
+    if (settled) return;
+    settled = true;
+    rejectWork(new ExtractionStalledError(timeoutMs));
+  };
+  const arm = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(fail, timeoutMs);
+  };
+  const settleOk = (value: T) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    resolveWork(value);
+  };
+  const settleErr = (reason: unknown) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    rejectWork(reason instanceof Error ? reason : new Error(String(reason)));
+  };
+
+  arm();
+  // Every progress event pushes the deadline out; the wrapped callback is
+  // what callers wire into their extraction pipeline, so feeding events
+  // through it keeps the watchdog alive during normal (slow but moving)
+  // work like OCR.
+  const wrapped = onProgress
+    ? (message: string) => {
+        if (settled) return;
+        arm();
+        onProgress(message);
+      }
+    : undefined;
+
+  const promise = new Promise<T>((resolve, reject) => {
+    resolveWork = resolve;
+    rejectWork = reject;
+    work.then(settleOk, settleErr);
+  });
+
+  return { promise, onProgress: wrapped };
 }
 
 export async function extractDocument(file: File, options: ExtractOptions = {}): Promise<ExtractedDocument> {
@@ -67,6 +159,13 @@ export async function extractDocument(file: File, options: ExtractOptions = {}):
       `OCR is only supported for PDFs; got ${mime || ext || 'unknown'}. ` +
       `Disable the OCR toggle for this document.`,
     );
+  }
+
+  // pdfjs 6 requires Promise.try; without it extraction hangs forever
+  // instead of failing (see src/pdf-capability.ts). Fail fast with an
+  // actionable message rather than sticking on "Reading PDF file…".
+  if (mime === 'application/pdf' && !engineSupportsPdfJs()) {
+    throw new Error(pdfUnsupportedMessage());
   }
 
   switch (mime) {
@@ -129,52 +228,82 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
     pdfjs.GlobalWorkerOptions.workerSrc = getPdfWorkerPath();
   }
 
-  const buffer = await readArrayBuffer(file);
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
-  const parts: string[] = [];
-  const layoutBlocks: LayoutBlock[] = [];
-  const useOcr = options.useOcr ?? false;
-  const maxPages = Math.min(pdf.numPages, options.maxPdfPages ?? MAX_PDF_PAGES);
-  if (maxPages < pdf.numPages) {
-    options.onProgress?.(
-      `PDF has ${pdf.numPages} pages; only the first ${maxPages} will be extracted`,
-    );
-  }
-
-  for (let i = 1; i <= maxPages; i++) {
-    options.onProgress?.(`Processing PDF page ${i}/${maxPages}…`);
-    const page = await pdf.getPage(i);
-
-    if (useOcr) {
-      const blocks = await ocrPage(page, i, options);
-      layoutBlocks.push(...blocks);
-      parts.push(...blocks.map(b => b.text));
-    } else {
-      const content = await page.getTextContent({ includeMarkedContent: false });
-      let lastY = 0;
-      const lineParts: string[] = [];
-      for (const item of content.items) {
-        const textItem = item as TextItem;
-        const txt = textItem.str;
-        if (!txt) continue;
-        // Heuristic line break: large vertical gaps
-        if (lineParts.length && Math.abs(textItem.transform[5] - lastY) > 3) {
-          parts.push(lineParts.join(' '));
-          lineParts.length = 0;
-        }
-        lineParts.push(txt);
-        lastY = textItem.transform[5];
-      }
-      if (lineParts.length) parts.push(lineParts.join(' '));
+  // pdfjs's worker protocol can hang without ever rejecting (the known case:
+  // an engine without Promise.try running pdfjs 6 — getDocument().promise
+  // never settles, so no try/catch downstream would ever run). Wrap the
+  // whole pipeline in a stall watchdog: progress events keep it alive, and
+  // if nothing moves for EXTRACT_STALL_TIMEOUT_MS the caller gets a real
+  // rejection instead of an eternal spinner.
+  const run = async (
+    onProgress: ((message: string) => void) | undefined,
+  ): Promise<ExtractedDocument> => {
+    const buffer = await readArrayBuffer(file);
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
+    const parts: string[] = [];
+    const layoutBlocks: LayoutBlock[] = [];
+    const useOcr = options.useOcr ?? false;
+    const maxPages = Math.min(pdf.numPages, options.maxPdfPages ?? MAX_PDF_PAGES);
+    if (maxPages < pdf.numPages) {
+      onProgress?.(
+        `PDF has ${pdf.numPages} pages; only the first ${maxPages} will be extracted`,
+      );
     }
-  }
 
-  return {
-    text: parts.join('\n\n'),
-    layoutBlocks: useOcr && layoutBlocks.length ? layoutBlocks : undefined,
-    mimeType: 'application/pdf',
-    name: file.name,
+    for (let i = 1; i <= maxPages; i++) {
+      onProgress?.(`Processing PDF page ${i}/${maxPages}…`);
+      const page = await pdf.getPage(i);
+
+      if (useOcr) {
+        // Route OCR progress through the same stream so long OCR runs keep
+        // resetting the stall timer (Tesseract emits per-% updates).
+        const ocrOptions: ExtractOptions = { ...options, onProgress };
+        const blocks = await ocrPage(page, i, ocrOptions);
+        layoutBlocks.push(...blocks);
+        parts.push(...blocks.map(b => b.text));
+      } else {
+        const content = await page.getTextContent({ includeMarkedContent: false });
+        let lastY = 0;
+        const lineParts: string[] = [];
+        for (const item of content.items) {
+          const textItem = item as TextItem;
+          const txt = textItem.str;
+          if (!txt) continue;
+          // Heuristic line break: large vertical gaps
+          if (lineParts.length && Math.abs(textItem.transform[5] - lastY) > 3) {
+            parts.push(lineParts.join(' '));
+            lineParts.length = 0;
+          }
+          lineParts.push(txt);
+          lastY = textItem.transform[5];
+        }
+        if (lineParts.length) parts.push(lineParts.join(' '));
+      }
+    }
+
+    return {
+      text: parts.join('\n\n'),
+      layoutBlocks: useOcr && layoutBlocks.length ? layoutBlocks : undefined,
+      mimeType: 'application/pdf',
+      name: file.name,
+    };
   };
+
+  if (options.watchdogEnabled === false) {
+    return run(options.onProgress);
+  }
+  const watchdog = withProgressWatchdog<ExtractedDocument>(
+    new Promise<ExtractedDocument>((resolve, reject) => {
+      // Start the pipeline only after the watchdog hands back its wrapped
+      // progress callback, so every onProgress event inside `run` both
+      // reaches the UI and resets the stall deadline.
+      queueMicrotask(() => {
+        run(watchdog.onProgress ?? undefined).then(resolve, reject);
+      });
+    }),
+    options.stallTimeoutMs ?? EXTRACT_STALL_TIMEOUT_MS,
+    options.onProgress,
+  );
+  return watchdog.promise;
 }
 
 async function ocrPage(page: pdfjs.PDFPageProxy, pageNumber: number, options: ExtractOptions): Promise<LayoutBlock[]> {
