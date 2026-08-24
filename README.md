@@ -1,5 +1,12 @@
 # Yapper 🔊
 
+[![CI](https://github.com/phantomic12/yapper/actions/workflows/ci.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/ci.yml)
+[![e2e](https://github.com/phantomic12/yapper/actions/workflows/e2e.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/e2e.yml)
+[![Deploy to GitHub Pages](https://github.com/phantomic12/yapper/actions/workflows/deploy.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/deploy.yml)
+<!-- GPU-smoke badge — add back when the Kaggle workflow is reliably green:
+[![GPU smoke test](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml)
+-->
+
 **Browser text-to-speech with zero cloud.** Kokoro, Kitten, SpeechT5, and MMS-TTS run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
 > **Note on performance:** Kokoro and Kitten are registered through `WorkerBackedEngine` (`src/engines/worker-bridge.ts` → `inference-worker.ts`), so load/generate for those models run off the main thread and the UI stays responsive while a job is in progress. SpeechT5 and MMS-TTS still run on the main thread via Transformers.js — selecting one shows an in-app warning that generation may briefly freeze the page, and a liveness indicator runs in the queue while any job generates. The non-blocking queue lets you stack multiple jobs either way.
@@ -68,6 +75,24 @@ Active path: `src/document-reader.ts` → `src/reader.ts` (`DocumentReaderSessio
 | MD     | text | Read as text (markup left for the reader to handle lightly) |
 
 PDF extraction is capped at 500 pages by default (`MAX_PDF_PAGES`) to avoid tab OOMs.
+
+## Supported browsers
+
+Verified in the automated cross-browser QA pass (2026-08-23) — see
+[docs/qa-matrix.md](docs/qa-matrix.md) for the full matrix, timings, and raw results.
+
+| Browser                          | Backend        | Result        | Notes                                                                  |
+| -------------------------------- | -------------- | ------------- | ---------------------------------------------------------------------- |
+| Chromium 151 / Chrome 124+       | WebGPU         | ✅ all checks | Model load + generation in single-digit seconds                        |
+| Microsoft Edge 151               | WebGPU         | ✅ all checks |                                                                        |
+| Firefox 153                      | WASM fallback  | ✅ all checks | First generation slower; later ones comparable                         |
+| WebKitGTK 2.48                   | WASM fallback  | ✅ all checks | Closest available stand-in for Safari                                  |
+| Chromium, mobile viewport        | WebGPU         | ✅ all checks | 390×844 (iPhone 13-class) viewport                                     |
+
+Every column passes the same 7-step checklist: app loads, model select, download & load,
+generate + audio, WAV download, document reader (TXT + PDF), clean console.
+Real Safari (macOS/iOS) wasn't reachable from the QA host — WebKitGTK is the proxy;
+other mobile viewports were not tested.
 
 ## Tech Stack
 
