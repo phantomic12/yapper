@@ -47,14 +47,12 @@ KAGGLE_WORKING = Path('/kaggle/working')
 REPO_DIR = KAGGLE_WORKING / 'yapper'
 REPORT_OUT = KAGGLE_WORKING / 'gpu-smoke-report.json'
 
-# Mirrors docker/gif/Dockerfile's apt surface, minus CUDA (the kernel
-# base image already ships the NVIDIA driver + CUDA runtime).
+# Only what Playwright's `install --with-deps` does NOT cover: the X
+# server for headed Chromium, tiny X helpers, the system Vulkan driver,
+# and fonts. Every lib* entry from the old list is redundant here and
+# just adds mirror-flakiness exposure.
 APT_DEPS = [
     'xvfb', 'xauth', 'x11-utils',
-    'libnss3', 'libatk1.0-0', 'libatk-bridge2.0-0', 'libcups2',
-    'libxkbcommon0', 'libxcomposite1', 'libxdamage1', 'libxext6',
-    'libxfixes3', 'libxss1', 'libasound2', 'libgbm1', 'libpango-1.0-0',
-    'libcairo2', 'libx11-6', 'libxcb1', 'libxrandr2', 'libxi6',
     'mesa-vulkan-drivers', 'vulkan-tools',
     'fonts-liberation', 'fonts-dejavu',
 ]
@@ -73,6 +71,42 @@ APT_SLOW = [
 
 def log(msg):
     print(f'[yapper-gpu-smoke] {msg}', flush=True)
+
+
+PROXY_KEYS = ('https_proxy', 'HTTPS_PROXY',
+              'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY')
+
+
+def detect_proxy():
+    """Kaggle kernels have no outbound DNS; internet access goes through
+    an HTTP proxy exported in the environment (pip and git honor those
+    variables automatically — apt does not)."""
+    for key in PROXY_KEYS:
+        value = os.environ.get(key, '').strip()
+        if value:
+            return key, value.rstrip('/')
+    return None, None
+
+
+def configure_apt_proxy(proxy):
+    conf = Path('/etc/apt/apt.conf.d/95yapper-proxy')
+    conf.write_text(
+        f'Acquire::http::Proxy "{proxy}";\n'
+        f'Acquire::https::Proxy "{proxy}";\n')
+    log(f'apt proxy written to {conf}')
+
+
+def probe_connectivity():
+    """Log one cheap HTTPS round-trip so the kernel log shows network
+    health up front instead of failing obscurely minutes later."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen('https://pypi.org/simple/', timeout=20):
+            log('connectivity probe: pypi.org reachable OK')
+            return True
+    except Exception as exc:
+        log(f'connectivity probe FAILED: {exc}')
+        return False
 
 
 def run(cmd, **kwargs):
@@ -109,9 +143,22 @@ def main():
             stale.unlink()
             log(f'purged stale artifact {stale}')
 
-    # 1. System deps. Kaggle kernels run as root in a Debian container.
-    #    Acquire::Retries + per-transfer timeouts handle slow mirrors; the
-    #    outer retry handles residual transient failures.
+    # 1. Connectivity + system deps. Kaggle kernels have no outbound DNS;
+    #    internet goes through a proxy exported in the environment. pip
+    #    and git honor it automatically, apt needs it spelled out.
+    key, proxy = detect_proxy()
+    if not proxy:
+        log(f'no proxy env found ({", ".join(PROXY_KEYS)}); '
+            f'checking raw connectivity anyway')
+        if not probe_connectivity():
+            log('no proxy AND no direct internet — Kaggle "Internet" '
+                'setting is off or broken; aborting early')
+            sys.exit(3)
+    else:
+        log(f'using proxy from {key}')
+        configure_apt_proxy(proxy)
+        probe_connectivity()
+
     log('installing system dependencies')
     run_retry(['apt-get', 'update', '-qq'] + APT_SLOW,
               attempts=2, timeout=600)
