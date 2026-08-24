@@ -36,36 +36,42 @@ function patchCardStatus(statusSpan: HTMLElement, card: HTMLElement, status: Gen
 }
 
 function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) {
-  // Click listeners are wired once per card. Using a flag prevents us
-  // from re-attaching the same listener on every render.
-  if (card.dataset.wired === 'true') return;
-  card.dataset.wired = 'true';
-
-  const cancelBtn = card.querySelector<HTMLButtonElement>('[data-action="cancel"]');
-  cancelBtn?.addEventListener('click', () => {
-    const id = card.dataset.jobId!;
-    state.engine!.cancel(id);
-  });
-
-  const downloadBtn = card.querySelector<HTMLButtonElement>('[data-action="download"]');
-  downloadBtn?.addEventListener('click', () => {
-    const id = card.dataset.jobId!;
-    const job = state.currentJobs.find(j => j.id === id);
-    if (!job?.url) return;
-    const a = document.createElement('a');
-    a.href = job.url;
-    a.download = `yapper-${id}-${Date.now()}.wav`;
-    a.click();
-  });
-
-  const audio = card.querySelector<HTMLAudioElement>('audio[data-job-id]');
-  if (audio) {
-    audio.addEventListener('play', () => {
-      // Pause sibling audios when one starts.
-      list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(other => {
-        if (other !== audio && !other.paused) other.pause();
+  // Wire listeners onto any not-yet-wired action elements. Idempotent per
+  // element (each element is marked when wired) rather than per card, so it
+  // can safely be re-run after the card body is replaced — e.g. a job that
+  // flips from `generating` to `done` gets its Download WAV button and audio
+  // element wired at that point. Re-running must NOT re-attach to elements
+  // that already have listeners, or a click would fire N times.
+  const unwired = card.querySelectorAll<HTMLElement>(
+    '[data-action="cancel"], [data-action="download"], audio[data-job-id]:not([data-wired])'
+  );
+  for (const el of unwired) {
+    if (el.dataset.wired === 'true') continue;
+    el.dataset.wired = 'true';
+    const action = el.getAttribute('data-action');
+    if (action === 'cancel') {
+      el.addEventListener('click', () => {
+        const id = card.dataset.jobId!;
+        state.engine!.cancel(id);
       });
-    });
+    } else if (action === 'download') {
+      el.addEventListener('click', () => {
+        const id = card.dataset.jobId!;
+        const job = state.currentJobs.find(j => j.id === id);
+        if (!job?.url) return;
+        const a = document.createElement('a');
+        a.href = job.url;
+        a.download = `yapper-${id}-${Date.now()}.wav`;
+        a.click();
+      });
+    } else if (el instanceof HTMLAudioElement) {
+      el.addEventListener('play', () => {
+        // Pause sibling audios when one starts.
+        list.querySelectorAll<HTMLAudioElement>('audio[data-job-id]').forEach(other => {
+          if (other !== el && !other.paused) other.pause();
+        });
+      });
+    }
   }
 }
 
