@@ -294,6 +294,20 @@ def main():
     #    --use-vulkan=swiftshader-webgpu), then probes navigator.gpu ->
     #    model load -> generate() round-trip on the live demo site and
     #    writes out/gpu-smoke-report.json with real timings.
+    #
+    #    XDG_RUNTIME_DIR is REQUIRED for the Vulkan WSI surface path:
+    #    without it every vkCreate*Surface fails (run 5: five
+    #    "XDG_RUNTIME_DIR not set" errors then ERROR_UNKNOWN from
+    #    vkGetPhysicalDeviceSurfacePresentModesKHR), Chromium's GPU process
+    #    dies at startup, and navigator.gpu never appears — even though the
+    #    loader + NVIDIA ICD enumerate fine headless. Kaggle kernels run
+    #    without a desktop session, so nothing sets it for us.
+    if not os.environ.get('XDG_RUNTIME_DIR'):
+        xdg = Path('/tmp/xdg-runtime')
+        xdg.mkdir(parents=True, exist_ok=True)
+        os.chmod(xdg, 0o700)
+        os.environ['XDG_RUNTIME_DIR'] = str(xdg)
+        log(f'set XDG_RUNTIME_DIR={xdg}')
     log('running gpu_smoke_test.py')
     try:
         run([

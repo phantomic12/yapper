@@ -198,6 +198,21 @@ async def _shot(page, path: Path) -> None:
         print(f'  screenshot failed ({path.name}): {e}', flush=True)
 
 
+def ensure_xdg_runtime_dir() -> str | None:
+    """Vulkan's WSI surface path requires XDG_RUNTIME_DIR; without it every
+    vkCreate*Surface fails and Chromium's GPU process dies before
+    navigator.gpu can appear (run-5 failure: loader + NVIDIA ICD healthy,
+    presentation broken). Desktop sessions set this for us; headless CI
+    containers don't. Idempotent."""
+    if os.environ.get('XDG_RUNTIME_DIR'):
+        return None
+    xdg = Path('/tmp/xdg-runtime') / f'runtime-{os.getuid()}'
+    xdg.mkdir(parents=True, exist_ok=True)
+    os.chmod(xdg, 0o700)
+    os.environ['XDG_RUNTIME_DIR'] = str(xdg)
+    return str(xdg)
+
+
 async def run_probes(browser, report: dict) -> None:
     """Drive the live demo on an already-launched browser: page load,
     model load, generate — appending each probe's result to `report` and
@@ -265,6 +280,12 @@ async def main():
     p.add_argument('--text', default='Yapper GPU smoke test. The quick brown fox jumps over the lazy dog.')
     p.add_argument('--load-timeout', type=int, default=180_000, help='Max time to wait for model load, in ms')
     args = p.parse_args()
+
+    # Must exist before ANY Vulkan consumer starts (vulkaninfo surface
+    # checks, Chromium's GPU process). See ensure_xdg_runtime_dir docstring.
+    xdg = ensure_xdg_runtime_dir()
+    if xdg:
+        print(f'set XDG_RUNTIME_DIR={xdg}', flush=True)
 
     xvfb = start_xvfb()
     if xvfb:
@@ -356,10 +377,24 @@ async def main():
                 await candidate.close()
 
             if browser is None:
-                # Neither flag set produced a WebGPU adapter. Record the
-                # last probe result, remember why, and skip straight to the
-                # report — which MUST still be written so the kernel-side
-                # gate can gate on evidence instead of "no report".
+                # Neither flag set produced a WebGPU adapter. Capture a
+                # chrome://gpu dump from one last throwaway browser so the
+                # report explains WHY (run-5 lesson: 'no navigator.gpu'
+                # with zero GPU-process detail is undiagnosable after the
+                # fact). Best-effort: diagnostics must never mask the
+                # original failure.
+                try:
+                    diag = await pw.chromium.launch(headless=False, args=['--no-sandbox'])
+                    dpage = await diag.new_page()
+                    await dpage.goto('chrome://gpu')
+                    await dpage.wait_for_timeout(3000)
+                    info = await dpage.evaluate('document.body.innerText.slice(0, 4000)')
+                    report['chromeGpuExcerpt'] = info
+                    (OUT_DIR / 'chrome-gpu.txt').write_text(info)
+                    await diag.close()
+                    print('  captured chrome://gpu diagnostics', flush=True)
+                except Exception as e:
+                    print(f'  chrome://gpu capture failed: {e}', flush=True)
                 report.setdefault('webgpu', webgpu)
                 report['launchFlagSet'] = 'none-succeeded'
                 probe_error = RuntimeError(
