@@ -6,6 +6,20 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Fixed
+- **Silent PDF extraction failures**: on engines without `Promise.try`
+  (Chrome < ~128), pdfjs 6's worker protocol hangs instead of rejecting —
+  every extraction died as an unhandled rejection while the document panel
+  stuck on "Reading PDF file…" forever. Three legs to the fix: a fail-fast
+  capability gate (`src/pdf-capability.ts`) that raises an actionable error
+  naming the minimum browser versions before extraction starts; a 30s
+  progress-stall watchdog (`withProgressWatchdog`) that converts any hung
+  extraction (corrupt file, wedged worker) into a real rejection, kept
+  alive by normal progress events; and a persistent inline error state in
+  the reader panel (`#reader-error`, `.reader-error`) so the failure is
+  visible where the user is looking, not only in the transient top banner.
+  Verified live against Chrome 124 via CDP: corrupt/unsupported PDFs now
+  surface both messages immediately.
+
 - **Kitten models failed to load on subpath deploys**: `publicLibUrl()`
   climbed three directory levels from the worker module URL, overshooting
   the app root whenever Yapper is served under a subpath (GitHub Pages
