@@ -264,12 +264,30 @@ def main():
     vk = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True)
     log(f'vulkaninfo rc={vk.returncode}\n{vk.stdout[-1200:]}')
 
-    # 4. Playwright + its matching Chromium build.
+    # 4. Playwright + its matching Chromium build. NOTE: --with-deps runs
+    #    its own apt transaction, which has been observed to disturb the
+    #    Vulkan loader state (run 4: kernel-side vulkaninfo saw the P100
+    #    fine at t=55; the probe's own vulkaninfo failed rc=1 45s later,
+    #    taking SwiftShader down with it). Pin the ICD env explicitly so
+    #    the probe subprocess always starts from the known-good manifest.
     log('installing playwright + chromium')
     run([sys.executable, '-m', 'pip', 'install', '-q', 'playwright'],
         timeout=600)
     run([sys.executable, '-m', 'playwright', 'install', '--with-deps',
          'chromium'], timeout=900)
+
+    nvidia_icd = Path('/usr/share/vulkan/icd.d/nvidia_icd.json')
+    if nvidia_icd.exists():
+        os.environ['VK_ICD_FILENAMES'] = str(nvidia_icd)
+        os.environ['VK_DRIVER_FILES'] = str(nvidia_icd)
+        log(f'pinned Vulkan ICD env -> {nvidia_icd}')
+    else:
+        log('WARNING: no nvidia_icd.json after install; Vulkan env unpinned')
+    # Post-install loader sanity check — goes in the log right before the
+    # probe starts, so any --with-deps damage is visible in context.
+    vk2 = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True)
+    log(f'post-install vulkaninfo rc={vk2.returncode} '
+        f'stderr={vk2.stderr[-200:]!r}\n{vk2.stdout[-600:]}')
 
     # 5. Run the probe. gpu_smoke_test.py starts its own Xvfb on :99 and
     #    launches headed Chromium (--enable-unsafe-webgpu +

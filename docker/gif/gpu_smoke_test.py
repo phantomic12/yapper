@@ -284,14 +284,27 @@ async def main():
     # Capture vulkaninfo diagnostics so a "WebGPU unavailable" verdict on
     # an unfamiliar image comes with evidence about the Vulkan stack it
     # actually saw (or didn't).
-    vk = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True)
+    vk_env = {**os.environ}
+    vk = subprocess.run(['vulkaninfo', '--summary'],
+                        capture_output=True, text=True, env=vk_env)
     if vk.returncode == 0:
         gpu_lines = [l.strip() for l in vk.stdout.splitlines() if 'deviceName' in l or 'driverName' in l]
         report['vulkanDevices'] = gpu_lines[:10]
         print(f'  vulkaninfo: {"; ".join(gpu_lines[:4]) or "no devices"}', flush=True)
     else:
-        report['vulkanDevices'] = f'vulkaninfo failed rc={vk.returncode}'
-        print('  vulkaninfo unavailable/failed', flush=True)
+        # Full diagnostics on failure: rc alone told us nothing in run 4
+        # (kernel-side loader was healthy; ours failed under Xvfb).
+        # Retry without DISPLAY to isolate whether Xlib is what's breaking
+        # the loader enumeration here.
+        vk_nox = subprocess.run(['vulkaninfo', '--summary'], capture_output=True,
+                                text=True, env={k: v for k, v in os.environ.items()
+                                                if k not in ('DISPLAY',)})
+        report['vulkanDevices'] = (
+            f'rc={vk.returncode} stderr={vk.stderr[-400:]!r} '
+            f'noDisplay_rc={vk_nox.returncode}'
+        )
+        print(f'  vulkaninfo FAILED rc={vk.returncode}: {vk.stderr[-300:]!r}', flush=True)
+        print(f'  vulkaninfo (no DISPLAY) rc={vk_nox.returncode}', flush=True)
 
     # Launch-flag attempts, most-promising first. swiftshader-webgpu is
     # deterministic on hosts without a usable GPU; plain auto lets a real
