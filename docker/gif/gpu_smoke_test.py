@@ -381,11 +381,19 @@ async def main():
         async with async_playwright() as pw:
             browser = None
             for name, flags in LAUNCH_FLAG_SETS:
-                # Flag sets named 'headless*' run Chromium's headless=new
-                # mode: no X surface at all, GPU process survives without
-                # WSI. Headed sets still need the (fragile) Xvfb path.
+                # Flag sets named 'headless*' must run the FULL Chromium
+                # binary in new-headless mode. Playwright's plain
+                # headless=True launches the chrome-headless-shell build
+                # instead — legacy headless, NO GPU process, navigator.gpu
+                # can never exist there (runs 1 & 7 both tripped this).
+                # channel='chromium' selects the real Chrome-for-Testing
+                # binary, whose headless=new mode supports SwiftShader
+                # WebGPU with zero windowing system.
                 use_headless = name.startswith('headless')
-                candidate = await pw.chromium.launch(headless=use_headless, args=flags)
+                launch_kwargs = {'headless': use_headless, 'args': flags}
+                if use_headless:
+                    launch_kwargs['channel'] = 'chromium'
+                candidate = await pw.chromium.launch(**launch_kwargs)
                 ctx_probe = await candidate.new_context(
                     viewport={'width': 1280, 'height': 720},
                     service_workers='block',
