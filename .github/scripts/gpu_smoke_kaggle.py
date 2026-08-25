@@ -191,6 +191,43 @@ def main():
         log('no GPU visible, aborting')
         sys.exit(2)
 
+    # 3b. Register the NVIDIA Vulkan ICD if the image didn't. Kaggle GPU
+    #     images ship the NVIDIA userspace libs (libGLX_nvidia, libnvidia-*
+    #     vulkan layers) but often have NO Vulkan ICD JSON for the GPU —
+    #     the Vulkan loader then only finds llvmpipe (software) and
+    #     Chromium's WebGPU can never get a hardware adapter. We synthesize
+    #     the standard ICD manifest pointing at whatever library is present.
+    icd_dir = Path('/usr/share/vulkan/icd.d')
+    icd_dir.mkdir(parents=True, exist_ok=True)
+    icd_json = icd_dir / 'nvidia_icd.json'
+    if not icd_json.exists():
+        candidates = [
+            '/usr/lib/x86_64-linux-gnu/libvulkan_nvidia.so',
+            '/usr/lib/x86_64-linux-gnu/nvidia/current/libnvidia-vulkan-producer.so',
+            '/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0',
+        ]
+        lib = next((c for c in candidates if Path(c).exists()), None)
+        if lib:
+            log(f'writing NVIDIA Vulkan ICD -> {icd_json} (library_path={lib})')
+            icd_json.write_text(json.dumps({
+                'file_format_version': '1.0.0',
+                'ICD': {'library_path': lib, 'api_version': '1.3.0'},
+            }, indent=2))
+            # Point the loader at our dir explicitly in case it isn't in
+            # the default search path on this image.
+            os.environ['VK_ICD_FILENAMES'] = str(icd_json)
+            os.environ['VK_DRIVER_FILES'] = str(icd_json)
+        else:
+            log('no NVIDIA Vulkan-capable library found for ICD registration; '
+                'leaving loader as-is')
+    else:
+        log(f'NVIDIA ICD already present: {icd_json}')
+
+    # 3c. Show what the Vulkan loader sees now (goes into the kernel log;
+    #     gpu_smoke_test.py also records it into the report).
+    vk = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True)
+    log(f'vulkaninfo rc={vk.returncode}\n{vk.stdout[-1200:]}')
+
     # 4. Playwright + its matching Chromium build.
     log('installing playwright + chromium')
     run([sys.executable, '-m', 'pip', 'install', '-q', 'playwright'],

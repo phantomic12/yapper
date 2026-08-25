@@ -187,6 +187,77 @@ async def probe_generate(page, text: str, timeout_ms: int = 60_000) -> dict:
     }
 
 
+async def _shot(page, path: Path) -> None:
+    """Screenshot that can never take the harness down: a wedged or
+    GPU-less renderer must cost us a missing PNG, not the whole run
+    (a crash here previously aborted the kernel BEFORE the report
+    was written, hiding every probe result)."""
+    try:
+        await page.screenshot(path=str(path), timeout=15_000)
+    except Exception as e:
+        print(f'  screenshot failed ({path.name}): {e}', flush=True)
+
+
+async def run_probes(browser, report: dict) -> None:
+    """Drive the live demo on an already-launched browser: page load,
+    model load, generate — appending each probe's result to `report` and
+    saving a screenshot at every stage. Any screenshot failure is logged
+    and swallowed; only probe failures propagate."""
+    ctx = await browser.new_context(
+        viewport={'width': 1280, 'height': 720},
+        service_workers='block',  # Don't register the yapper SW — a stale
+                                  # cache from a previous session can hold
+                                  # an old module bundle that breaks init.
+    )
+    page = await ctx.new_page()
+    page.on('pageerror', lambda err: print(f'  [pageerror] {err}', flush=True))
+    page.on('console', lambda msg: (
+        print(f'  [console.{msg.type}] {msg.text[:200]}', flush=True)
+        if msg.type in ('error', 'warning') else None
+    ))
+
+    # Navigate to the demo. Long timeout for headed Chromium: the
+    # model-card grid renders after render() awaits detectWebGPU(),
+    # which may block longer in headed mode.
+    await page.goto(report['url'], wait_until='domcontentloaded', timeout=30_000)
+    try:
+        await page.wait_for_selector('.model-card', timeout=60_000)
+    except Exception as e:
+        # Debug screenshot + rendered HTML + live DOM state before bailing
+        await _shot(page, OUT_DIR / 'gpu-smoke-error.png')
+        html = await page.content()
+        (OUT_DIR / 'gpu-smoke-error.html').write_text(html[:50_000])
+        live_state = await page.evaluate('''() => ({
+            title: document.title,
+            url: location.href,
+            readyState: document.readyState,
+            appChildren: document.getElementById('app')?.children.length ?? 0,
+            bodyText: (document.body.innerText || '').slice(0, 500),
+            modelCardCount: document.querySelectorAll('.model-card').length,
+        })''')
+        print(f'  live DOM state: {live_state}', flush=True)
+        print(f'  page load failed (no .model-card within 60s): {e}', flush=True)
+        raise
+    await _shot(page, OUT_DIR / 'gpu-smoke-01-loaded.png')
+
+    # Model load
+    load_result = await probe_model_load(page, report['modelId'], report['loadTimeoutMs'])
+    report['modelLoad'] = load_result
+    await _shot(page, OUT_DIR / 'gpu-smoke-02-model-loaded.png')
+    print(f'  Model load: loaded={load_result["loaded"]} in {load_result["secondsTotal"]}s', flush=True)
+
+    # Generate
+    if load_result['loaded']:
+        gen_result = await probe_generate(page, report['text'])
+        report['generate'] = gen_result
+        await _shot(page, OUT_DIR / 'gpu-smoke-03-generated.png')
+        print(f'  Generate: done={gen_result["done"]} in {gen_result["secondsTotal"]}s', flush=True)
+    else:
+        report['generate'] = {'skipped': 'model load failed'}
+
+    await ctx.close()
+
+
 async def main():
     p = argparse.ArgumentParser()
     p.add_argument('--url', default=URL_DEFAULT)
@@ -205,6 +276,7 @@ async def main():
         'url': args.url,
         'modelId': args.model,
         'text': args.text,
+        'loadTimeoutMs': args.load_timeout,
         'xvfbStarted': xvfb is not None,
         'startedAt': time.time(),
     }
@@ -220,16 +292,6 @@ async def main():
     else:
         report['vulkanDevices'] = f'vulkaninfo failed rc={vk.returncode}'
         print('  vulkaninfo unavailable/failed', flush=True)
-
-    async def _shot(page, path: Path) -> None:
-        """Screenshot that can never take the harness down: a wedged or
-        GPU-less renderer must cost us a missing PNG, not the whole run
-        (a crash here previously aborted the kernel BEFORE the report
-        was written, hiding every probe result)."""
-        try:
-            await page.screenshot(path=str(path), timeout=15_000)
-        except Exception as e:
-            print(f'  screenshot failed ({path.name}): {e}', flush=True)
 
     # Launch-flag attempts, most-promising first. swiftshader-webgpu is
     # deterministic on hosts without a usable GPU; plain auto lets a real
@@ -258,6 +320,7 @@ async def main():
         ]),
     ]
 
+    probe_error: Exception | None = None
     try:
         async with async_playwright() as pw:
             browser = None
@@ -281,83 +344,19 @@ async def main():
 
             if browser is None:
                 # Neither flag set produced a WebGPU adapter. Record the
-                # last probe result and bail through the normal report
-                # path instead of crashing without a report.
+                # last probe result, remember why, and skip straight to the
+                # report — which MUST still be written so the kernel-side
+                # gate can gate on evidence instead of "no report".
                 report.setdefault('webgpu', webgpu)
                 report['launchFlagSet'] = 'none-succeeded'
-                raise RuntimeError(
+                probe_error = RuntimeError(
                     f'No WebGPU adapter under any launch flag set '
                     f'(tried {[n for n, _ in LAUNCH_FLAG_SETS]})'
                 )
-
-            ctx = await browser.new_context(
-                viewport={'width': 1280, 'height': 720},
-                service_workers='block',  # Don't register the yapper SW —
-                                         # a stale cache from a previous
-                                         # session can hold an old
-                                         # module bundle that breaks
-                                         # init. We want to test the
-                                         # *current* page, not the
-                                         # cached version.
-            )
-            page = await ctx.new_page()
-            page.on('pageerror', lambda err: print(f'  [pageerror] {err}', flush=True))
-            page.on('console', lambda msg: (
-                print(f'  [console.{msg.type}] {msg.text[:200]}', flush=True)
-                if msg.type in ('error', 'warning') else None
-            ))
-
-            # 1. WebGPU probe already ran during launch-flag selection;
-            #    report['webgpu'] is set. Navigate to the actual demo.
-            await page.goto(args.url, wait_until='domcontentloaded', timeout=30_000)
-            # Long timeout for headed Chromium: the model-card grid is
-            # rendered after `render()` awaits `detectWebGPU()` which
-            # may block longer in headed mode.
-            try:
-                await page.wait_for_selector('.model-card', timeout=60_000)
-            except Exception as e:
-                # Take a debug screenshot + page HTML before bailing
-                try:
-                    await page.screenshot(path=str(OUT_DIR / 'gpu-smoke-error.png'), timeout=10_000)
-                except Exception as screenshot_err:
-                    print(f'  screenshot also failed: {screenshot_err}', flush=True)
-                # Capture both the rendered HTML and the live DOM state
-                html = await page.content()
-                (OUT_DIR / 'gpu-smoke-error.html').write_text(html[:50_000])
-                # Check the live DOM (HTML can be stale; this is what the
-                # user actually sees right now)
-                live_state = await page.evaluate('''() => ({
-                    title: document.title,
-                    url: location.href,
-                    readyState: document.readyState,
-                    appChildren: document.getElementById('app')?.children.length ?? 0,
-                    bodyText: (document.body.innerText || '').slice(0, 500),
-                    modelCardCount: document.querySelectorAll('.model-card').length,
-                })''')
-                print(f'  live DOM state: {live_state}', flush=True)
-                print(f'  page load failed (no .model-card within 60s): {e}', flush=True)
-                print(f'  page title: {await page.title()!r}', flush=True)
-                print(f'  page url: {page.url}', flush=True)
-                raise
-            await _shot(page, OUT_DIR / 'gpu-smoke-01-loaded.png')
-
-            # 3. Model load
-            load_result = await probe_model_load(page, args.model, args.load_timeout)
-            report['modelLoad'] = load_result
-            await _shot(page, OUT_DIR / 'gpu-smoke-02-model-loaded.png')
-            print(f'  Model load: loaded={load_result["loaded"]} in {load_result["secondsTotal"]}s', flush=True)
-
-            # 4. Generate
-            if load_result['loaded']:
-                gen_result = await probe_generate(page, args.text)
-                report['generate'] = gen_result
-                await _shot(page, OUT_DIR / 'gpu-smoke-03-generated.png')
-                print(f'  Generate: done={gen_result["done"]} in {gen_result["secondsTotal"]}s', flush=True)
+                print(f'  {probe_error}', flush=True)
             else:
-                report['generate'] = {'skipped': 'model load failed'}
+                await run_probes(browser, report)
 
-            await ctx.close()
-            await browser.close()
     finally:
         if xvfb is not None:
             xvfb.terminate()
@@ -368,13 +367,21 @@ async def main():
 
     report['finishedAt'] = time.time()
     report['durationSeconds'] = round(report['finishedAt'] - report['startedAt'], 2)
+    if probe_error is not None:
+        report['error'] = str(probe_error)
+    # The report is written on EVERY path — success, probe failure, or
+    # exception — so the kernel-side gate always gates on evidence.
     report_path = OUT_DIR / 'gpu-smoke-report.json'
-    report_path.write_text(json.dumps(report, indent=2))
+    try:
+        report_path.write_text(json.dumps(report, indent=2))
+    except Exception as e:
+        print(f'  WARNING: report write failed: {e}', flush=True)
     print(f'\nReport: {report_path}', flush=True)
 
     # Exit code: non-zero if WebGPU was unavailable, or if the load/generate failed
     failed = (
-        not report.get('webgpu', {}).get('available')
+        probe_error is not None
+        or not report.get('webgpu', {}).get('available')
         or not report.get('modelLoad', {}).get('loaded')
     )
     if report.get('generate', {}).get('done') is False:
