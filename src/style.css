@@ -1092,6 +1092,38 @@ body {
   height: 36px;
 }
 
+/* ─── Job card generation progress ───────────────────────── */
+/* Indeterminate shimmer by default (data-mode="indeterminate"); flips to a
+   determinate fill once the engine knows segment counts ("sentence 2/5").
+   The engine's heartbeat updates only the hint text and this bar — the card
+   body is not re-rendered while generating. */
+.job-progress {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  margin-bottom: 6px;
+  border-radius: 2px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+.job-progress__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), #a855f7);
+}
+.job-progress[data-mode="determinate"] .job-progress__fill {
+  transition: width 0.3s ease;
+}
+.job-progress[data-mode="indeterminate"] .job-progress__fill {
+  width: 30%;
+  animation: job-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes job-progress-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(440%); }
+}
+
 /* ─── Status dots ────────────────────────────────────────── */
 .status-dot {
   display: inline-flex;

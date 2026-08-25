@@ -40,7 +40,20 @@ scope.onmessage = (event) => {
           request.model,
           request.voiceId,
           request.text,
-          { speed: request.speed },
+          {
+            speed: request.speed,
+            onSegmentProgress: (seg) => {
+              // Forward segment granularity (Kokoro sentences) to the main
+              // thread as it happens. Non-terminal: 'generated' still follows.
+              const progress: WorkerResponse = {
+                id: request.id,
+                type: 'generate-progress',
+                segmentsDone: seg.segmentsDone,
+                audioSecondsSoFar: seg.audioSecondsSoFar,
+              };
+              scope.postMessage(progress);
+            },
+          },
         );
         const { audio, transfer } = transferableAudio(result.audio);
         scope.postMessage(
