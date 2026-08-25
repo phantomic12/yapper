@@ -711,18 +711,28 @@ def _run_kokoro_generation(cdp_holder, text: str):
 def step_kokoro_segment_progress(cdp_holder):
     """AC: Kokoro on a multi-sentence input shows sentence-segment progress.
 
-    Loads kokoro-82m (~86MB), generates three sentences, and asserts the
-    hint ever showed a "sentence N" / "N sentences" segment marker.
+    Loads kokoro-82m (~86MB), generates a long multi-paragraph input, and
+    asserts the hint ever showed a "sentence N" / "N sentences" segment
+    marker. The input must be LONG enough to exceed kokoro-js's per-chunk
+    token budget: short inputs are merged into ONE stream chunk, which
+    emits exactly one segmentsDone=1 event — deliberately rendered as a
+    bare timer by the UI (see formatGeneratingHint) — and can never
+    satisfy this assertion.
     """
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
-    text = (
-        'The quick brown fox jumps over the lazy dog. Yapper speaks every '
-        'sentence it reads. Progress should tick as each one completes.'
+    para = (
+        'The quick brown fox jumps over the lazy dog while yapper reads '
+        'every sentence aloud. Progress ticks as each segment completes, '
+        'so a stalled generation is visible within seconds.'
     )
+    # Six paragraphs ≈ 24 sentences / ~800 chars — comfortably over
+    # kokoro-js's per-chunk token budget, guaranteeing multiple stream
+    # chunks (and thus a segmentsDone>=2 event the UI renders).
+    text = ' '.join(f'{para} ({i})' for i in range(1, 7))
     _run_kokoro_generation(cdp_holder, text)
 
-    seg_timeout = float(os.environ.get('YAPPER_KOKORO_GEN_TIMEOUT', '300'))
+    seg_timeout = float(os.environ.get('YAPPER_KOKORO_GEN_TIMEOUT', '420'))
     start = time.time()
     saw_segment = False
     last_print = ''

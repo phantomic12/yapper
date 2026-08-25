@@ -32,6 +32,7 @@ runners don't have.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -191,37 +192,72 @@ def main():
         log('no GPU visible, aborting')
         sys.exit(2)
 
-    # 3b. Register the NVIDIA Vulkan ICD if the image didn't. Kaggle GPU
-    #     images ship the NVIDIA userspace libs (libGLX_nvidia, libnvidia-*
-    #     vulkan layers) but often have NO Vulkan ICD JSON for the GPU —
-    #     the Vulkan loader then only finds llvmpipe (software) and
-    #     Chromium's WebGPU can never get a hardware adapter. We synthesize
-    #     the standard ICD manifest pointing at whatever library is present.
-    icd_dir = Path('/usr/share/vulkan/icd.d')
-    icd_dir.mkdir(parents=True, exist_ok=True)
-    icd_json = icd_dir / 'nvidia_icd.json'
+    # 3b. Ensure an NVIDIA Vulkan ICD exists. Kaggle GPU images ship CUDA
+    #     userspace but typically NOT the graphics/Vulkan userspace, so the
+    #     Vulkan loader only finds llvmpipe and Chromium's WebGPU never gets
+    #     a hardware adapter. Strategy: (1) look for an existing producer
+    #     lib anywhere on disk, (2) otherwise install the matching-branch
+    #     libnvidia-gl-<major> from the Ubuntu archive (ships
+    #     /usr/share/vulkan/icd.d/nvidia_icd.json + libGLX_nvidia), (3)
+    #     fall back to synthesizing an ICD manifest if a lib turns up later.
+    def _driver_branch() -> str | None:
+        m = re.search(r'Driver Version:\s*(\d+)\.', smi.stdout)
+        return m.group(1) if m else None
+
+    def _find_producer_lib() -> str | None:
+        hits = subprocess.run(
+            ['ldconfig', '-p'], capture_output=True, text=True,
+        ).stdout.lower()
+        for line in hits.splitlines():
+            if 'libvulkan_nvidia' in line or ('nvidia' in line and 'vulkan' in line):
+                parts = line.split('=>')
+                if len(parts) == 2:
+                    path = parts[1].strip()
+                    if Path(path).exists():
+                        return path
+        return None
+
+    icd_json = Path('/usr/share/vulkan/icd.d/nvidia_icd.json')
     if not icd_json.exists():
-        candidates = [
-            '/usr/lib/x86_64-linux-gnu/libvulkan_nvidia.so',
-            '/usr/lib/x86_64-linux-gnu/nvidia/current/libnvidia-vulkan-producer.so',
-            '/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0',
-        ]
-        lib = next((c for c in candidates if Path(c).exists()), None)
-        if lib:
-            log(f'writing NVIDIA Vulkan ICD -> {icd_json} (library_path={lib})')
+        branch = _driver_branch()
+        lib = _find_producer_lib()
+        if lib is None and branch:
+            log(f'no NVIDIA Vulkan lib found; installing libnvidia-gl-{branch} '
+                '(Ubuntu archive: ships Vulkan producer + ICD manifest)')
+            gl_install = subprocess.run(
+                ['apt-get', 'install', '-y', '-qq', '--no-install-recommends']
+                + APT_SLOW + [f'libnvidia-gl-{branch}'],
+                capture_output=True, text=True,
+            )
+            if gl_install.returncode != 0:
+                log(f'libnvidia-gl-{branch} install failed rc={gl_install.returncode}: '
+                    f'{gl_install.stderr[-300:]}')
+            else:
+                # Refresh the loader cache so ldconfig -p sees new libs.
+                subprocess.run(['ldconfig'], check=False)
+                log(f'libnvidia-gl-{branch} installed')
+                if not icd_json.exists():
+                    # Package landed libs but no manifest; synthesize one.
+                    lib = _find_producer_lib() or '/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0'
+                    icd_json.parent.mkdir(parents=True, exist_ok=True)
+                    icd_json.write_text(json.dumps({
+                        'file_format_version': '1.0.0',
+                        'ICD': {'library_path': lib, 'api_version': '1.3.0'},
+                    }, indent=2))
+                    os.environ['VK_ICD_FILENAMES'] = str(icd_json)
+                    os.environ['VK_DRIVER_FILES'] = str(icd_json)
+        elif lib:
+            log(f'found NVIDIA Vulkan lib at {lib}; writing ICD manifest')
+            icd_json.parent.mkdir(parents=True, exist_ok=True)
             icd_json.write_text(json.dumps({
                 'file_format_version': '1.0.0',
                 'ICD': {'library_path': lib, 'api_version': '1.3.0'},
             }, indent=2))
-            # Point the loader at our dir explicitly in case it isn't in
-            # the default search path on this image.
             os.environ['VK_ICD_FILENAMES'] = str(icd_json)
             os.environ['VK_DRIVER_FILES'] = str(icd_json)
         else:
-            log('no NVIDIA Vulkan-capable library found for ICD registration; '
+            log(f'cannot determine driver branch for libnvidia-gl install; '
                 'leaving loader as-is')
-    else:
-        log(f'NVIDIA ICD already present: {icd_json}')
 
     # 3c. Show what the Vulkan loader sees now (goes into the kernel log;
     #     gpu_smoke_test.py also records it into the report).
