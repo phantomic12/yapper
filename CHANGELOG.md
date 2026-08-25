@@ -88,7 +88,27 @@ All notable changes to Yapper are recorded here. Versions follow
 
 ### Architecture
 - **`docs/architecture.md`** — one-screen map of `engine`, `engines/`
-  (including `WorkerBackedEngine`), `document-reader`, `reader`, and
+- **Hang watchdog** (`src/engines/timeouts.ts`, `src/engines/worker-bridge.ts`,
+  `src/engine.ts`): no request to the inference layer can hang anymore. A
+  hung WebGPU / ONNX Runtime call fires no error event, so every worker
+  request now carries a per-type wall-clock bound (load 300s, generate
+  180s, dispose 10s) and rejects with a typed `TimeoutError` carrying
+  `elapsedMs` + engine kind. On expiry the wedged worker is terminated and
+  respawned lazily via the existing factory — with a silent model reload —
+  so the next generation starts on a clean GPU/ORT context.
+- **Cancel-mid-generation recovery**: cancelling the active job now rejects
+  its in-flight request immediately and disposes the custom engine session
+  instead of awaiting an unkillable straggler; the queue accepts new work
+  right away (next session is recreated lazily).
+- **Main-thread generation watchdog**: SpeechT5/MMS `pipe()` calls are
+  wrapped in a race against the same generate bound, so transformers.js
+  cannot wedge the queue either. Timed-out jobs surface "Generation timed
+  out after Ns. Try shorter text or reload the model."
+### Fixed
+- **Queue stalls**: `TTSEngine.processQueue` converts watchdog timeouts into
+  job errors and continues with the next job; previously a single hung
+  inference call left every later job queued forever behind it.
+- **docs/architecture.md** — one-screen map of `engine`, `engines/`  (including `WorkerBackedEngine`), `document-reader`, `reader`, and
   the optional `docs`/`ocr` path.
 - **Self-hosted Tesseract assets** documented under
   `public/lib/tesseract/` (worker, LSTM WASM core, `eng.traineddata`)
