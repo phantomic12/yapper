@@ -360,6 +360,7 @@ async def main():
             '--enable-unsafe-webgpu',
             '--enable-features=Vulkan,WebGPU,UseSkiaRenderer',
             '--use-angle=swiftshader',
+            '--use-webgpu-adapter=swiftshader',
             '--use-gl=angle',
             '--enable-gpu-rasterization',
         ]),
@@ -399,10 +400,21 @@ async def main():
                     service_workers='block',
                 )
                 probe_page = await ctx_probe.new_page()
-                await probe_page.goto('about:blank')
+                # Probe on the REAL demo origin, not about:blank: WebGPU is
+                # a secure-context-only API and blank-page treatment is
+                # inconsistent — runs 1-8 may all have probed the wrong
+                # page. The demo URL is unambiguously secure (https).
+                try:
+                    await probe_page.goto(args.url, wait_until='domcontentloaded',
+                                          timeout=20_000)
+                except Exception as e:
+                    print(f'  [flags={name}] demo nav failed ({e}); '
+                          f'falling back to about:blank probe', flush=True)
+                version = candidate.version
                 webgpu = await probe_webgpu(probe_page)
                 await ctx_probe.close()
-                print(f'  [flags={name}] WebGPU available={webgpu.get("available")}', flush=True)
+                print(f'  [flags={name}] browser={version} '
+                      f'WebGPU available={webgpu.get("available")}', flush=True)
                 if webgpu.get('available'):
                     browser = candidate
                     report['webgpu'] = webgpu
