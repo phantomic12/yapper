@@ -209,33 +209,87 @@ async def main():
         'startedAt': time.time(),
     }
 
+    # Capture vulkaninfo diagnostics so a "WebGPU unavailable" verdict on
+    # an unfamiliar image comes with evidence about the Vulkan stack it
+    # actually saw (or didn't).
+    vk = subprocess.run(['vulkaninfo', '--summary'], capture_output=True, text=True)
+    if vk.returncode == 0:
+        gpu_lines = [l.strip() for l in vk.stdout.splitlines() if 'deviceName' in l or 'driverName' in l]
+        report['vulkanDevices'] = gpu_lines[:10]
+        print(f'  vulkaninfo: {"; ".join(gpu_lines[:4]) or "no devices"}', flush=True)
+    else:
+        report['vulkanDevices'] = f'vulkaninfo failed rc={vk.returncode}'
+        print('  vulkaninfo unavailable/failed', flush=True)
+
+    async def _shot(page, path: Path) -> None:
+        """Screenshot that can never take the harness down: a wedged or
+        GPU-less renderer must cost us a missing PNG, not the whole run
+        (a crash here previously aborted the kernel BEFORE the report
+        was written, hiding every probe result)."""
+        try:
+            await page.screenshot(path=str(path), timeout=15_000)
+        except Exception as e:
+            print(f'  screenshot failed ({path.name}): {e}', flush=True)
+
+    # Launch-flag attempts, most-promising first. swiftshader-webgpu is
+    # deterministic on hosts without a usable GPU; plain auto lets a real
+    # GPU (T4/P100) drive WebGPU directly, which is what we want on Kaggle.
+    LAUNCH_FLAG_SETS = [
+        ('auto', [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--enable-unsafe-webgpu',
+            '--enable-features=Vulkan,WebGPU,UseSkiaRenderer',
+            '--use-angle=vulkan',
+            '--use-gl=angle',
+            '--enable-gpu-rasterization',
+            '--ignore-gpu-blocklist',
+        ]),
+        ('swiftshader-webgpu', [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--enable-unsafe-webgpu',
+            '--enable-features=Vulkan,WebGPU,UseSkiaRenderer',
+            '--use-vulkan=swiftshader-webgpu',
+            '--use-angle=vulkan',
+            '--use-gl=angle',
+            '--enable-gpu-rasterization',
+            '--ignore-gpu-blocklist',
+        ]),
+    ]
+
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=False,  # Headed! Required for navigator.gpu.
-                args=[
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    # Force the GPU process to start. Without this, even
-                    # headed Chromium can fall back to a software
-                    # compositor that doesn't expose WebGPU.
-                    '--enable-unsafe-webgpu',
-                    '--enable-features=Vulkan,WebGPU,UseSkiaRenderer',
-                    # Try multiple Vulkan implementations in order:
-                    # 1. swiftshader-webgpu — SwiftShader's WebGPU
-                    #    implementation (works on hosts without a GPU
-                    #    like WSL2 / CI runners)
-                    # 2. swiftshader — generic SwiftShader Vulkan
-                    # 3. auto — let Chromium pick
-                    # We try swiftshader-webgpu explicitly so the test
-                    # produces the same result on any host.
-                    '--use-vulkan=swiftshader-webgpu',
-                    '--use-angle=vulkan',
-                    '--use-gl=angle',
-                    '--enable-gpu-rasterization',
-                    '--ignore-gpu-blocklist',
-                ],
-            )
+            browser = None
+            for name, flags in LAUNCH_FLAG_SETS:
+                candidate = await pw.chromium.launch(headless=False, args=flags)  # Headed! Required for navigator.gpu.
+                ctx_probe = await candidate.new_context(
+                    viewport={'width': 1280, 'height': 720},
+                    service_workers='block',
+                )
+                probe_page = await ctx_probe.new_page()
+                await probe_page.goto('about:blank')
+                webgpu = await probe_webgpu(probe_page)
+                await ctx_probe.close()
+                print(f'  [flags={name}] WebGPU available={webgpu.get("available")}', flush=True)
+                if webgpu.get('available'):
+                    browser = candidate
+                    report['webgpu'] = webgpu
+                    report['launchFlagSet'] = name
+                    break
+                await candidate.close()
+
+            if browser is None:
+                # Neither flag set produced a WebGPU adapter. Record the
+                # last probe result and bail through the normal report
+                # path instead of crashing without a report.
+                report.setdefault('webgpu', webgpu)
+                report['launchFlagSet'] = 'none-succeeded'
+                raise RuntimeError(
+                    f'No WebGPU adapter under any launch flag set '
+                    f'(tried {[n for n, _ in LAUNCH_FLAG_SETS]})'
+                )
+
             ctx = await browser.new_context(
                 viewport={'width': 1280, 'height': 720},
                 service_workers='block',  # Don't register the yapper SW —
@@ -253,13 +307,8 @@ async def main():
                 if msg.type in ('error', 'warning') else None
             ))
 
-            # 1. WebGPU probe — just a static page is enough
-            await page.goto('about:blank')
-            webgpu = await probe_webgpu(page)
-            report['webgpu'] = webgpu
-            print(f'  WebGPU: available={webgpu.get("available")}  vendor={webgpu.get("vendor")!r}', flush=True)
-
-            # 2. Navigate to the actual demo
+            # 1. WebGPU probe already ran during launch-flag selection;
+            #    report['webgpu'] is set. Navigate to the actual demo.
             await page.goto(args.url, wait_until='domcontentloaded', timeout=30_000)
             # Long timeout for headed Chromium: the model-card grid is
             # rendered after `render()` awaits `detectWebGPU()` which
@@ -290,19 +339,19 @@ async def main():
                 print(f'  page title: {await page.title()!r}', flush=True)
                 print(f'  page url: {page.url}', flush=True)
                 raise
-            await page.screenshot(path=str(OUT_DIR / 'gpu-smoke-01-loaded.png'))
+            await _shot(page, OUT_DIR / 'gpu-smoke-01-loaded.png')
 
             # 3. Model load
             load_result = await probe_model_load(page, args.model, args.load_timeout)
             report['modelLoad'] = load_result
-            await page.screenshot(path=str(OUT_DIR / 'gpu-smoke-02-model-loaded.png'))
+            await _shot(page, OUT_DIR / 'gpu-smoke-02-model-loaded.png')
             print(f'  Model load: loaded={load_result["loaded"]} in {load_result["secondsTotal"]}s', flush=True)
 
             # 4. Generate
             if load_result['loaded']:
                 gen_result = await probe_generate(page, args.text)
                 report['generate'] = gen_result
-                await page.screenshot(path=str(OUT_DIR / 'gpu-smoke-03-generated.png'))
+                await _shot(page, OUT_DIR / 'gpu-smoke-03-generated.png')
                 print(f'  Generate: done={gen_result["done"]} in {gen_result["secondsTotal"]}s', flush=True)
             else:
                 report['generate'] = {'skipped': 'model load failed'}
