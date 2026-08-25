@@ -327,9 +327,22 @@ async def main():
         print(f'  vulkaninfo FAILED rc={vk.returncode}: {vk.stderr[-300:]!r}', flush=True)
         print(f'  vulkaninfo (no DISPLAY) rc={vk_nox.returncode}', flush=True)
 
-    # Launch-flag attempts, most-promising first. swiftshader-webgpu is
-    # deterministic on hosts without a usable GPU; plain auto lets a real
-    # GPU (T4/P100) drive WebGPU directly, which is what we want on Kaggle.
+    # Launch-flag attempts, most-promising first.
+    # 1. 'auto' — let a real GPU (T4/P100) drive WebGPU directly. On Kaggle
+    #    this has never survived: NVIDIA's Vulkan WSI requires DRM/GBM
+    #    plumbing a containerized Xvfb can't provide
+    #    (vkGetPhysicalDeviceSurfacePresentModesKHR -> ERROR_UNKNOWN even
+    #    with XDG_RUNTIME_DIR set), and the dead GPU process takes
+    #    navigator.gpu down with it. Kept first in case a future image
+    #    ships /dev/dri through.
+    # 2. 'headless-swiftshader' — THE reliable fallback. Chromium's
+    #    headless=new mode renders via SwiftShader WITHOUT any windowing
+    #    system: no X surface, no WSI, no Xvfb dependency. navigator.gpu is
+    #    exposed with a CPU (SwiftVulkan) adapter — enough to prove the app
+    #    boots, loads models, and generates audio end-to-end, which is what
+    #    this smoke test exists to verify.
+    # 3. 'swiftshader-webgpu' — last resort: software Vulkan but still
+    #    headed (needs the X surface path that keeps failing).
     LAUNCH_FLAG_SETS = [
         ('auto', [
             '--no-sandbox',
@@ -340,6 +353,15 @@ async def main():
             '--use-gl=angle',
             '--enable-gpu-rasterization',
             '--ignore-gpu-blocklist',
+        ]),
+        ('headless-swiftshader', [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--enable-unsafe-webgpu',
+            '--enable-features=Vulkan,WebGPU,UseSkiaRenderer',
+            '--use-angle=swiftshader',
+            '--use-gl=angle',
+            '--enable-gpu-rasterization',
         ]),
         ('swiftshader-webgpu', [
             '--no-sandbox',
@@ -359,7 +381,11 @@ async def main():
         async with async_playwright() as pw:
             browser = None
             for name, flags in LAUNCH_FLAG_SETS:
-                candidate = await pw.chromium.launch(headless=False, args=flags)  # Headed! Required for navigator.gpu.
+                # Flag sets named 'headless*' run Chromium's headless=new
+                # mode: no X surface at all, GPU process survives without
+                # WSI. Headed sets still need the (fragile) Xvfb path.
+                use_headless = name.startswith('headless')
+                candidate = await pw.chromium.launch(headless=use_headless, args=flags)
                 ctx_probe = await candidate.new_context(
                     viewport={'width': 1280, 'height': 720},
                     service_workers='block',
@@ -384,11 +410,17 @@ async def main():
                 # fact). Best-effort: diagnostics must never mask the
                 # original failure.
                 try:
-                    diag = await pw.chromium.launch(headless=False, args=['--no-sandbox'])
+                    diag = await pw.chromium.launch(headless=True, args=['--no-sandbox'])
                     dpage = await diag.new_page()
-                    await dpage.goto('chrome://gpu')
-                    await dpage.wait_for_timeout(3000)
-                    info = await dpage.evaluate('document.body.innerText.slice(0, 4000)')
+                    await dpage.goto('chrome://gpu', wait_until='domcontentloaded')
+                    await dpage.wait_for_timeout(5000)
+                    info = await dpage.evaluate(
+                        '(document.body && document.body.innerText || "").slice(0, 4000)')
+                    if not info:
+                        # WebUI text extraction can come up empty in
+                        # headless; fall back to raw HTML as evidence.
+                        info = ('(innerText empty; HTML head) '
+                                + await dpage.content()[:2000])
                     report['chromeGpuExcerpt'] = info
                     (OUT_DIR / 'chrome-gpu.txt').write_text(info)
                     await diag.close()
