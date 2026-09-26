@@ -1,5 +1,6 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import type { CustomEngine, TTSModel, Voice } from '../engine';
+import { webgpuAdapterHasFeature } from '../capability';
 
 // Kitten TTS Nano via direct onnxruntime-web + manual phonemization.
 // This is a separate integration from kokoro-js (which has its own eSpeak WASM
@@ -10,10 +11,11 @@ import type { CustomEngine, TTSModel, Voice } from '../engine';
 // Tokenizer: char→id vocab (phoneme-based), 4.5KB
 // Sample rate: 24000 Hz
 //
-// Note: the npz voices are shape (400, 256) — a bank of 400 style vectors.
-// Following the published reference impl, we use the first row (single 256-dim
-// vector) for the `style` input. Better TTS would index into the bank by frame,
-// but that requires more API surface than this v1 supports.
+// Note: the npz voices are shape (400, 256) — a bank of 400 style vectors
+// indexed by TOKEN COUNT (the reference impls use
+// `style = voices[voice][min(token_ids.length, nrows - 1)]`). Picking row 0
+// unconditionally conditions the model wrongly: it emits chopped audio with
+// huge edge impulses.
 
 const MODEL_URL_BASE = 'https://huggingface.co/';
 // Default ONNX file within the repo. Overridden by model.modelFile per-entry,
@@ -290,6 +292,7 @@ export class KittenCustomEngine implements CustomEngine {
   private voices: Record<string, Float32Array> = {};
   private tokenizer: TokenizerData | null = null;
   private sampleRate = SAMPLE_RATE;
+  private speedPriors: Record<string, number> = {};
 
   async load(_model: TTSModel, progressCallback?: (loaded: number, total: number) => void): Promise<{ sampleRate: number }> {
     const ort = await getOrt();
@@ -298,25 +301,48 @@ export class KittenCustomEngine implements CustomEngine {
     const modelFile = _model.modelFile ?? DEFAULT_KITTEN_MODEL_FILE;
     const MODEL_URL = `${MODEL_URL_BASE}${_model.modelId}/resolve/main/${modelFile}`;
     const VOICES_URL = `${VOICES_URL_BASE}${_model.modelId}/resolve/main/${VOICES_FILE}`;
-    const [modelBuf, voicesBuf, tokenizer] = await Promise.all([
+    const CONFIG_URL = `${MODEL_URL_BASE}${_model.modelId}/resolve/main/config.json`;
+    const [modelBuf, voicesBuf, tokenizer, configBuf] = await Promise.all([
       // Wrap fetch with explicit timeout + better error messages. The
       // generic "Failed to fetch" from the browser is useless — surface
       // the URL, the status (if any), and the CORS signal.
       fetchWithDiagnostics(MODEL_URL, 'Model', progressCallback),
       fetchWithDiagnostics(VOICES_URL, 'Voices'),
       loadTokenizer(),
+      // config.json is optional (older Kitten repos may not ship it), but it
+      // carries the per-voice `speed_priors` the reference impl applies.
+      fetchWithDiagnostics(CONFIG_URL, 'Config').catch(() => null),
     ]);
 
     // Parse voices
     this.voices = parseNpz(voicesBuf);
     this.tokenizer = tokenizer;
+    if (configBuf) {
+      try {
+        const cfg = JSON.parse(new TextDecoder().decode(configBuf)) as {
+          speed_priors?: Record<string, number>;
+        };
+        if (cfg.speed_priors && typeof cfg.speed_priors === 'object') {
+          this.speedPriors = cfg.speed_priors;
+        }
+      } catch {
+        // Malformed optional config: run without priors.
+      }
+    }
 
     // Create ONNX session. Prefer WebGPU when available — the 78MB kitten-mini
     // download is more amortized when inference runs on the GPU. WebGPU
     // is only listed first so ORT-web selects it when supported; if it's
     // absent or fails, ORT-web transparently falls back to wasm.
+    //
+    // Exception: ORT compiles this model's kernels with WGSL `f16` storage,
+    // which requires the adapter's `shader-f16` feature. On adapters without
+    // it, every f16 kernel fails WebGPU validation at generate time (console
+    // fills with "'f16' type used without 'f16' extension enabled") and the
+    // output audio is wrong — so pin the WASM EP there.
+    const useWebGpu = await webgpuAdapterHasFeature('shader-f16');
     this.session = await ort.InferenceSession.create(modelBuf, {
-      executionProviders: ['webgpu', 'wasm'],
+      executionProviders: useWebGpu ? ['webgpu', 'wasm'] : ['wasm'],
       // Graph optimization can change numerics for some models; 'basic' is safer
       graphOptimizationLevel: 'basic',
     });
@@ -330,12 +356,11 @@ export class KittenCustomEngine implements CustomEngine {
     }
     const phonemize = await getPhonemize();
     const voice = voiceId ?? 'expr-voice-2-m';
-    const speed = options?.speed ?? 1.0;
+    // config.json ships per-voice speed priors (e.g. 0.8); they multiply the
+    // user-facing speed before it reaches the model.
+    const speed = (options?.speed ?? 1.0) * (this.speedPriors[voice] ?? 1.0);
     const voiceArr = this.voices[voice];
     if (!voiceArr) throw new Error(`Unknown voice: ${voice}`);
-    // The voice array is shape (400, 256) in row-major. We use the first
-    // 256-dim frame as the style vector (matches the reference demo).
-    const voiceVec = voiceArr.slice(0, 256);
 
     // Phonemize → wrap with $ boundaries → tokenize
     const phonemes = await phonemize(text, 'en-us');
@@ -349,6 +374,13 @@ export class KittenCustomEngine implements CustomEngine {
       return id;
     });
     const inputIdsBig = BigInt64Array.from(inputIds.map((id: number) => BigInt(id)));
+
+    // The voice bank is shape (400, 256) in row-major: one 256-dim style
+    // vector per token count. The reference impls index with
+    // min(token_ids.length, nrows - 1).
+    const nrows = voiceArr.length / 256;
+    const refIdx = Math.min(inputIds.length, nrows - 1);
+    const voiceVec = voiceArr.slice(refIdx * 256, (refIdx + 1) * 256);
 
     const ort = await getOrt();
     const inputs = {
@@ -376,7 +408,10 @@ export class KittenCustomEngine implements CustomEngine {
       for (let i = 0; i < cleaned.length; i++) cleaned[i] *= scale;
     }
 
-    return { audio: cleaned, samplingRate: this.sampleRate };
+    // The model appends ~5000 samples of decoder artifact after the speech;
+    // both reference impls trim the last 5000 samples unconditionally.
+    const usable = Math.max(0, cleaned.length - 5000);
+    return { audio: cleaned.slice(0, usable), samplingRate: this.sampleRate };
   }
 
   dispose(): void {
@@ -391,5 +426,6 @@ export class KittenCustomEngine implements CustomEngine {
     }
     this.voices = {};
     this.tokenizer = null;
+    this.speedPriors = {};
   }
 }

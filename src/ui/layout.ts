@@ -205,8 +205,21 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <span class="generation-feedback__dot" aria-hidden="true"></span>
           <span id="generation-feedback-text">Generating…</span>
         </div>
+        <button class="stream-btn" id="stream-btn" disabled title="Speak the text while it generates">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span id="stream-btn-label">Play</span>
+        </button>
         <span class="queue-count" id="queue-count" hidden></span>
+        <button class="clear-btn" id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
         <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
+      </div>
+
+      <!-- Streaming playback controller: visible while a Play session runs. -->
+      <div class="stream-bar" id="stream-bar" hidden>
+        <button class="document-btn" id="stream-pause-btn" type="button">Pause</button>
+        <button class="document-btn" id="stream-stop-btn" type="button">Stop</button>
+        <span class="stream-bar__status" id="stream-status-text" role="status" aria-live="polite"></span>
+        <span class="stream-bar__speaking" id="stream-speaking"></span>
       </div>
 
       <!-- Speed slider -->

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { float32ToWav, changeSpeed, MODELS } from './engine';
+import { float32ToWav, changeSpeed, limitPeaks, MODELS } from './engine';
 import { KOKORO_VOICES } from './engines/kokoro';
 
 describe('float32ToWav', () => {
@@ -65,6 +65,31 @@ describe('float32ToWav', () => {
     const blob = float32ToWav(new Float32Array(0), 16000);
     const buf = await blob.arrayBuffer();
     expect(buf.byteLength).toBe(44); // header only
+  });
+});
+
+describe('limitPeaks', () => {
+  it('returns in-range audio untouched', () => {
+    const a = new Float32Array([0.5, -0.9, 1.0, -1.0]);
+    expect(limitPeaks(a)).toBe(a);
+  });
+
+  it('scales down sustained over-modulation instead of letting the WAV encoder clip it', () => {
+    const a = new Float32Array([0, 1.5, -3, 1]);
+    const out = limitPeaks(a);
+    let peak = 0;
+    for (const v of out) peak = Math.max(peak, Math.abs(v));
+    expect(peak).toBeCloseTo(0.99, 5);
+    // Waveform shape survives the scale-down.
+    expect(out[1] / out[2]).toBeCloseTo(-0.5, 5);
+  });
+
+  it('clamps isolated spikes without whispering the rest of the clip', () => {
+    const a = new Float32Array(1000).fill(0.5);
+    a[0] = 20; // decoder edge click
+    const out = limitPeaks(a);
+    expect(out[0]).toBeCloseTo(0.99, 5);
+    expect(out[500]).toBe(0.5); // speech untouched
   });
 });
 

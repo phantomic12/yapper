@@ -273,7 +273,7 @@ export function handleEngineStateChange(
       textInput.disabled = false;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
-      showStatus('success', `${current?.name} is ready. Type something and hit Generate (or queue several).`);
+      showStatus('success', `${current?.name} is ready. Type something and hit Add to queue (or press Ctrl/Cmd+Enter).`);
       break;
     }
 

@@ -1,6 +1,6 @@
 import { pipeline, env } from '@huggingface/transformers';
 import { EventEmitter } from './events';
-import { detectCapability } from './capability';
+import { detectCapability, webgpuAdapterHasFeature } from './capability';
 import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
@@ -651,8 +651,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           loaded?: number;
           total?: number;
         }
+        // Pin WASM on adapters without `shader-f16` (see capability.ts):
+        // transformers.js's ORT build would otherwise compile f16 kernels
+        // that fail WebGPU validation on such adapters.
+        const useF16 = await webgpuAdapterHasFeature('shader-f16');
         const newPipe = await pipeline('text-to-speech', model.modelId, {
           dtype: model.dtype ?? 'q8',
+          ...(useF16 ? {} : { device: 'wasm' as const }),
           progress_callback: (progress: LoadProgress) => {
             if (progress.status === 'progress') {
               this.touchLoadActivity();
@@ -746,6 +751,25 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     }
   }
 
+  /**
+   * Re-attach previously-persisted jobs (see persistence.ts) at boot.
+   * Jobs keep their saved ids and chronological order; `pending` jobs
+   * resume FIFO once their model is loaded again. Restored `done` jobs
+   * get a fresh blob URL. Call once, with jobs oldest-first.
+   */
+  restoreJobs(restored: GenerationJob[]): void {
+    for (const job of [...restored].reverse()) {
+      if (this.jobs.some(j => j.id === job.id)) continue;
+      const n = Number(job.id.replace(/^job-/, ''));
+      if (Number.isFinite(n) && n >= this.nextJobId) this.nextJobId = n + 1;
+      if (job.status === 'done' && job.blob && !job.url) {
+        job.url = URL.createObjectURL(job.blob);
+      }
+      this.jobs.unshift(job); // newest at top, like enqueue()
+    }
+    this.notifyJobs();
+  }
+
   clearFinished(): void {
     // Revoke blob URLs of finished jobs so we don't leak memory. The user
     // keeps the active ones (pending/generating) so playback continues.
@@ -766,7 +790,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     if (this.engineState !== 'ready') return;
 
     while (true) {
-      const next = this.jobs.find(j => j.status === 'pending');
+      // FIFO: dequeue the OLDEST pending job so queued text is spoken in
+      // the order it was added (and reader chunks synthesize in reading
+      // order). The jobs array is newest-first for display, so the oldest
+      // pending entry is the last one.
+      const next = this.jobs.filter(j => j.status === 'pending').pop();
       if (!next) break;
       if (this.currentModel?.id !== next.modelId) break; // need to load the right model first
       if (!this.pipe && !this.currentModel.custom) break;
@@ -873,6 +901,10 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           continue;
         }
 
+        // TTS output can exceed ±1 (quantized vocoders, corrupt kernels);
+        // the WAV encoder hard-clamps those samples to the int16 ceiling,
+        // flattening peaks into audible distortion. Scale down instead.
+        audio = limitPeaks(audio);
         next.audio = audio;
         next.sampleRate = samplingRate;
         next.blob = float32ToWav(audio, samplingRate);
@@ -974,6 +1006,35 @@ function writeString(view: DataView, offset: number, str: string) {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));
   }
+}
+
+// ─── Peak limiting ───────────────────────────────────────────────
+// Some TTS models emit samples above ±1. float32ToWav hard-clamps those
+// to the int16 ceiling. For sustained over-modulation, scale the whole
+// clip to a 0.99 peak. For isolated transients (decoder edge clicks),
+// clamp just those samples — scaling a whole clip for a three-sample
+// spike would turn the rest of the speech into a whisper. In-range audio
+// is returned untouched.
+export function limitPeaks(audio: Float32Array, ceiling = 0.99): Float32Array {
+  let peak = 0;
+  let over = 0;
+  for (let i = 0; i < audio.length; i++) {
+    const a = Math.abs(audio[i]);
+    if (a > peak) peak = a;
+    if (a > ceiling) over++;
+  }
+  if (peak <= 1.0) return audio;
+  const out = new Float32Array(audio.length);
+  if (over / audio.length < 0.01) {
+    for (let i = 0; i < audio.length; i++) {
+      const v = audio[i];
+      out[i] = v > ceiling ? ceiling : v < -ceiling ? -ceiling : v;
+    }
+    return out;
+  }
+  const scale = ceiling / peak;
+  for (let i = 0; i < audio.length; i++) out[i] = audio[i] * scale;
+  return out;
 }
 
 // ─── Speed change via resampling ────────────────────────────────

@@ -219,10 +219,11 @@ describe('TTSEngine — job queue', () => {
     expect(engine.getJobs().find(j => j.id === job.id)?.wordTimings).toBeUndefined();
   });
 
-  it('processes jobs in newest-first order (matches the UI: newest is at index 0)', async () => {
-    // The engine unshifts new jobs and find()s the first pending one, so
-    // newer jobs are dequeued first. This is the actual behavior the UI
-    // relies on: a freshly-added "interrupt" job preempts queued ones.
+  it('processes jobs in the order they were added (FIFO queue)', async () => {
+    // Jobs must generate in enqueue order so queued text is spoken in the
+    // order the user added it (and reader chunks are synthesized in reading
+    // order). The jobs array is newest-first for display, so the engine
+    // dequeues the oldest pending entry.
     mock.generateMs = 10;
     const order: string[] = [];
     const watch = new TTSEngine({
@@ -241,7 +242,7 @@ describe('TTSEngine — job queue', () => {
         }
       }, 5);
     });
-    expect(order).toEqual(['third', 'second', 'first']);
+    expect(order).toEqual(['first', 'second', 'third']);
   });
 
   it('newest job is at the top of the list (matches UI)', () => {

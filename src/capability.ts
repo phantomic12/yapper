@@ -88,3 +88,45 @@ export async function detectCapability(): Promise<CapabilityInfo> {
     return CAPABILITY_INFO.partial;
   }
 }
+
+// ─── Adapter feature probes ────────────────────────────────────────
+// ORT's WebGPU kernels for our models (Kitten's int8 graph, Kokoro's
+// q8f16/fp16 files) are generated with WGSL `f16` storage, which needs
+// the `shader-f16` device feature. On adapters that lack it every one
+// of those kernels fails WebGPU validation at generate time — the
+// console fills with "'f16' type used without 'f16' extension enabled"
+// and the produced audio is wrong. Engines therefore ask this probe
+// first and pin the WASM execution provider when f16 is unavailable.
+// Probes are cached per feature so load() paths can ask freely.
+
+const featureProbeCache = new Map<string, Promise<boolean>>();
+
+export function webgpuAdapterHasFeature(feature: string): Promise<boolean> {
+  let cached = featureProbeCache.get(feature);
+  if (!cached) {
+    cached = probeAdapterFeature(feature);
+    featureProbeCache.set(feature, cached);
+  }
+  return cached;
+}
+
+async function probeAdapterFeature(feature: string): Promise<boolean> {
+  const gpu = (navigator as Navigator & {
+    gpu?: { requestAdapter(): Promise<unknown> };
+  }).gpu;
+  if (!gpu) return false;
+  try {
+    const adapter = (await Promise.race([
+      gpu.requestAdapter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), ADAPTER_TIMEOUT_MS)),
+    ])) as { features?: unknown } | null;
+    const features = adapter?.features;
+    if (!features) return false;
+    if (typeof (features as { has?: unknown }).has === 'function') {
+      return (features as { has(f: string): boolean }).has(feature);
+    }
+    return Array.isArray(features) && features.includes(feature);
+  } catch {
+    return false;
+  }
+}

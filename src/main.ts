@@ -1,7 +1,15 @@
 import './style.css';
 import { detectCapability } from './capability';
 import { registerEngines, createAppEngine } from './app-bootstrap';
-import { createAppState } from './app-state';
+import { createAppState, type AppState } from './app-state';
+import { MODELS } from './engine';
+import {
+  loadSettings,
+  saveSettings,
+  persistJobs,
+  restoreJobsFromStore,
+} from './persistence';
+import { bindStreamPlayer } from './ui/stream-player';
 import { buildAppMarkup } from './ui/layout';
 import {
   bindModelPanelEvents,
@@ -26,6 +34,68 @@ registerEngines();
 const root = document.getElementById('app') as HTMLDivElement;
 const state = createAppState();
 
+/** Apply persisted settings to fresh state before the first render. */
+function applySavedSettings(appState: AppState): string {
+  const saved = loadSettings();
+  if (!saved) return '';
+  if (saved.modelId) {
+    const model = MODELS.find(m => m.id === saved.modelId);
+    if (model) {
+      appState.selectedModel = model;
+      appState.selectedVoiceId = saved.voiceId && model.voices?.some(v => v.id === saved.voiceId)
+        ? saved.voiceId
+        : model.defaultVoiceId ?? model.voices?.[0]?.id;
+    }
+  }
+  if (typeof saved.speed === 'number' && Number.isFinite(saved.speed)) {
+    appState.currentSpeed = saved.speed;
+  }
+  if (saved.languageFilter) {
+    appState.currentLanguageFilter = saved.languageFilter;
+  }
+  return typeof saved.draftText === 'string' ? saved.draftText : '';
+}
+
+/**
+ * Keep settings + draft text in localStorage and the job history in
+ * IndexedDB. Best-effort: failures never interrupt generation.
+ */
+function installPersistence(appState: AppState): void {
+  const textInput = document.getElementById('text-input') as HTMLTextAreaElement | null;
+  const saveSettingsNow = (): void => {
+    saveSettings({
+      modelId: appState.selectedModel.id,
+      voiceId: appState.selectedVoiceId,
+      speed: appState.currentSpeed,
+      draftText: textInput?.value ?? '',
+      languageFilter: appState.currentLanguageFilter,
+    });
+  };
+  let settingsTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleSettingsSave = (): void => {
+    clearTimeout(settingsTimer);
+    settingsTimer = setTimeout(saveSettingsNow, 400);
+  };
+  // Covers typing, the speed slider, the language filter, and the
+  // model/voice card clicks (which update appState in their handlers).
+  document.addEventListener('input', scheduleSettingsSave);
+  document.addEventListener('change', scheduleSettingsSave);
+  document.addEventListener('click', scheduleSettingsSave);
+
+  let jobsTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleJobsSave = (): void => {
+    clearTimeout(jobsTimer);
+    jobsTimer = setTimeout(() => {
+      void persistJobs(appState.currentJobs).catch(() => undefined);
+    }, 500);
+  };
+  appState.engine?.on('jobsChange', scheduleJobsSave);
+  // Flush the job store when the page goes away.
+  window.addEventListener('pagehide', () => {
+    void persistJobs(appState.currentJobs).catch(() => undefined);
+  });
+}
+
 async function render(): Promise<void> {
   // Three-class capability detection ('none' | 'partial' | 'full') drives
   // the honest banner wording — see src/capability.ts and
@@ -46,10 +116,21 @@ async function render(): Promise<void> {
     onEngineError: handleEngineError,
   });
 
+  const draftText = applySavedSettings(state);
+
   root.innerHTML = buildAppMarkup({
     capability: state.capability,
     selectedModelId: state.selectedModel.id,
   });
+
+  // Restore the draft + speed into the freshly-built controls before the
+  // event binders snapshot their initial labels.
+  const textInput = document.getElementById('text-input') as HTMLTextAreaElement;
+  if (draftText) textInput.value = draftText;
+  const speedSlider = document.getElementById('speed-slider') as HTMLInputElement;
+  const speedValue = document.getElementById('speed-value')!;
+  speedSlider.value = String(state.currentSpeed);
+  speedValue.textContent = `${state.currentSpeed.toFixed(2)}x`;
 
   renderLanguageFilter(state);
   renderModelCardStatuses(state);
@@ -62,6 +143,17 @@ async function render(): Promise<void> {
   });
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
+  bindStreamPlayer(state);
+  installPersistence(state);
+
+  // Bring back the job history (including playable audio) from IndexedDB.
+  void restoreJobsFromStore()
+    .then(jobs => {
+      if (jobs.length > 0) state.engine?.restoreJobs(jobs);
+    })
+    .catch(() => {
+      // IndexedDB unavailable (private mode etc.) — start fresh.
+    });
 }
 
 render().catch((err) => {

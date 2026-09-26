@@ -1,4 +1,5 @@
 import type { CustomEngine, TTSModel, Voice } from '../engine';
+import { webgpuAdapterHasFeature } from '../capability';
 
 // Kokoro-82M via the official kokoro-js package (xenova).
 // Browser-friendly: kokoro-js bundles eSpeak NG WASM and onnxruntime-web.
@@ -87,6 +88,7 @@ interface KokoroModule {
       modelId: string,
       options: {
         dtype: string;
+        device?: 'wasm' | 'webgpu' | 'cpu' | null;
         progress_callback?: (data: KokoroProgress) => void;
       },
     ): Promise<KokoroTTSLike>;
@@ -119,8 +121,15 @@ export class KokoroCustomEngine implements CustomEngine {
       // from the TTSModel entry so the fp16 Kokoro card actually downloads
       // the fp16 file (~163MB) instead of silently falling back to q8.
       const dtype = _model.dtype ?? KOKORO_DEFAULT_DTYPE;
+      // Kokoro's q8f16/fp16 graphs are compiled with WGSL `f16` kernels,
+      // which require the adapter's `shader-f16` feature. On adapters
+      // without it generation floods the console with validation errors and
+      // produces bad audio, so pin WASM there; keep the default device
+      // selection when f16 is available.
+      const device = (await webgpuAdapterHasFeature('shader-f16')) ? null : 'wasm';
       this.tts = await KokoroTTS.from_pretrained(_model.modelId, {
         dtype,
+        device,
         progress_callback: (data) => {
           if (data?.status === 'progress' && progressCallback) {
             progressCallback(data.loaded ?? 0, data.total ?? 1);
