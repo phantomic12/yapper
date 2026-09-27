@@ -68,3 +68,17 @@ describe('generation liveness element (AC4)', () => {
     expect(root.querySelector('#generation-feedback-text')?.textContent).toContain('Generating');
   });
 });
+
+describe('half-precision fallback notice', () => {
+  it('is present but hidden, with an empty copy slot the probe fills in', () => {
+    // The adapter probe is async, so the notice cannot be rendered with its
+    // final state. It must ship hidden with a slot for the copy, or a flash
+    // of un-explained warning text appears on every load.
+    const root = render('full');
+    const warning = root.querySelector<HTMLElement>('#f16-warning')!;
+    expect(warning).toBeTruthy();
+    expect(warning.style.display).toBe('none');
+    expect(warning.getAttribute('role')).toBe('status');
+    expect(warning.querySelector('[data-role="f16-copy"]')!.textContent).toBe('');
+  });
+});

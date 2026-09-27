@@ -194,6 +194,31 @@ body {
   margin-top: 1px;
 }
 
+/* ─── Half-precision fallback notice ────────────────────────── */
+/* Shown when the adapter exists but lacks shader-f16, so fp16 model cards
+   silently resolve to their int8 build instead. Reuses the amber warning
+   idiom so the advisory banners read as one family of message. */
+.gpu-f16-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--warning);
+  font-size: 0.82rem;
+  font-weight: 500;
+  margin-bottom: 24px;
+}
+
+.gpu-f16-warning svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
 .gpu-status__label {
   font-family: var(--font-mono);
   font-size: 0.78rem;

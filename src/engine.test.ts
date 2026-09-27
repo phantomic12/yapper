@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { float32ToWav, changeSpeed, limitPeaks, MODELS } from './engine';
-import { KOKORO_VOICES } from './engines/kokoro';
+import { KOKORO_VOICES, chooseKokoroRuntime } from './engines/kokoro';
 
 describe('float32ToWav', () => {
   it('produces a RIFF/WAVE header for a mono 16-bit PCM blob', async () => {
@@ -168,6 +168,29 @@ describe('MODELS registry', () => {
     }
   });
 
+  it('flags only the models measured to be slow on the CPU fallback', () => {
+    // This used to assert that Kokoro-82M and SpeechT5 were flagged as
+    // CPU-slow. It no longer applies: measured on an f16-less adapter,
+    // Kokoro's int8 graph produced a 44-character sentence in 4.8s on WASM
+    // and 5.4s on WebGPU, so the warning would have been untrue. The
+    // registry deliberately carries no slowness flags.
+    const flagged = MODELS.filter(m => 'cpuSlow' in m).map(m => m.id);
+    expect(flagged).toEqual([]);
+  });
+
+  it('describes the Kokoro entries with the files they actually download', () => {
+    // transformers.js maps dtype 'q8' to the _quantized suffix, so the
+    // int8 card downloads model_quantized.onnx — NOT model_q8f16.onnx, which
+    // is a different (f16-compute) file that this registry must not claim.
+    const int8 = MODELS.find(m => m.id === 'kokoro-82m')!;
+    expect(int8.dtype).toBe('q8');
+    expect(int8.modelFile).toBe('onnx/model_quantized.onnx');
+    expect(int8.sizeMB).toBe(88);
+    const fp16 = MODELS.find(m => m.id === 'kokoro-82m-fp16')!;
+    expect(fp16.dtype).toBe('fp16');
+    expect(fp16.modelFile).toBe('onnx/model_fp16.onnx');
+  });
+
   it('kokoro model entries expose the full KOKORO_VOICES list', () => {
     const kokoros = MODELS.filter(m => m.id.startsWith('kokoro'));
     expect(kokoros.length).toBeGreaterThanOrEqual(2);
@@ -176,5 +199,51 @@ describe('MODELS registry', () => {
       expect(m.voices?.length).toBe(28);
       expect(m.defaultVoiceId).toBe('af_heart');
     }
+  });
+});
+
+describe('chooseKokoroRuntime', () => {
+  it('leaves the selection alone on a GPU with f16 support', () => {
+    expect(chooseKokoroRuntime('q8', true)).toEqual({
+      dtype: 'q8', device: null, downgradedForF16: false,
+    });
+    expect(chooseKokoroRuntime('fp16', true)).toEqual({
+      dtype: 'fp16', device: null, downgradedForF16: false,
+    });
+  });
+
+  it('keeps the int8 graph on the GPU when f16 is unavailable', () => {
+    // The regression this guards: the int8 graph (q8 -> model_quantized.onnx)
+    // has no f16 anywhere, so it runs on WebGPU fine. Pinning WASM here sent
+    // a perfectly GPU-capable model to the CPU for nothing.
+    const choice = chooseKokoroRuntime('q8', false);
+    expect(choice.dtype).toBe('q8');
+    expect(choice.device).toBeNull();
+    expect(choice.downgradedForF16).toBe(false);
+  });
+
+  it('downgrades the genuinely-f16 graphs to the int8 build', () => {
+    for (const f16 of ['fp16', 'q4f16']) {
+      const choice = chooseKokoroRuntime(f16, false);
+      expect(choice.dtype, f16).toBe('q8');
+      expect(choice.device, f16).toBeNull();
+      expect(choice.downgradedForF16, f16).toBe(true);
+    }
+  });
+
+  it('never pins WASM, whatever the dtype', () => {
+    // The device is left to ORT in every branch: measured on an f16-less
+    // adapter the int8 graph ran 4.8s on WASM vs 5.4s on an emulated
+    // WebGPU adapter, so hard-pinning a provider buys nothing.
+    for (const hasF16 of [true, false]) {
+      for (const dtype of ['q8', 'fp16', 'q4f16', 'fp32', undefined]) {
+        expect(chooseKokoroRuntime(dtype, hasF16).device, `${dtype}/${hasF16}`).toBeNull();
+      }
+    }
+  });
+
+  it('defaults to the int8 build when no dtype is given', () => {
+    expect(chooseKokoroRuntime(undefined, true).dtype).toBe('q8');
+    expect(chooseKokoroRuntime(undefined, false).dtype).toBe('q8');
   });
 });

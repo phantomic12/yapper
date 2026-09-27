@@ -6,6 +6,13 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **Honest half-precision notice**: when the WebGPU adapter exists but lacks
+  the `shader-f16` feature, the model panel now says so and explains that fp16
+  cards (Kokoro-82M fp16) quietly resolve to the 88MB int8 build instead of the
+  156MB fp16 one. `detectAcceleration()` in `src/capability.ts` collapses the
+  capability class and the f16 probe into the one question the UI needs, and
+  reports the "adapter works but can't run our kernels" case that the
+  three-class banner cannot express.
 - **Streaming playback**: a Play button and stream bar that start reading
   the text box out loud, sentence by sentence, while synthesis is still
   running. Audio is scheduled in overlapping parts (`src/ui/stream-player.ts`)
@@ -46,6 +53,45 @@ All notable changes to Yapper are recorded here. Versions follow
   (multi-sentence input shows segment markers) steps in `e2e_test.py`.
 
 ### Fixed
+- **Kokoro could not load at all**: kokoro-js bundles its own copy of
+  `@huggingface/transformers` (3.8.1) and its own `onnxruntime-web` instance, so
+  the `wasmPaths` that `src/engine.ts` configures for the app's top-level
+  transformers never reached the environment that Kokoro sessions are actually
+  created in. Unconfigured, transformers falls back to the jsdelivr CDN, which
+  the app's CSP (`script-src 'self'`) blocks, so every Kokoro load failed with
+  "no available backend found" — verified on a fresh page through the real UI.
+  `src/engines/kokoro.ts` now sets `env.wasmPaths` (a live accessor onto that
+  nested ORT env) to the same locally-copied runtime the rest of the app uses.
+  Kokoro now loads in ~2s and generates normally.
+- **ORT's WASM runtime was unresolvable in `npm run dev`**: as of Vite 8, the dev
+  server refuses to serve anything under `public/` as an ES module ("This file
+  is in /public ... should not be imported from source code"), so ORT's dynamic
+  `import()` of `/ort-wasm/ort-wasm-simd-threaded.jsep.mjs` returned a 500 and
+  every model that needs the WASM runtime failed locally. Production is
+  unaffected — the file is emitted into `dist/` and imported normally. A dev-only
+  middleware now streams those files straight off disk, matching the build
+  output exactly.
+- **Kokoro was demoted to the CPU for no reason**: the engine assumed the
+  `q8` Kokoro card downloads `model_q8f16.onnx` and pinned the WASM execution
+  provider on adapters without `shader-f16`. It does not — transformers.js maps
+  `q8` to the `_quantized` suffix, i.e. `model_quantized.onnx`, which is int8
+  weights with **fp32** compute and no f16 anywhere. The card was therefore GPU
+  capable and being sent to the CPU regardless. The WASM pin is gone (ORT picks
+  its own provider now), only the genuinely f16 graphs (`fp16`, `q4f16`) get
+  substituted with the int8 build, and those substitutions stay on the GPU.
+  Measured on an f16-less adapter, a 44-character sentence takes 4.8s on WASM
+  and 5.4s on WebGPU — normal for this model, and the reason no "your CPU is too
+  slow" warning ships: the slowness it would have warned about was not real.
+- **The model registry described files it never downloaded**: the Kokoro cards
+  claimed `model_q8f16.onnx` and a 156/163MB fp16 download. Corrected to the
+  files transformers.js actually resolves (`model_quantized.onnx` at 88MB,
+  `model_fp16.onnx` at 156MB), with a test that pins both.
+- **The service worker is no longer registered in development**: its
+  cache-first app-shell strategy kept serving the module graph it saw first, so
+  edited source could look unchanged in the browser for minutes — which read as
+  a broken build and sent this investigation down the wrong path twice.
+  Registration moved from an inline script in `index.html` to `src/main.ts`
+  behind `import.meta.env.PROD`.
 - **Kitten output was garbled**: the bundled `voices.npz` style bank is indexed
   by *token count*, not by voice, and the engine was always reading row 0 —
   producing a ~1.35s burst of noise with a peak near 20 instead of speech. The

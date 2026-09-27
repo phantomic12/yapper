@@ -175,6 +175,10 @@ export function bindModelPanelEvents(
     state.currentLanguageFilter = langSelect.value;
     renderLanguageFilter(state);
   });
+
+  // The f16 notice is device-level, not per-model, so it only needs the
+  // adapter probe to have resolved before it can be shown.
+  updatePrecisionWarning(state);
 }
 
 function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): void {
@@ -191,6 +195,7 @@ function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): vo
   renderVoiceSection(state);
   renderModelCardStatuses(state);
   updateMainThreadWarning(state);
+  updatePrecisionWarning(state);
 }
 
 /**
@@ -214,6 +219,39 @@ export function updateMainThreadWarning(state: AppState): void {
   } else {
     warning.style.display = 'none';
   }
+}
+
+/**
+ * Tell the user when their GPU can run everything except half-precision
+ * models.
+ *
+ * Only the `degradedGpu` case earns a warning. The obvious candidates — "your
+ * CPU is slow, use a smaller model" — were measured and are false: on an
+ * f16-less adapter, Kokoro's int8 graph (no f16 anywhere in it) rendered a
+ * 44-character sentence in 4.8s on WASM and 5.4s on WebGPU, which is normal
+ * for this model. So there is no slow-model warning to give, and inventing
+ * one would be the exact dishonesty this app's banner docs exist to prevent.
+ *
+ * What IS worth saying: the fp16 Kokoro card promises a 156MB half-precision
+ * download, and on this machine it silently becomes the 88MB int8 build
+ * instead. A selection that quietly isn't what it claims needs a line of copy.
+ */
+export function updatePrecisionWarning(state: AppState): void {
+  const warning = document.getElementById('f16-warning');
+  if (!warning) return;
+  if (!state.acceleration.degradedGpu) {
+    warning.style.display = 'none';
+    return;
+  }
+  const copy = warning.querySelector<HTMLElement>('[data-role="f16-copy"]');
+  if (copy) {
+    copy.textContent =
+      'This GPU can\'t run half-precision models, so fp16 variants (like '
+      + 'Kokoro-82M fp16) automatically use the int8 build instead — 88MB rather '
+      + 'than 156MB, with a slight quality difference. Every other model here '
+      + 'runs GPU-accelerated as normal.';
+  }
+  warning.style.display = '';
 }
 
 function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1): void {

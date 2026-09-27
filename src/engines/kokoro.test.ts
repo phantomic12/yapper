@@ -14,18 +14,23 @@ type Segment = {
 
 const streamMock = vi.hoisted(() => ({ fn: vi.fn() }));
 
+const envMock = vi.hoisted(() => ({ wasmPaths: undefined as string | undefined }));
+
 vi.mock('kokoro-js', () => ({
   KokoroTTS: {
     from_pretrained: vi.fn(async () => ({
       stream: streamMock.fn,
     })),
   },
+  // `env.wasmPaths` is a live accessor onto the onnxruntime-web instance that
+  // Kokoro sessions are created in — see the load() comment in kokoro.ts.
+  env: envMock,
 }));
 
 function makeModel(): TTSModel {
   return {
     id: 'kokoro-82m',
-    name: 'Kokoro-82M (q8f16)',
+    name: 'Kokoro-82M (int8)',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
     description: '',
     category: 'premium',
@@ -47,8 +52,17 @@ describe('KokoroCustomEngine — segment progress', () => {
 
   beforeEach(async () => {
     streamMock.fn = vi.fn();
+    envMock.wasmPaths = undefined;
     engine = new KokoroCustomEngine();
     await engine.load(makeModel());
+  });
+
+  it('points Kokoro at the locally-served ORT runtime, not a CDN', async () => {
+    // kokoro-js bundles its own transformers + onnxruntime-web, so the
+    // wasmPaths that src/engine.ts sets for the app's top-level copy never
+    // reached it. Unconfigured it defaults to jsdelivr, which the app's CSP
+    // blocks, and every Kokoro load died with "no available backend found".
+    expect(envMock.wasmPaths).toBe('/ort-wasm/');
   });
 
   const seg = (phonemes: string, samples: number): Segment => ({

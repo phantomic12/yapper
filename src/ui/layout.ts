@@ -72,6 +72,15 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span>${selectedModel?.name ?? 'This model'} runs on the main thread — generation may briefly freeze the page while it synthesizes audio. Kokoro and Kitten stay responsive in a background worker.</span>
       </div>
 
+      <!-- Half-precision notice: shown only when the adapter exists but lacks
+           shader-f16, so fp16 model cards silently fall back to the int8 build.
+           Hidden by default because the adapter probe is async;
+           updatePrecisionWarning fills in the copy once it resolves. -->
+      <div class="gpu-f16-warning" id="f16-warning" role="status" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>
+        <span data-role="f16-copy"></span>
+      </div>
+
       <!-- Model Selection -->
       <label class="section-label" for="language-filter">Filter models by language</label>
 

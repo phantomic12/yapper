@@ -93,6 +93,56 @@ interface KokoroModule {
       },
     ): Promise<KokoroTTSLike>;
   };
+  /**
+   * `env.wasmPaths` is a live accessor onto the onnxruntime-web instance that
+   * Kokoro sessions are actually created with — not a plain data property.
+   */
+  env: { wasmPaths?: string };
+}
+
+/**
+ * Which ONNX file and execution provider Kokoro should use on this device.
+ *
+ * transformers.js resolves a dtype to a file by suffix (verified in the
+ * bundled @huggingface/transformers 3.8.1 that kokoro-js ships):
+ *
+ *   q8    → model_quantized.onnx  int8 weights, **fp32 compute** → no f16
+ *   int8  → model_int8.onnx       (not published for Kokoro-82M)
+ *   fp16  → model_fp16.onnx       fp16 weights + compute       → needs shader-f16
+ *   q4f16 → model_q4f16.onnx      4-bit + f16 compute         → needs shader-f16
+ *   fp32  → model.onnx            338MB, no f16
+ *
+ * The important one is the default: the q8 Kokoro card downloads
+ * `model_quantized.onnx`, which is int8-weighted but computes in fp32. It has
+ * no f16 anywhere, so it runs on WebGPU just fine. An earlier version of this
+ * engine assumed the q8 file was `model_q8f16.onnx` and pinned the WASM
+ * execution provider whenever the adapter lacked `shader-f16` — sending a
+ * perfectly GPU-capable model to the CPU, where a 44-character sentence took
+ * ~74s and longer input hit the 180s watchdog. Only the explicit fp16 and
+ * q4f16 graphs genuinely need the f16 feature, and on a device without it
+ * they are downgraded to the q8 file rather than dropped to the CPU.
+ */
+export interface KokoroRuntimeChoice {
+  /** dtype string handed to kokoro-js. */
+  dtype: string;
+  /** Execution-provider override; null lets ORT prefer WebGPU. */
+  device: 'wasm' | null;
+  /** True when an f16 graph was swapped for its fp32-compute equivalent. */
+  downgradedForF16: boolean;
+}
+
+/** dtypes whose graphs contain f16 math and so need the `shader-f16` feature. */
+const KOKORO_F16_DTYPES = new Set(['fp16', 'q4f16']);
+
+export function chooseKokoroRuntime(
+  requestedDtype: string | undefined,
+  hasF16: boolean,
+): KokoroRuntimeChoice {
+  const requested = requestedDtype ?? KOKORO_DEFAULT_DTYPE;
+  if (hasF16 || !KOKORO_F16_DTYPES.has(requested)) {
+    return { dtype: requested, device: null, downgradedForF16: false };
+  }
+  return { dtype: KOKORO_DEFAULT_DTYPE, device: null, downgradedForF16: true };
 }
 
 export class KokoroCustomEngine implements CustomEngine {
@@ -114,22 +164,39 @@ export class KokoroCustomEngine implements CustomEngine {
       const mod = (await import('kokoro-js')) as unknown as KokoroModule;
       const KokoroTTS = mod.KokoroTTS;
 
+      // Point Kokoro's own onnxruntime-web at the locally-copied WASM.
+      //
+      // kokoro-js bundles its own copy of @huggingface/transformers (3.8.1),
+      // which resolves to its own onnxruntime-web instance, so the
+      // `env.backends.onnx.wasm.wasmPaths` that src/engine.ts sets for the
+      // app's top-level transformers does NOT reach the environment that
+      // Kokoro sessions are created in. Unconfigured, transformers falls back
+      // to the jsdelivr CDN — which the app's CSP (script-src 'self') blocks —
+      // so every Kokoro load failed with "no available backend found", on a
+      // cold cache and on a warm one. mod.env.wasmPaths is a live accessor
+      // onto that nested ORT env; setting it is the supported way to hand
+      // Kokoro the same WASM build the rest of the app already ships under
+      // /ort-wasm/ (populated by the copy-ort-wasm Vite plugin).
+      if (mod.env) {
+        mod.env.wasmPaths = `${import.meta.env.BASE_URL}ort-wasm/`;
+      }
+
       // The first call also downloads voices; track via progress callback.
       // KokoroTTS.from_pretrained takes {dtype, device, progress_callback} —
       // it picks the matching onnx file from the repo (e.g. dtype 'fp16'
       // resolves to `onnx/model_fp16.onnx`). We pass the user-selected dtype
       // from the TTSModel entry so the fp16 Kokoro card actually downloads
       // the fp16 file (~163MB) instead of silently falling back to q8.
-      const dtype = _model.dtype ?? KOKORO_DEFAULT_DTYPE;
-      // Kokoro's q8f16/fp16 graphs are compiled with WGSL `f16` kernels,
-      // which require the adapter's `shader-f16` feature. On adapters
-      // without it generation floods the console with validation errors and
-      // produces bad audio, so pin WASM there; keep the default device
-      // selection when f16 is available.
-      const device = (await webgpuAdapterHasFeature('shader-f16')) ? null : 'wasm';
+      //
+      // On adapters without `shader-f16` those f16 graphs cannot run at all,
+      // so the dtype is swapped for its fp32-compute equivalent — which keeps
+      // the model on the GPU rather than dropping it onto the CPU. See
+      // chooseKokoroRuntime for the suffix mapping and the measurements.
+      const hasF16 = await webgpuAdapterHasFeature('shader-f16');
+      const runtime = chooseKokoroRuntime(_model.dtype, hasF16);
       this.tts = await KokoroTTS.from_pretrained(_model.modelId, {
-        dtype,
-        device,
+        dtype: runtime.dtype,
+        device: runtime.device,
         progress_callback: (data) => {
           if (data?.status === 'progress' && progressCallback) {
             progressCallback(data.loaded ?? 0, data.total ?? 1);

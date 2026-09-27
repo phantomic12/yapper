@@ -49,16 +49,5 @@
     <div id="app"></div>
   </main>
   <script type="module" src="./src/main.ts"></script>
-  <script>
-    // Register the service worker last so it never blocks the initial paint.
-    // The SW only handles the app shell, so a failure here is non-fatal.
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch((err) => {
-          console.warn('[yapper] service worker registration failed:', err);
-        });
-      });
-    }
-  </script>
 </body>
 </html>

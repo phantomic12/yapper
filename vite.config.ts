@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
-import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
@@ -96,6 +96,21 @@ function swCacheBustPlugin(): Plugin {
  * The output directory is gitignored (see `.gitignore`) — every
  * build regenerates these from `node_modules/onnxruntime-web/dist/*`.
  */
+/**
+ * Locate the onnxruntime-web dist directory whose build transformers.js
+ * actually loads. transformers may pin its own nested copy, in which case
+ * the hoisted top-level install is a different (or absent) version — so
+ * prefer the nested one and fall back.
+ */
+function resolveOrtDist(projectRoot: string): string {
+  const nested = resolve(
+    projectRoot, 'node_modules', '@huggingface', 'transformers',
+    'node_modules', 'onnxruntime-web', 'dist',
+  );
+  const topLevel = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
+  return existsSync(nested) ? nested : topLevel;
+}
+
 function copyOrtWasmPlugin(): Plugin {
   return {
     name: 'copy-ort-wasm',
@@ -104,12 +119,7 @@ function copyOrtWasmPlugin(): Plugin {
       const projectRoot = process.cwd();
       // Prefer the ORT version transformers.js actually pins (nested dep);
       // fall back to the top-level install when hoisted.
-      const hfOrtDist = resolve(
-        projectRoot, 'node_modules', '@huggingface', 'transformers',
-        'node_modules', 'onnxruntime-web', 'dist',
-      );
-      const topLevelDist = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
-      const ortDist = existsSync(hfOrtDist) ? hfOrtDist : topLevelDist;
+      const ortDist = resolveOrtDist(projectRoot);
       const destDir = resolve(projectRoot, 'public', 'ort-wasm');
       mkdirSync(destDir, { recursive: true });
       // Runtime loaders (.mjs) + binaries (.wasm): engine.ts sets
@@ -141,8 +151,61 @@ function copyOrtWasmPlugin(): Plugin {
   };
 }
 
+/**
+ * Vite plugin: serve the ORT runtime files from `/ort-wasm/` during `vite dev`.
+ *
+ * ORT loads its WASM runtime with a dynamic `import()` of
+ * `ort-wasm-simd-threaded.jsep.mjs`. That file lives in `public/ort-wasm/`
+ * (copied there by copy-ort-wasm on build, and by npm postinstall for dev),
+ * and as of Vite 8 the dev server refuses to serve anything under `public/`
+ * as a module:
+ *
+ *   "This file is in /public and will be copied as-is during build without
+ *    going through the plugin transforms, and therefore should not be
+ *    imported from source code. It can only be referenced via HTML tags."
+ *
+ * The dynamic import therefore 500s in dev, ORT reports "no available backend
+ * found", and every model that needs the WASM runtime fails to load — Kokoro
+ * included, since kokoro-js points at the same directory. Production is
+ * unaffected: there the file is emitted into dist/ and imported as a normal
+ * module, which is what the copy-ort-wasm plugin is for.
+ *
+ * So in dev we bypass the transform middleware entirely and stream the file
+ * straight off disk. Registered as a pre-middleware (no returned function) so
+ * it runs before Vite's own transform handling.
+ */
+function serveOrtWasmInDevPlugin(): Plugin {
+  return {
+    name: 'serve-ort-wasm-dev',
+    apply: 'serve',
+    configureServer(server) {
+      const ortDist = resolveOrtDist(process.cwd());
+      const prefix = '/ort-wasm/';
+      server.middlewares.use((req, res, next) => {
+        const rawUrl = (req.url ?? '').split('?')[0];
+        if (!rawUrl.startsWith(prefix)) return next();
+        const file = resolve(ortDist, '.' + rawUrl.slice(prefix.length - 1));
+        // Contain the path inside the ORT dist dir — never let a crafted
+        // request escape it with ../.
+        if (!file.startsWith(ortDist) || !existsSync(file)) return next();
+        res.setHeader(
+          'Content-Type',
+          file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript',
+        );
+        res.setHeader('Cache-Control', 'no-cache');
+        createReadStream(file).pipe(res);
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [copyPdfWorkerPlugin(), copyOrtWasmPlugin(), swCacheBustPlugin()],
+  plugins: [
+    serveOrtWasmInDevPlugin(),
+    copyPdfWorkerPlugin(),
+    copyOrtWasmPlugin(),
+    swCacheBustPlugin(),
+  ],
   base: './',
   build: {
     outDir: 'dist',

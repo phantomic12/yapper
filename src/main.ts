@@ -1,5 +1,5 @@
 import './style.css';
-import { detectCapability } from './capability';
+import { detectAcceleration } from './capability';
 import { registerEngines, createAppEngine } from './app-bootstrap';
 import { createAppState, type AppState } from './app-state';
 import { MODELS } from './engine';
@@ -18,6 +18,7 @@ import {
   handleLoadProgress,
   handleEngineError,
   renderLanguageFilter,
+  updatePrecisionWarning,
   renderModelCardStatuses,
   renderVoiceSection,
 } from './ui/model-panel';
@@ -98,10 +99,13 @@ function installPersistence(appState: AppState): void {
 }
 
 async function render(): Promise<void> {
-  // Three-class capability detection ('none' | 'partial' | 'full') drives
-  // the honest banner wording — see src/capability.ts and
-  // docs/capability-banner.md.
-  state.capability = (await detectCapability()).capability;
+  // One probe answers two questions: the three-class capability class
+  // ('none' | 'partial' | 'full') drives the honest banner wording, and the
+  // acceleration class says where inference will actually run — which differs
+  // from the banner whenever the adapter lacks `shader-f16`. See
+  // src/capability.ts and docs/capability-banner.md.
+  state.acceleration = await detectAcceleration();
+  state.capability = state.acceleration.capability;
 
   state.engine = createAppEngine({
     onJobsChange: (jobs) => {
@@ -138,6 +142,7 @@ async function render(): Promise<void> {
   renderVoiceSection(state);
   renderJobList(state);
   updateDocumentSectionVisibility(state);
+  updatePrecisionWarning(state);
 
   bindModelPanelEvents(state, {
     onModelLoaded: () => updateDocumentSectionVisibility(state),
@@ -178,3 +183,25 @@ window.addEventListener('beforeunload', () => {
   void disposeAllOcrEngines();
   disposeLlmOcrEngine();
 });
+
+// Register the app-shell service worker — in production builds only.
+//
+// The SW deliberately caches the shell cache-first, which is what we want for
+// repeat visits but actively harmful under `npm run dev`: it keeps serving the
+// index.html and module graph it saw first, so an edited source file can look
+// unchanged in the browser for minutes at a time. That is indistinguishable
+// from a broken build, and it cost real debugging time when the Kokoro ORT fix
+// below appeared not to work. Registration lives here rather than in an inline
+// <script> in index.html so it can see import.meta.env.PROD.
+//
+// Base URL is './' (see vite.config.ts), so this resolves correctly for a
+// project-page subpath deploy as well as a domain root.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js`)
+      .catch((err) => {
+        console.warn('[yapper] service worker registration failed:', err);
+      });
+  });
+}
