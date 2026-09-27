@@ -39,6 +39,17 @@ SCREENSHOT_DIR = Path(os.environ.get('YAPPER_SHOTS', '/tmp/yapper-shots'))
 JUNIT_PATH = os.environ.get('YAPPER_JUNIT', '')
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
+# The step markers below are ✓ / ✗ / ❌, and Windows consoles default to
+# cp1252, which cannot encode them. Without this, the *first* failing step
+# raises UnicodeEncodeError while printing its own error, so the run dies with
+# a traceback instead of a result — the harness becomes unusable for reporting
+# the very failures it exists to catch. reconfigure() is 3.7+.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, ValueError):  # pragma: no cover - exotic stdout
+    pass
+
 # Default to Kitten TTS Nano: smallest quantized model, runs on CPU WASM
 DEFAULT_MODEL = 'kitten-nano'
 TEST_TEXT = (
@@ -826,6 +837,102 @@ def _inject_file(cdp, target_id, path: Path, mime: str):
     print(f'      injected {path.name} ({path.stat().st_size} bytes)')
 
 
+PAGE_STATE_JS = """(function() {
+    const pages = { studio: null, reader: null };
+    for (const id of ['page-studio', 'page-reader']) {
+        const el = document.getElementById(id);
+        pages[id === 'page-studio' ? 'studio' : 'reader'] = el
+            ? !el.hidden && getComputedStyle(el).display !== 'none'
+            : false;
+    }
+    return {
+        pages,
+        hash: location.hash,
+        activeTab: document.querySelector('.page-nav__tab--active')?.dataset.pageTarget || null,
+    };
+})()"""
+
+
+def _click_trusted(cdp, target_id: str, selector: str) -> tuple[float, float]:
+    """Scroll a control into view, then click it with a trusted CDP mouse event.
+
+    DOM.getBoxModel reports layout coordinates, so a control below the fold
+    yields a y outside the viewport and the synthesised click lands on whatever
+    happens to be there instead — the step then times out waiting for a state
+    change that the click never caused. The Reader page is tall enough (hero,
+    drop zone, OCR options, preview) that 'Read aloud' sits below the fold
+    after a document is extracted, so this is the normal case, not an edge one.
+
+    Scrolling first and re-measuring also means the click lands on the button
+    as a user would experience it, which is the whole point of using a trusted
+    event over element.click() here (autoplay policy).
+    """
+    scrolled = cdp.eval(
+        "(function(){const el=document.querySelector(%s);if(!el)return {ok:false};"
+        "el.scrollIntoView({block:'center'});return {ok:true};})()" % json.dumps(selector),
+        target_id, timeout=10)
+    if not v(scrolled).get('ok'):
+        raise AssertionError(f'{selector} not found')
+    time.sleep(0.3)  # let the scroll settle before measuring
+
+    node = cdp.find_element(target_id, selector)
+    if not node:
+        raise AssertionError(f'{selector} not found')
+    box = cdp.get_box_model(target_id, node['objectId'])
+    if not box:
+        raise AssertionError(f'could not measure {selector} position')
+    x, y = box[0] + 6, box[1] + 6
+    cdp.click_at(target_id, x, y)
+    return x, y
+
+
+def _switch_page(cdp_holder, page: str):
+    """Activate a page tab and wait for its panel to actually be visible.
+
+    The app renders both pages into the DOM and toggles `hidden`, so a raw
+    querySelector still finds buttons inside the inactive page — but
+    DOM.getBoxModel returns nothing for a hidden node, so the trusted-click
+    steps downstream would fail with 'could not measure ... position'.
+    Switching through the real tab (not by poking the DOM) also exercises the
+    hash routing the UI actually ships.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    js = (
+        "(function(){"
+        f"const tab = document.querySelector('.page-nav__tab[data-page-target=\"{page}\"]');"
+        "if (!tab) return { ok: false, msg: 'no tab for page' };"
+        "tab.click();"
+        f"location.hash = '#{page}';"
+        "return { ok: true };"
+        "})()"
+    )
+    r = v(cdp.eval(js, target['id'], timeout=10))
+    if not r.get('ok'):
+        raise AssertionError(f'could not switch to the {page} page: {r}')
+
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 10:
+        s = v(cdp.eval(PAGE_STATE_JS, target['id'], timeout=10))
+        if s.get('pages', {}).get(page):
+            print(f'      ✓ {page} page active (hash={s.get("hash")!r})')
+            return
+        time.sleep(0.25)
+    raise AssertionError(
+        f'{page} page did not become visible within 10s: {json.dumps(s, default=str)}')
+
+
+def step_switch_to_reader(cdp_holder):
+    """The document flow lives on the Reader tab since the two-page revamp."""
+    _switch_page(cdp_holder, 'reader')
+
+
+def step_switch_to_studio(cdp_holder):
+    """Back to the Studio tab for the steps that drive the text box."""
+    _switch_page(cdp_holder, 'studio')
+
+
 def step_upload_txt_document(cdp_holder):
     """Drop the TXT fixture and assert the reader view renders its sentences."""
     target = cdp_holder['target']
@@ -860,11 +967,7 @@ def step_queue_reader_read(cdp_holder):
     btn = cdp.find_element(target['id'], '#read-document-btn')
     if not btn:
         raise AssertionError('#read-document-btn not found')
-    box = cdp.get_box_model(target['id'], btn['objectId'])
-    if not box:
-        raise AssertionError('could not measure #read-document-btn position')
-    x, y = box[0] + 6, box[1] + 6
-    cdp.click_at(target['id'], x, y)
+    x, y = _click_trusted(cdp, target['id'], '#read-document-btn')
     print(f'      clicked Read aloud at ({x:.0f}, {y:.0f})')
 
     start_timeout = float(os.environ.get('YAPPER_READ_START_TIMEOUT', '90'))
@@ -932,10 +1035,7 @@ def step_stop_reader(cdp_holder):
     btn = cdp.find_element(target['id'], '#reader-overlay-stop')
     if not btn:
         raise AssertionError('#reader-overlay-stop not found')
-    box = cdp.get_box_model(target['id'], btn['objectId'])
-    if not box:
-        raise AssertionError('could not measure #reader-overlay-stop position')
-    cdp.click_at(target['id'], box[0] + 6, box[1] + 6)
+    _click_trusted(cdp, target['id'], '#reader-overlay-stop')
     time.sleep(1)
     resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
     s = v(resp)
@@ -1017,6 +1117,7 @@ def main():
         # MUST run before the Kokoro step: Kokoro on CPU/WASM occupies the
         # inference queue for minutes, which would starve the reader jobs
         # (single-worker queue) and flake highlight/PDF assertions.
+        ('switch_to_reader', lambda: step_switch_to_reader(cdp_holder)),
         ('upload_txt_document', lambda: step_upload_txt_document(cdp_holder)),
         ('queue_reader_read', lambda: step_queue_reader_read(cdp_holder)),
         ('assert_highlight_advances', lambda: step_assert_highlight_advances(cdp_holder)),
@@ -1026,6 +1127,7 @@ def main():
         # model, generate a multi-sentence input, and confirm sentence-
         # segment markers appear in the card hint while it runs. Slow on
         # CPU/WASM, so nothing is queued behind it.
+        ('switch_to_studio', lambda: step_switch_to_studio(cdp_holder)),
         ('kokoro_segment_progress', lambda: step_kokoro_segment_progress(cdp_holder)),
     ]
 

@@ -93,16 +93,6 @@ All notable changes to Yapper are recorded here. Versions follow
   Registration moved from an inline script in `index.html` to `src/main.ts`
   behind `import.meta.env.PROD`.
 
-### Documentation
-- **`docs/threaded-wasm.md`**: why cross-origin isolation is not enabled by
-  default. COOP + COEP is the standard lever for ORT's thread pool, but
-  measured here it made things worse — the inference worker's ORT init failed
-  outright and the main thread stalled past two minutes, against a 2s load and
-  4.8s generation without the headers (`hardwareConcurrency` is 24 on the test
-  machine, so the default thread pool oversubscribes). The doc records the
-  measurements, how to cap `numThreads` before trying it, the host requirements
-  (GitHub Pages cannot set response headers at all), and what else to re-check
-  under `require-corp`.
 - **Kitten output was garbled**: the bundled `voices.npz` style bank is indexed
   by *token count*, not by voice, and the engine was always reading row 0 —
   producing a ~1.35s burst of noise with a peak near 20 instead of speech. The
@@ -147,6 +137,37 @@ All notable changes to Yapper are recorded here. Versions follow
   workers now climb one level (`<deploy-root>/assets/` → deploy root) and
   dev-server modules two, independent of deploy depth; full e2e re-run
   green against dist served under a `/yapper/` subpath.
+
+
+### Changed
+- **The e2e suite could not get through the two-page layout**: the document
+  flow moved to the Reader tab, but the harness went straight for
+  `#read-document-btn` while that page was still `hidden`. `DOM.getBoxModel`
+  returns nothing for a hidden node, so the step died on "could not measure
+  ... position". Added `switch_to_reader` / `switch_to_studio` steps that
+  activate the real tab (exercising the hash routing the app ships) and wait
+  for the panel to become visible.
+- **Trusted clicks could miss controls below the fold**: the harness measures a
+  button and clicks those coordinates without scrolling, so on the tall Reader
+  page the click landed elsewhere and the step timed out waiting for a state
+  change the click never caused. Clicks now go through a shared
+  `_click_trusted` helper that scrolls the control into view, re-measures, then
+  clicks. This was masking the reader flow as broken when it works.
+- **The e2e harness could not report failures on Windows**: step markers are
+  ✓ / ✗ / ❌, and a cp1252 console raises `UnicodeEncodeError` while printing
+  the *first* failure — so the run died with a traceback instead of a result.
+  stdout/stderr are now reconfigured to UTF-8 on startup.
+
+### Documentation
+- **`docs/threaded-wasm.md`**: why cross-origin isolation is not enabled by
+  default. COOP + COEP is the standard lever for ORT's thread pool, but
+  measured here it made things worse — the inference worker's ORT init failed
+  outright and the main thread stalled past two minutes, against a 2s load and
+  4.8s generation without the headers (`hardwareConcurrency` is 24 on the test
+  machine, so the default thread pool oversubscribes). The doc records the
+  measurements, how to cap `numThreads` before trying it, the host requirements
+  (GitHub Pages cannot set response headers at all), and what else to re-check
+  under `require-corp`.
 
 ## [0.2.0] - 2026-08-24
 
