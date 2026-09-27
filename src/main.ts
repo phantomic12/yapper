@@ -11,6 +11,7 @@ import {
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
 import { bindThemeToggle } from './theme';
+import { bindAdvancedToggle } from './advanced-mode';
 import { bindPageNav } from './ui/page-nav';
 import { buildAppMarkup } from './ui/layout';
 import {
@@ -22,6 +23,7 @@ import {
   updatePrecisionWarning,
   renderModelCardStatuses,
   renderVoiceSection,
+  updateModelSummary,
 } from './ui/model-panel';
 import { bindJobQueueEvents, renderJobList } from './ui/job-queue';
 import {
@@ -144,12 +146,14 @@ async function render(): Promise<void> {
   renderJobList(state);
   updateDocumentSectionVisibility(state);
   updatePrecisionWarning(state);
+  updateModelSummary(state);
 
   bindModelPanelEvents(state, {
     onModelLoaded: () => updateDocumentSectionVisibility(state),
   });
   bindPageNav();
   bindThemeToggle();
+  bindAdvancedToggle();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
   bindStreamPlayer(state);

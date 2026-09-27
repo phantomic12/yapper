@@ -6,6 +6,22 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **A simple view, with the knobs one toggle away**: the app opens on the
+  short path — a one-line readout of the voice model in use, its voices, the
+  text box and the two buttons — and the thirteen-card model grid, the
+  language filter, the speed slider, the storage-budget line, the download /
+  clear controls and the GPU status row sit behind an "Advanced" switch in
+  the header. The short path also carries a "Change" button that flips
+  straight into the grid, so switching models is one click rather than a
+  hunt for a settings toggle. Like the theme, the whole thing is one
+  attribute on `<html>` (`src/advanced-mode.ts`) and the stylesheet hides
+  every `[data-advanced]` region, so the CSS and the JS cannot disagree
+  about what counts as advanced. The choice persists, and an inline `<head>`
+  script applies it before first paint so the grid does not flash into view.
+  Warnings are deliberately *not* behind the toggle: if the selected model
+  runs on the main thread, or an fp16 model quietly resolved to int8, that
+  is true in either view, and hiding it would trade a cluttered screen for a
+  surprised one.
 - **Light and dark themes**: a header control cycles Auto (follow the OS) →
   the opposite of the current appearance → the other explicit theme, and the
   choice persists across reloads. The palette was already entirely custom
@@ -265,6 +281,17 @@ All notable changes to Yapper are recorded here. Versions follow
   stdout/stderr are now reconfigured to UTF-8 on startup.
 
 ### Documentation
+- **`docs/tts-model-landscape.md`**: which TTS models can run in a browser at
+  all, and why. transformers.js's supported-architecture list is a hard
+  ceiling — Dia, F5-TTS, Fish Speech, Qwen3-TTS and friends are not reachable
+  here without hand-writing an ONNX pipeline per model — so Kokoro is
+  effectively the quality ceiling for a browser TTS app today. The note also
+  records the two candidates that looked viable and were not:
+  Kokoro-82M-v1.1-zh (adds Mandarin, but kokoro-js has no Chinese G2P, so it
+  would load and produce garbage) and Supertonic-TTS-2 (5 languages, but no
+  quantized build at all — 262MB of fp32 for a browser download). Nothing was
+  added to the registry; the one real gap is Chatterbox's zero-shot voice
+  cloning, which is supported and has ONNX exports.
 - **`docs/threaded-wasm.md`**: why cross-origin isolation is not enabled by
   default. COOP + COEP is the standard lever for ORT's thread pool, but
   measured here it made things worse — the inference worker's ORT init failed

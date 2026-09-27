@@ -192,10 +192,28 @@ function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): vo
   });
   card.classList.add('model-card--selected');
   card.setAttribute('aria-checked', 'true');
+  updateModelSummary(state);
   renderVoiceSection(state);
   renderModelCardStatuses(state);
   updateMainThreadWarning(state);
   updatePrecisionWarning(state);
+}
+
+/**
+ * Keep the simple view's one-line model readout in sync.
+ *
+ * The simple view hides the model grid, so without this the selected model
+ * would be invisible: the only clue that you are on Kokoro rather than
+ * Kitten would be the list of voices below. Cheap, and it is the one piece
+ * of model information a newcomer actually wants.
+ */
+export function updateModelSummary(state: AppState): void {
+  const name = document.getElementById('model-summary-name');
+  if (!name) return;
+  const model = state.selectedModel;
+  name.textContent = model.name;
+  const size = document.getElementById('model-summary-size');
+  if (size) size.textContent = model.sizeMB ? `~${model.sizeMB}MB` : '';
 }
 
 /**
@@ -327,6 +345,7 @@ export function handleEngineStateChange(
   // Document section visibility is derived purely from engine state, so
   // we update it once per state change instead of duplicating the call
   // in every branch above.
+  updateModelSummary(state);
   opts.onReadyChange?.();
   renderModelCardStatuses(state);
 }

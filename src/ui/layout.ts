@@ -54,10 +54,21 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             Document Reader
           </button>
         </nav>
+
+        <!-- Simple mode is the default view; this reveals the model grid,
+             language filter, speed and the rest. See src/advanced-mode.ts. -->
+        <div class="header-tools">
+          <button class="advanced-toggle" id="advanced-toggle" type="button" aria-pressed="false"
+                  title="Show model choice, language filter, speed and download options">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>Advanced</span>
+          </button>
+        </div>
       </header>
 
-      <!-- GPU Status + theme control -->
-      <div class="gpu-status" role="status" aria-live="polite" title="${capInfo.detail}">
+      <!-- GPU Status + theme control. Technical detail: advanced view only,
+           but the theme toggle lives here so it needs a home in simple mode. -->
+      <div class="gpu-status" data-advanced role="status" aria-live="polite" title="${capInfo.detail}">
         <div class="gpu-status__dot ${capability === 'full' ? 'gpu-status__dot--on' : capability === 'partial' ? 'gpu-status__dot--partial' : 'gpu-status__dot--off'}"></div>
         <span class="gpu-status__label">${capInfo.label}</span>
         <button class="theme-toggle" id="theme-toggle" type="button" data-theme-choice="system">Auto</button>
@@ -83,10 +94,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       </div>
 
       <!-- Model Selection -->
-      <label class="section-label" for="language-filter">Filter models by language</label>
+      <label class="section-label" data-advanced for="language-filter">Filter models by language</label>
 
       <!-- Language filter (populated from MODELS registry; see getSupportedLanguages) -->
-      <div class="select-wrapper language-select-wrapper">
+      <div class="select-wrapper language-select-wrapper" data-advanced>
         <select id="language-filter" class="lang-select" aria-label="Filter models by language">
           <option value="all" selected>All languages</option>
           ${getSupportedLanguages().map(code =>
@@ -95,7 +106,19 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         </select>
       </div>
 
-      <div class="model-grid" id="model-grid" role="radiogroup" aria-label="Choose a TTS model">
+      <!-- Simple view: one line saying which voice model is in use, with a
+           shortcut into the grid. Replaced by the grid itself in advanced
+           mode, so the two are never both on screen. -->
+      <div class="model-summary" id="model-summary">
+        <div class="model-summary__text">
+          <span class="model-summary__label">Voice</span>
+          <span class="model-summary__name" id="model-summary-name">${selectedModel?.name ?? 'Voice model'}</span>
+          <span class="model-summary__size" id="model-summary-size">${selectedModel?.sizeMB ? `~${selectedModel.sizeMB}MB` : ''}</span>
+        </div>
+        <button class="clear-btn model-summary__change" id="model-change-btn" type="button">Change</button>
+      </div>
+
+      <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
         ${MODELS.map(m => `
           <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}">
             <button class="model-card__pick" type="button" data-action="pick" aria-label="Select ${m.name}">
@@ -166,9 +189,9 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <span id="stream-btn-label">Play</span>
         </button>
         <span class="queue-count" id="queue-count" hidden></span>
-        <button class="clear-btn" id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
-        <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
-        <span class="storage-usage" id="storage-usage" title="Clips kept for you between visits. The oldest audio is dropped once the budget is reached."></span>
+        <button class="clear-btn" data-advanced id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
+        <button class="clear-btn" data-advanced id="clear-btn" disabled>Clear finished</button>
+        <span class="storage-usage" data-advanced id="storage-usage" title="Clips kept for you between visits. The oldest audio is dropped once the budget is reached."></span>
       </div>
 
       <!-- Streaming playback controller: visible while a Play session runs. -->
@@ -180,7 +203,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       </div>
 
       <!-- Speed slider -->
-      <div class="speed-row">
+      <div class="speed-row" data-advanced>
         <label for="speed-slider" class="speed-label">Speed</label>
         <input type="range" id="speed-slider" min="0.5" max="2.0" step="0.05" value="1.0" />
         <span class="speed-value" id="speed-value">1.00x</span>
@@ -228,7 +251,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <p>📄 Upload a document to see its structure and extracted text. To hear it read aloud, <button type="button" class="link-btn" data-page-jump="studio">load a model on the Studio page</button> first.</p>
           </div>
 
-          <div class="document-options" id="document-options" style="display:none">
+          <div class="document-options" id="document-options" data-advanced style="display:none">
             <label class="switch">
               <input type="checkbox" id="ocr-toggle" />
               <span class="switch__track"></span>

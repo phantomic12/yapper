@@ -2248,3 +2248,94 @@ body::before {
   margin: 4px 0;
   color: var(--text-muted);
 }
+
+/* ── Simple vs advanced view ─────────────────────────────────────
+   Every region marked data-advanced in the markup is hidden until the
+   header toggle sets data-advanced="on" on <html>. One attribute drives
+   the whole thing, so the CSS and the JS cannot disagree about what
+   counts as advanced. See src/advanced-mode.ts. */
+:root:not([data-advanced='on']) [data-advanced] {
+  display: none !important;
+}
+:root:not([data-advanced='on']) .model-summary {
+  display: flex;
+}
+.header-tools {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+.advanced-toggle {
+  color: var(--text-dim);
+  cursor: pointer;
+  background: 0 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: all 0.15s;
+  display: inline-flex;
+}
+.advanced-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-focus);
+}
+.advanced-toggle[aria-pressed='true'] {
+  color: var(--accent-hover);
+  background: var(--accent-glow);
+  border-color: var(--border-focus);
+}
+.advanced-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+.model-summary {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 12px 14px;
+  display: none;
+}
+.model-summary__text {
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  display: flex;
+}
+.model-summary__label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.model-summary__name {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-summary__size {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.model-summary__change {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+}
+.model-summary__change[hidden] {
+  display: none;
+}

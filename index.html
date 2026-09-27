@@ -19,6 +19,17 @@
       } catch (e) { /* storage blocked: fall through to the system default */ }
     })();
   </script>
+  <!-- Same reason as the theme: without this, the model grid paints for a
+       frame and then vanishes for anyone who kept advanced mode on. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('yapper.advanced.v1') === '1') {
+          document.documentElement.setAttribute('data-advanced', 'on');
+        }
+      } catch (e) { /* storage blocked: the simple view is the default anyway */ }
+    })();
+  </script>
   <!-- Content Security Policy: restrict all resources to self + Hugging Face
        (model downloads). wasm-unsafe-eval is required for ONNX Runtime Web
        and Tesseract.js WASM. blob: is needed for Worker creation and audio

@@ -424,6 +424,90 @@ def step_verify_page_render(cdp_holder):
     print(f'      → {shot1} ({shot1.stat().st_size // 1024} KB)')
 
 
+MODE_STATE_JS = """(function() {
+    const shown = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        return getComputedStyle(el).display !== 'none';
+    };
+    return {
+        advanced: document.documentElement.dataset.advanced === 'on',
+        stored: localStorage.getItem('yapper.advanced.v1'),
+        togglePressed: document.getElementById('advanced-toggle')
+            ?.getAttribute('aria-pressed') || null,
+        modelGrid: shown('#model-grid'),
+        modelSummary: shown('#model-summary'),
+        summaryName: document.getElementById('model-summary-name')?.textContent || null,
+        languageFilter: shown('.language-select-wrapper'),
+        speedRow: shown('.speed-row'),
+        textInput: shown('#text-input'),
+        loadBtn: shown('#load-btn'),
+    };
+})()"""
+
+
+def step_assert_simple_mode(cdp_holder):
+    """The default view hides the knobs and names the model in one line.
+
+    Computed style, not the attribute: a region can be marked advanced and
+    still be on screen if the stylesheet stopped honouring it, which is the
+    failure a first-time visitor would actually see.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    s = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+
+    if s.get('advanced'):
+        raise AssertionError(
+            'advanced mode is on by default — the simple view is the default')
+    hidden = [k for k in ('modelGrid', 'languageFilter', 'speedRow') if s.get(k) is not False]
+    if hidden:
+        raise AssertionError(f'advanced regions visible in the simple view: {hidden} ({s})')
+    if not s.get('modelSummary'):
+        raise AssertionError(f'model summary is hidden in the simple view: {s}')
+    if not s.get('summaryName'):
+        raise AssertionError(f'model summary does not name a model: {s}')
+    if not s.get('textInput') or not s.get('loadBtn'):
+        raise AssertionError(f'the short path is not intact in the simple view: {s}')
+    print(f'      ✓ simple view: grid hidden, summary="{s.get("summaryName")}", '
+          f'text box and load button present')
+
+
+def step_enable_advanced_mode(cdp_holder):
+    """The header toggle reveals the full set of controls and persists.
+
+    Everything downstream (select_model, language filter, speed) drives
+    controls that only exist in this view, so this has to run before them.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    before = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+    if before.get('advanced'):
+        print('      (advanced mode already on)')
+        return
+
+    _click_trusted(cdp, target['id'], '#advanced-toggle')
+
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 10:
+        s = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+        if s.get('advanced') and s.get('modelGrid') is True:
+            break
+        time.sleep(0.5)
+    if not s.get('advanced') or s.get('modelGrid') is not True:
+        raise AssertionError(f'the advanced toggle did not reveal the model grid: {s}')
+    if s.get('stored') != '1':
+        raise AssertionError(f'advanced mode was not persisted: stored={s.get("stored")!r}')
+    if s.get('togglePressed') != 'true':
+        raise AssertionError(f'toggle aria-pressed out of step: {s.get("togglePressed")!r}')
+    if s.get('modelSummary') is not False:
+        raise AssertionError('the simple-view summary is still on screen next to the grid')
+    print(f'      ✓ advanced view: grid visible, language filter and speed back '
+          f'(aria-pressed={s.get("togglePressed")}, stored={s.get("stored")})')
+
+
 def step_select_model(cdp_holder):
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
@@ -1282,6 +1366,11 @@ def main():
         ('connect_to_cdp', lambda: step_connect_to_cdp(cdp_holder)),
         ('attach_and_navigate', lambda: step_attach_and_navigate(cdp_holder)),
         ('verify_page_render', lambda: step_verify_page_render(cdp_holder)),
+        # The app opens in its simple view: the model grid, language filter
+        # and speed slider are behind one toggle, so the model-selection
+        # steps below have to turn advanced mode on first.
+        ('assert_simple_mode', lambda: step_assert_simple_mode(cdp_holder)),
+        ('enable_advanced_mode', lambda: step_enable_advanced_mode(cdp_holder)),
         ('select_model', lambda: step_select_model(cdp_holder)),
         ('click_load', lambda: step_click_load(cdp_holder)),
         ('wait_for_model_ready', lambda: step_wait_for_model_ready(cdp_holder)),
