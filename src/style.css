@@ -2148,3 +2148,84 @@ body::before {
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+/* ─── Structure-aware classified blocks ──────────────────────────
+   Tables, code and lists render as themselves rather than as a flat
+   run of escaped text, so the structure the classifier detected is
+   actually visible. */
+.classify-block__text > *:first-child { margin-top: 0; }
+.classify-block__text > *:last-child { margin-bottom: 0; }
+
+.classify-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin: 4px 0;
+}
+
+.classify-table th,
+.classify-table td {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.classify-table th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.classify-table td { color: var(--text-muted); }
+
+.classify-table-more {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+}
+
+.classify-code {
+  margin: 4px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  /* Extracted code keeps its own indentation; collapsing it would destroy
+     exactly the structure a reader is looking at. */
+  white-space: pre;
+}
+
+.classify-quote {
+  margin: 4px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.classify-list {
+  margin: 4px 0;
+  padding-left: 20px;
+  color: var(--text-muted);
+}
+
+.classify-list li { margin: 2px 0; }
+
+.classify-heading {
+  margin: 2px 0 4px;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.classify-paragraph {
+  margin: 4px 0;
+  color: var(--text-muted);
+}

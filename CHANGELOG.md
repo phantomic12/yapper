@@ -41,6 +41,15 @@ All notable changes to Yapper are recorded here. Versions follow
   hash-routed pill tabs (`src/ui/page-nav.ts`). Includes a visual refresh —
   ambient gradient background, gradient hero text, page-transition animation,
   and hover lift on primary actions.
+- **Structure-aware rendering for classified blocks**: the Reader page was
+  rendering every classified block as one flat run of escaped text, which threw
+  away the structure the classifier had just worked out. Tables now render as
+  real tables (parsed from either markdown pipes or the column-aligned spacing
+  extraction produces), code as a whitespace-preserving `<pre>` with its fence
+  stripped, lists as `<li>` items without doubled bullet glyphs, quotes as
+  `<blockquote>`, headings as headings. Rows, columns and text length are all
+  capped, and the caps say how much was hidden — a one-column "table" falls back
+  to a paragraph rather than rendering a pointless grid.
 - **Document structure classification**: extracted text is split into blocks and
   labelled heading / paragraph / list / quote / code / table, using both text
   heuristics and PDF layout geometry (`src/document-classify.ts`). The Reader

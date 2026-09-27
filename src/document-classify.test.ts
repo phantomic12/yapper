@@ -4,6 +4,10 @@ import {
   classifyText,
   classifyLayoutBlocks,
   countKinds,
+  parseTableRows,
+  renderBlockHtml,
+  MAX_TABLE_ROWS,
+  MAX_TABLE_COLS,
 } from './document-classify';
 
 describe('classifyBlockText', () => {
@@ -75,5 +79,120 @@ describe('countKinds', () => {
     expect(counts.heading).toBe(2);
     expect(counts.paragraph).toBe(1);
     expect(counts.list).toBe(0);
+  });
+});
+
+describe('parseTableRows', () => {
+  it('splits pipe-delimited rows and drops the header rule', () => {
+    const rows = parseTableRows('| Name | Size |\n| --- | --- |\n| a | 1 |');
+    expect(rows).toEqual([['Name', 'Size'], ['a', '1']]);
+  });
+
+  it('handles rows without leading/trailing pipes', () => {
+    expect(parseTableRows('Name | Size\n---|---\na | 1'))
+      .toEqual([['Name', 'Size'], ['a', '1']]);
+  });
+
+  it('splits on runs of two or more spaces (extraction output)', () => {
+    expect(parseTableRows('Name    Size\na       1'))
+      .toEqual([['Name', 'Size'], ['a', '1']]);
+  });
+
+  it('pads ragged rows to the widest row so columns line up', () => {
+    const rows = parseTableRows('| a | b | c |\n| 1 |');
+    expect(rows[1]).toEqual(['1', '', '']);
+  });
+
+  it('returns nothing for a single column — that is a paragraph', () => {
+    // The classifier calls any two aligned lines a table; rendering one
+    // column as a table would be worse than plain text.
+    expect(parseTableRows('just one line')).toEqual([]);
+    expect(parseTableRows('alpha\nbeta')).toEqual([]);
+  });
+
+  it('returns nothing for empty input', () => {
+    expect(parseTableRows('')).toEqual([]);
+    expect(parseTableRows('   \n  ')).toEqual([]);
+  });
+
+  it('caps the column count', () => {
+    const wide = `| ${Array.from({ length: 20 }, (_, i) => `c${i}`).join(' | ')} |`;
+    const rows = parseTableRows(`${wide}\n${wide}`);
+    expect(rows[0]).toHaveLength(MAX_TABLE_COLS);
+  });
+});
+
+describe('renderBlockHtml', () => {
+  it('renders a table with a header row and scoped headers', () => {
+    const html = renderBlockHtml('table', '| Name | Size |\n| --- | --- |\n| a | 1 |');
+    expect(html).toContain('<table class="classify-table">');
+    expect(html).toContain('<th scope="col">Name</th>');
+    expect(html).toContain('<td>a</td>');
+  });
+
+  it('falls back to a paragraph when a "table" has one column', () => {
+    const html = renderBlockHtml('table', 'alpha\nbeta');
+    expect(html).not.toContain('<table');
+    expect(html).toContain('<p');
+  });
+
+  it('says how many table rows it hid', () => {
+    const many = ['| n | v |', ...Array.from({ length: 60 }, (_, i) => `| ${i} | x |`)].join('\n');
+    const html = renderBlockHtml('table', many);
+    expect(html).toContain('more rows not shown');
+    expect((html.match(/<tr>/g) ?? []).length).toBeLessThanOrEqual(MAX_TABLE_ROWS + 1);
+  });
+
+  it('renders code in a pre and strips the markdown fence', () => {
+    const html = renderBlockHtml('code', '```js\nconst a = 1;\n```');
+    expect(html).toContain('<pre class="classify-code"><code>');
+    expect(html).toContain('const a = 1;');
+    expect(html).not.toContain('```');
+  });
+
+  it('preserves code indentation', () => {
+    const html = renderBlockHtml('code', 'function f() {\n    return 1;\n}');
+    expect(html).toContain('    return 1;');
+  });
+
+  it('renders a list as items without the bullet markers', () => {
+    const html = renderBlockHtml('list', '- first\n- second\n3. third');
+    expect(html).toContain('<li>first</li>');
+    expect(html).toContain('<li>second</li>');
+    expect(html).toContain('<li>third</li>');
+  });
+
+  it('renders a quote as a blockquote and a heading as a heading', () => {
+    expect(renderBlockHtml('quote', '> hello')).toContain('<blockquote');
+    const h = renderBlockHtml('heading', '## Install');
+    expect(h).toContain('<h4 class="classify-heading">Install</h4>');
+  });
+
+  it('escapes document text in every kind', () => {
+    // The one rule for this module: block text is never interpolated raw.
+    const nasty = '<img src=x onerror="alert(1)">';
+    for (const kind of ['paragraph', 'heading', 'quote', 'list', 'code', 'table'] as const) {
+      const html = renderBlockHtml(kind, nasty);
+      expect(html, kind).not.toContain('<img');
+      expect(html, kind).toContain('&lt;img');
+    }
+  });
+
+  it('escapes ampersands and quotes without mangling them', () => {
+    const html = renderBlockHtml('paragraph', `Tom & "Jerry" <b>`);
+    expect(html).toContain('&amp;');
+    expect(html).toContain('&quot;');
+    expect(html).toContain('&lt;b&gt;');
+  });
+
+  it('truncates long text and marks it with an ellipsis', () => {
+    const html = renderBlockHtml('paragraph', 'x'.repeat(500), { maxChars: 10 });
+    expect(html).toContain('…');
+    expect(html).not.toContain('x'.repeat(11));
+  });
+
+  it('leaves text under the cap untouched', () => {
+    const html = renderBlockHtml('paragraph', 'short', { maxChars: 240 });
+    expect(html).toBe('<p class="classify-paragraph">short</p>');
   });
 });

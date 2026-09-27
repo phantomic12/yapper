@@ -11,11 +11,12 @@ import {
   classifyLayoutBlocks,
   countKinds,
   kindLabel,
+  renderBlockHtml,
   type ClassifiedBlock,
   type BlockKind,
 } from '../document-classify';
 import type { AppState } from '../app-state';
-import { escapeHtml, showStatus } from '../dom-utils';
+import { showStatus } from '../dom-utils';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -44,7 +45,7 @@ function renderClassification(doc: ExtractedDocument): ClassifiedBlock[] {
         ${b.page ? `<span class="classify-block__page">page ${b.page}</span>` : ''}
         <button class="classify-block__speak" data-action="speak-block" data-block-index="${i}" type="button" title="Add this block to the queue">Speak</button>
       </div>
-      <div class="classify-block__text">${escapeHtml(b.text.length > 240 ? b.text.slice(0, 240) + '…' : b.text)}</div>
+      <div class="classify-block__text">${renderBlockHtml(b.kind, b.text, { maxChars: 240 })}</div>
     </div>`).join('')
     + (blocks.length > MAX_RENDERED_BLOCKS
       ? `<p class="classify-more">…and ${blocks.length - MAX_RENDERED_BLOCKS} more blocks</p>`
