@@ -15,10 +15,20 @@
  * <head> (see index.html) so the model grid does not flash into view on
  * every load for someone who turned advanced on.
  *
+ * Two marks, one rule each. `data-advanced` is for regions that only exist
+ * once someone asks for the long path (the model grid, a download size, the
+ * byte counts in the fp16 warning). `data-simple` is the mirror, for copy
+ * that exists only to keep the short path short — today just the
+ * plain-language half of that warning. Neither mark is a JavaScript
+ * decision: it is an attribute in the markup, so flipping the toggle is
+ * always a repaint and never a re-render.
+ *
  * Warnings are deliberately NOT behind the toggle: if the selected model
  * runs on the main thread, or an fp16 model quietly resolved to int8, that
  * is true regardless of which view you are in, and hiding it would trade a
- * cluttered screen for a surprised one.
+ * cluttered screen for a surprised one. What may change is the *register*
+ * — the simple view is told the consequence in its own words, and the
+ * mechanism and the numbers wait one click away.
  */
 
 export const ADVANCED_STORAGE_KEY = 'yapper.advanced.v1';

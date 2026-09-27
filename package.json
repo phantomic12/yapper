@@ -25,7 +25,6 @@
     "epubjs": "^0.3.93",
     "fflate": "^0.8.3",
     "jszip": "^3.10.1",
-    "kokoro-js": "^1.2.1",
     "onnxruntime-web": "^1.26.0",
     "pdfjs-dist": "^6.1.200",
     "phonemizer": "^1.2.1",

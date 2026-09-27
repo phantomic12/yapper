@@ -13,6 +13,7 @@
 // swallowed; the app simply starts fresh.
 
 import type { GenerationJob } from './engine';
+import type { OcrMode } from './document-types';
 
 // ─── Settings (localStorage) ─────────────────────────────────────
 
@@ -24,6 +25,8 @@ export interface PersistedSettings {
   speed: number;
   draftText: string;
   languageFilter: string;
+  /** OCR backend for scanned PDFs. Optional so older records stay valid. */
+  ocrMode?: OcrMode;
 }
 
 export function loadSettings(): Partial<PersistedSettings> | null {

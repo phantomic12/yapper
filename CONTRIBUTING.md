@@ -50,6 +50,10 @@ Subject ≤ 72 chars, imperative mood. Body explains why, not what.
 - Custom TTS backends implement `CustomEngine` and register via
   `registerCustomEngine(modelId, …)`. Kokoro/Kitten are wrapped in
   `WorkerBackedEngine` from `src/engines/worker-bridge.ts`.
+- Kokoro does NOT use the `kokoro-js` package: its pinned nested
+  transformers 3.8.1 + ORT 1.22-dev stack hangs in inference here. The
+  engine (`src/engines/kokoro.ts`) builds the same pipeline directly on
+  the app's `@huggingface/transformers` + the `phonemizer` package.
 - Document ingestion for the UI is `document-reader.ts`; reading UX
   and highlight timing live in `reader.ts`. See
   [docs/architecture.md](docs/architecture.md).

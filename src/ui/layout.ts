@@ -1,4 +1,4 @@
-import { MODELS, LANGUAGE_NAMES, getSupportedLanguages } from '../engine';
+import { MODELS, visibleModels, LANGUAGE_NAMES, getSupportedLanguages } from '../engine';
 import { CAPABILITY_INFO, type CapabilityClass } from '../capability';
 import { QUALITY_PRESETS, presetForModel } from '../quality-presets';
 
@@ -12,6 +12,8 @@ export interface LayoutOptions {
 export function buildAppMarkup(opts: LayoutOptions): string {
   const { capability, selectedModelId } = opts;
   const capInfo = CAPABILITY_INFO[capability];
+  // Hidden entries (SpeechT5) still resolve by id so a persisted selection
+  // keeps working, but the grid only ever lists pickable models.
   const selectedModel = MODELS.find(m => m.id === selectedModelId);
   // Which quality preset (if any) matches the selected model. A model off the
   // ladder — an MMS language model picked in the advanced grid — lights up no
@@ -83,10 +85,18 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Half-precision notice: shown only when the adapter exists but lacks
            shader-f16, so fp16 model cards silently fall back to the int8 build.
            Hidden by default because the adapter probe is async;
-           updatePrecisionWarning fills in the copy once it resolves. -->
+           updatePrecisionWarning fills in the copy once it resolves.
+
+           The warning is never behind the toggle — it is true regardless of
+           which view you are in — but its *register* is. data-simple copy is
+           the consequence ("High runs the standard build instead"), for the
+           short path; the data-advanced copy is the mechanism, the model
+           names and the exact byte counts. Exactly one is on screen at a
+           time, so the banner is a single sentence in either view. -->
       <div class="gpu-f16-warning" id="f16-warning" role="status" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>
-        <span data-role="f16-copy"></span>
+        <span data-role="f16-copy" data-simple></span>
+        <span data-role="f16-copy-detail" data-advanced></span>
       </div>
 
       <!-- Model Selection -->
@@ -105,7 +115,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Quality presets: the one model knob in the default view. Each maps
            to a real model (see src/quality-presets.ts) so it stays honest;
            the full model grid lives in the advanced panel behind the bottom
-           bar's More toggle. -->
+           bar's More toggle. The blurb sells the outcome; the download size
+           sits in a data-advanced chip (and out of the tooltip, which is
+           still the simple view) so a size figure never reaches the person
+           who only wanted the sentence read back. -->
       <div class="quality-row">
         <div class="quality-label" id="quality-label">Quality</div>
         <div class="quality-presets" id="quality-presets" role="radiogroup" aria-labelledby="quality-label">
@@ -117,19 +130,25 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                     title="${p.label} quality — ${p.blurb}">
               <span class="quality-preset__label">${p.label}</span>
               <span class="quality-preset__blurb">${p.blurb}</span>
+              <span class="quality-preset__size" data-advanced>~${p.sizeMB}MB</span>
             </button>`;
           }).join('')}
         </div>
       </div>
 
+      <!-- The grid is advanced-only as a whole; the per-card size/variant
+           chips carry data-advanced as well so the "no memory figures in
+           the simple view" rule holds on the figure itself, not just on the
+           region that happens to contain it today. -->
       <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
-        ${MODELS.map(m => `
+        ${visibleModels().map(m => `
           <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}">
             <button class="model-card__pick" type="button" data-action="pick" aria-label="Select ${m.name}">
               <div class="model-card__name">${m.name}</div>
               <div class="model-card__desc">${m.description}</div>
               <div class="model-card__meta">
-                ${m.sizeMB ? `<span class="model-card__size">~${m.sizeMB}MB</span>` : ''}
+                ${m.variant ? `<span class="model-card__variant" data-advanced>${m.variant}</span>` : ''}
+                ${m.sizeMB ? `<span class="model-card__size" data-advanced>~${m.sizeMB}MB</span>` : ''}
                 ${m.language && m.language !== 'en' ? `<span class="model-card__lang">${m.language.toUpperCase()}</span>` : ''}
                 <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
               </div>

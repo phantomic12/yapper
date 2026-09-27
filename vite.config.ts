@@ -162,8 +162,8 @@ function copyOrtWasmPlugin(): Plugin {
  *
  * The dynamic import therefore 500s in dev, ORT reports "no available backend
  * found", and every model that needs the WASM runtime fails to load — Kokoro
- * included, since kokoro-js points at the same directory. Production is
- * unaffected: there the file is emitted into dist/ and imported as a normal
+ * included, since its engine points wasmPaths at the same directory. Production
+ * is unaffected: there the file is emitted into dist/ and imported as a normal
  * module, which is what the copy-ort-wasm plugin is for.
  *
  * So in dev we bypass the transform middleware entirely and stream the file

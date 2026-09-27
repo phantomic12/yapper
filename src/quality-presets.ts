@@ -16,6 +16,13 @@
  *   High   → Kokoro-82M fp16  ~156MB   best fidelity (falls back to int8
  *                                      on GPUs without shader-f16)
  *
+ * The MB figures live in `sizeMB`, not in the blurbs. A download size is an
+ * engineering fact, and the simple view does not show engineering facts: the
+ * blurb is a reason to pick ("Fastest", "Natural voices"), while the size is
+ * rendered into a `data-advanced` chip that the stylesheet hides until
+ * someone asks for the advanced view. Same for the preset's tooltip — a
+ * hover is still the simple view, so it must not smuggle the number back in.
+ *
  * The presets are a *view* over model selection, not a second source of
  * truth: `presetForModel` derives the active preset from whichever model is
  * actually selected. Pick a model that is not on the ladder (an MMS language
@@ -34,6 +41,11 @@ export interface QualityPresetDef {
   label: string;
   /** One line on *why* you would pick this, under the label. */
   blurb: string;
+  /**
+   * Approximate download size. Advanced view only — the UI puts this in a
+   * `data-advanced` chip, never in the blurb or the button's tooltip.
+   */
+  sizeMB: number;
   /** The model this preset selects — an id in the MODELS registry. */
   modelId: string;
 }
@@ -42,19 +54,22 @@ export const QUALITY_PRESETS: readonly QualityPresetDef[] = [
   {
     id: 'low',
     label: 'Low',
-    blurb: 'Fastest · ~24MB',
+    blurb: 'Fastest',
+    sizeMB: 24,
     modelId: 'kitten-nano',
   },
   {
     id: 'medium',
     label: 'Medium',
-    blurb: 'Natural voices · ~88MB',
+    blurb: 'Natural voices',
+    sizeMB: 88,
     modelId: 'kokoro-82m',
   },
   {
     id: 'high',
     label: 'High',
-    blurb: 'Best fidelity · ~156MB',
+    blurb: 'Best fidelity',
+    sizeMB: 156,
     modelId: 'kokoro-82m-fp16',
   },
 ];

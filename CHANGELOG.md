@@ -5,9 +5,118 @@ All notable changes to Yapper are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+- **Kokoro no longer hangs — the "worker slowdown" is fixed at the root.**
+  The engine used to call the `kokoro-js` package, which pins its own nested
+  `@huggingface/transformers` 3.8.1 + onnxruntime-web 1.22.0-dev, and that
+  stack's forward pass never returned in this app: main thread or worker,
+  WebGPU or WASM, every generation stalled until the 180s watchdog killed the
+  job. Every piece was verified healthy in isolation (ORT session create,
+  tokenizer, phonemizer, voice fetch) — only kokoro-js's model call hung.
+  `src/engines/kokoro.ts` now builds the same tiny pipeline directly on the
+  app's own `@huggingface/transformers` 4.3.0 (the ORT build Kitten already
+  uses in the worker): phonemize sentence → tokenize → style-vector row for
+  the token count → StyleTextToSpeech2 → 24 kHz waveform, with per-sentence
+  progress and word timings preserved. Measured on the machine that saw the
+  stalls: a sentence loads in ~1.4s and generates 2.6s of audio in ~4.3s,
+  end to end through the inference worker. `kokoro-js` is dropped from
+  dependencies (`phonemizer` is now declared directly).
+- **Kokoro device selection no longer assumes `device: null` means WebGPU.**
+  In transformers 3.8.1 (and 4.3.0), `device: null` resolves to the WASM
+  execution provider — the previous "null lets ORT prefer WebGPU" comment was
+  wrong, and the previous never-pin-WebGPU choice silently CPU-bound every
+  session. When the adapter has `shader-f16` the GPU is now requested
+  explicitly, with an automatic WASM retry if session creation fails; without
+  `shader-f16` WASM stays pinned (`chooseKokoroRuntime`).
+- **SpeechT5 removed from the model picker.** The card looked functional but
+  could only produce noise: SpeechT5 is a text→mel model, and a usable card
+  needs the processor plus a HiFi-GAN vocoder that transformers.js does not
+  assemble for this checkpoint (documented in `docs/tts-model-landscape.md`).
+  Models can now carry a `hidden` flag, exposed to the picker via
+  `visibleModels()`; hidden entries still resolve by id so persisted settings
+  and historical job records keep working.
+- **The OCR mode choice persists across reloads — and its radio buttons now
+  show it.** `yapper.settings.v1` gained an `ocrMode` field (validated on
+  read), and the mode selector's radios are synced from restored state at
+  bind time; previously a saved "LLM" choice rendered visually as tesseract
+  while state still held `llm`.
+- **The headless e2e suite is safe to run on the developer's own Windows
+  machine and passes end to end (all 23 steps).** The old runner was
+  Linux-only and its cleanup would have killed the user's desktop Chrome;
+  `scripts/run_e2e_windows.sh` launches its own isolated headless Chrome
+  (temp profile, debug port 9223, dedicated dev port 5179) and kills only
+  the browser it started — discovered via the real Windows PID of the debug
+  socket, because Git Bash's `$!` is a bash job PID and killing that orphaned
+  Chrome (which then poisoned later runs through a stale CDP port). It also
+  refuses to run against an already-occupied CDP port instead of testing a
+  ghost. `e2e_test.py` got two robustness fixes: the render step polls for
+  the app to mount instead of a fixed 2s sleep (a cold profile can pay
+  seconds of Vite transforms), and the Kokoro step no longer demands a
+  click on the load button that auto-load turned into a status pill.
+  `scripts/cleanup-e2e-profiles.ps1` recovers locked temp profiles from runs
+  interrupted before their EXIT trap fired. Three bugs in that runner surfaced
+  while extending the suite, all of which made a run fail as a blank page
+  rather than as an error: it exported `YAPPER_URL` *before* the
+  `[ -z "$YAPPER_URL" ]` test that decides whether to boot a dev server, so
+  that branch was dead code and Chrome was pointed at a dead port; it probed
+  `127.0.0.1` while Vite's default `localhost` binds the IPv6 loopback only on
+  this machine, so the readiness check timed out against a healthy server (now
+  pinned with `--host 127.0.0.1`); and it reaped the leftover Vite child with
+  `pkill -f`, which Git Bash on Windows does not have, so every run left the
+  port occupied and the next one refused to start. Vite is now reaped by the
+  PID holding the port, the same way Chrome already was.
+
+### Changed
+- **The simple view no longer shows download sizes.** Somebody who opened a
+  text-to-speech site to hear a sentence read back does not need to know that
+  the "High" preset is a 156MB download, and every place a figure leaked into
+  the short path is now behind the More toggle: the quality presets read
+  "Fastest / Natural voices / Best fidelity" with the size in a
+  `data-advanced` chip, model names are just names ("Kokoro-82M" rather than
+  "Kokoro-82M (int8)" and "Kitten TTS Nano" rather than "Kitten TTS Nano
+  (~24MB)"), and the live download line shows a percentage to everyone and
+  megabytes to the advanced view. Nothing was deleted — the size ladder is one
+  toggle away, and the preset tooltips were cleaned of it too, since a hover
+  is still the simple view.
+- **A new `data-simple` mark, the mirror of `data-advanced`.** Some copy
+  belongs only to the short path, and it needed a way to say so that the
+  stylesheet can act on. The fp16-fallback warning is the case in point: it
+  stays visible in both views — it is true regardless of mode — but the
+  simple view is told the consequence in the preset row's own words ("High
+  quality runs the standard one instead") while the mechanism, model names and
+  byte counts wait one click away. Both marks are attributes in the markup,
+  so flipping the toggle is a repaint and never a re-render.
+- **A regression guard for the rule, in two places.** The unit suite walks
+  the mounted markup and fails if any size figure appears outside a
+  `data-advanced` subtree; the e2e suite does the same against live computed
+  styles, so a region the stylesheet failed to hide is caught there too. The
+  one deliberate exception is the 25MB document upload cap, pinned by its own
+  test: that is a limit to respect before choosing a file, not a description
+  of what the app is downloading.
+- **`e2e_test.py` accepts `YAPPER_E2E_ONLY`** to run just the matching steps
+  (the three bootstrap steps always run), so a single area can be re-checked
+  without sitting through the real model downloads. It matches shell-style
+  patterns rather than substrings — with a substring filter, `mode` also
+  matched `select_model` — and a pattern that matches nothing is reported as
+  a typo instead of cheerfully "passing" the three bootstrap steps.
+- **`scripts/run_e2e.sh` no longer kills the developer's own dev server.** Its
+  startup `pkill -f "vite"` matched any Vite on any port; it now reaps only
+  the process holding the run's own port and refuses to continue if something
+  else is squatting on 5173, which is the same contract the Windows runner
+  already had. Its cleanup reaped Vite with `pkill -f "vite --port 5173"`, a
+  string that appears in no real command line (it is `node …/vite.js --port
+  5173 …`), so the server survived every run and the next one refused to
+  start.
+- **`splitSentences` is now covered directly** (10 tests in
+  `src/engines/kokoro.test.ts`). It decides where a sentence ends, which is
+  what the per-segment progress and word timings in the job card are built
+  on, so a regression there would not throw — it would quietly shatter
+  "3.14" into two segments. Decimals, closing quotes/brackets, newlines,
+  ellipses, an unterminated trailing fragment, and the deliberately
+  not-abbreviation-aware behaviour are all now pinned.
+
 ### Added
-- **No more "Download & Load Model" step — Speak just works**: picking a
-  quality preset, a model, or a voice now pulls the model down automatically
+- **No more "Download & Load Model" step — Speak just works**: picking  a quality preset, a model, or a voice now pulls the model down automatically
   in the background, and the text box, Speak and Play are usable from the
   first paint. Type and press Speak while the model is still downloading and
   the job queues and runs the moment the bytes land (the engine drains its
@@ -18,9 +127,10 @@ All notable changes to Yapper are recorded here. Versions follow
 - **Quality presets (Low / Medium / High)**: the default view chooses a model
   with one of three words instead of a wall of cards. Each preset is a *real*
   model, so the control stays honest rather than a placebo slider — Low is
-  Kitten TTS Nano (~24MB, fastest), Medium is Kokoro-82M int8 (~88MB, where
-  the natural voices live), High is Kokoro-82M fp16 (~156MB, best fidelity,
-  auto-falling back to int8 on GPUs without `shader-f16`). The presets are a
+  Kitten TTS Nano (fastest), Medium is Kokoro-82M int8 (where the natural
+  voices live), High is Kokoro-82M fp16 (best fidelity, auto-falling back to
+  int8 on GPUs without `shader-f16`). Their download sizes are shown in the
+  advanced view, not here. The presets are a
   view over model selection, not a second source of truth: pick an off-ladder
   model (an MMS language model) in the advanced grid and no preset lights up
   while the bar reads "Custom". (`src/quality-presets.ts`.)

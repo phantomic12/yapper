@@ -58,6 +58,11 @@ function applySavedSettings(appState: AppState): string {
   if (saved.languageFilter) {
     appState.currentLanguageFilter = saved.languageFilter;
   }
+  // Validate before trusting: the value came out of localStorage, and a
+  // corrupted or stale string must not wedge the OCR mode selector.
+  if (saved.ocrMode === 'tesseract' || saved.ocrMode === 'llm') {
+    appState.ocrMode = saved.ocrMode;
+  }
   return typeof saved.draftText === 'string' ? saved.draftText : '';
 }
 
@@ -74,6 +79,7 @@ function installPersistence(appState: AppState): void {
       speed: appState.currentSpeed,
       draftText: textInput?.value ?? '',
       languageFilter: appState.currentLanguageFilter,
+      ocrMode: appState.ocrMode,
     });
   };
   let settingsTimer: ReturnType<typeof setTimeout> | undefined;

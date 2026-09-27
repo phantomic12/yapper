@@ -295,6 +295,15 @@ export function bindDocumentEvents(state: AppState): void {
       state.ocrMode = radio.value as 'tesseract' | 'llm';
     });
   });
+  // Reflect the (possibly restored-from-localStorage) mode into the radios:
+  // the markup hardcodes `checked` on tesseract, so without this a saved
+  // 'llm' choice renders visually as tesseract while state still holds llm.
+  const ocrModeRadios = ocrModeSelector.querySelectorAll<HTMLInputElement>(
+    'input[name="ocr-mode"]',
+  );
+  for (const radio of ocrModeRadios) {
+    radio.checked = radio.value === state.ocrMode;
+  }
 
   let lastHighlightedWord: { sentence: number; word: number } | null = null;
   let activeSentenceElement: HTMLElement | null = null;

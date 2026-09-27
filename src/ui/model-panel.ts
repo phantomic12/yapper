@@ -525,6 +525,13 @@ export function updateMainThreadWarning(state: AppState): void {
  * What IS worth saying: the fp16 Kokoro card promises a 156MB half-precision
  * download, and on this machine it silently becomes the 88MB int8 build
  * instead. A selection that quietly isn't what it claims needs a line of copy.
+ *
+ * The warning itself is never behind the advanced toggle, but the two views
+ * get different sentences. The simple view has no idea what fp16 or int8
+ * mean, so it is told the consequence — "High runs the standard build
+ * instead" — in the words the preset row already uses. The mechanism, the
+ * model names and the byte counts are one click away for anyone who wants
+ * them, because that is what the advanced view is for.
  */
 export function updatePrecisionWarning(state: AppState): void {
   const warning = document.getElementById('f16-warning');
@@ -533,14 +540,22 @@ export function updatePrecisionWarning(state: AppState): void {
     warning.style.display = 'none';
     return;
   }
-  const copy = warning.querySelector<HTMLElement>('[data-role="f16-copy"]');
-  if (copy) {
-    copy.textContent =
-      'This GPU can\'t run half-precision models, so fp16 variants (like '
-      + 'Kokoro-82M fp16) automatically use the int8 build instead — 88MB rather '
-      + 'than 156MB, with a slight quality difference. Every other model here '
-      + 'runs GPU-accelerated as normal.';
-  }
+  const set = (role: string, text: string) => {
+    const el = warning.querySelector<HTMLElement>(`[data-role="${role}"]`);
+    if (el) el.textContent = text;
+  };
+  // Simple view: the consequence, in the preset row's vocabulary, with no
+  // model names, no quantisation jargon and no download sizes.
+  set('f16-copy',
+    'Your GPU can\'t use the highest-fidelity build, so High quality runs the '
+    + 'standard one instead — slightly lower quality, smaller download. '
+    + 'Everything else is GPU-accelerated as normal.');
+  // Advanced view: why that happens, for someone who picked the model.
+  set('f16-copy-detail',
+    'This GPU can\'t run half-precision models, so fp16 variants (like '
+    + 'Kokoro-82M fp16) automatically use the int8 build instead — 88MB rather '
+    + 'than 156MB, with a slight quality difference. Every other model here '
+    + 'runs GPU-accelerated as normal.');
   warning.style.display = '';
 }
 
@@ -622,7 +637,20 @@ export function handleLoadProgress(loaded: number, total: number, modelName: str
   if (loaded <= 0) {
     text.textContent = `Contacting huggingface.co for ${modelName}…`;
   } else {
-    text.textContent = `Downloading ${modelName}… ${pct}% (${sizeMB} MB)`;
+    // The percentage answers "how long until this is ready?" for everyone.
+    // The megabyte count answers "how much is this?" — an engineering
+    // question, so it rides in a data-advanced span the stylesheet hides
+    // in the simple view. Toggling More mid-download needs no extra work:
+    // the attribute is on the element, not decided here in JavaScript.
+    text.textContent = `Downloading ${modelName}… ${pct}%`;
+    let size = text.querySelector<HTMLElement>('.progress-text__size');
+    if (!size) {
+      size = document.createElement('span');
+      size.className = 'progress-text__size';
+      size.setAttribute('data-advanced', '');
+      text.appendChild(size);
+    }
+    size.textContent = ` (${sizeMB} MB)`;
   }
 }
 

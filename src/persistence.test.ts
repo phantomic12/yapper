@@ -28,7 +28,7 @@ function makeJob(overrides: Partial<GenerationJob> = {}): GenerationJob {
     id: 'job-7',
     text: 'hello world',
     modelId: 'kitten-nano',
-    modelName: 'Kitten TTS Nano (~24MB)',
+    modelName: 'Kitten TTS Nano',
     speed: 1.0,
     status: 'pending',
     createdAt: 1000,

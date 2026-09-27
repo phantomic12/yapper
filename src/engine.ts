@@ -8,6 +8,16 @@ import { REQUEST_TIMEOUTS, TimeoutError, PreviewBusyError, formatGenerateTimeout
 
 // ─── Model definitions ───────────────────────────────────────────
 
+/**
+ * The models the picker may offer: everything in MODELS except entries
+ * flagged `hidden` (see the SpeechT5 entry for why that flag exists).
+ * Every UI loop that renders or searches the model grid goes through this;
+ * raw MODELS is for lookups by id, where a hidden entry must still resolve.
+ */
+export function visibleModels(): TTSModel[] {
+  return MODELS.filter(m => !m.hidden);
+}
+
 /** Human-readable language code → ISO 639-1 code. */
 export const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English',
@@ -29,7 +39,7 @@ export const LANGUAGE_NAMES: Record<string, string> = {
  */
 export function getSupportedLanguages(): string[] {
   const seen = new Set<string>();
-  for (const m of MODELS) {
+  for (const m of visibleModels()) {
     if (m.language && m.language !== 'multi') seen.add(m.language);
   }
   // Enforce order: en first, then alphabetical.
@@ -71,7 +81,14 @@ export interface TTSModel {
   custom?: boolean;
   /** ISO 639-1 language code (e.g. 'en', 'es', 'zh') or 'multi' for multilingual models. */
   language?: string;
-  /** Approximate download size in MB — shown on the model card. */
+  /**
+   * Quantisation/build qualifier shown as an advanced-only chip on the model
+   * card ("int8", "fp16"). It is deliberately *not* part of `name`: names
+   * reach the simple view (the bottom-bar readout, download progress, job
+   * cards) where "Kokoro-82M (int8)" is jargon nobody asked for.
+   */
+  variant?: string;
+  /** Approximate download size in MB — advanced view only. */
   sizeMB?: number;
   /**
    * Path within the HF repo to the model file. Required for custom
@@ -87,12 +104,21 @@ export interface TTSModel {
    * Custom worker-backed models (Kokoro, Kitten) leave this unset.
    */
   runsOnMainThread?: boolean;
+  /**
+   * True when the model must not be offered in the picker because it
+   * cannot produce working audio in this app. Hidden entries stay in the
+   * registry so persisted settings and stored job records that name them
+   * still resolve. The only hidden model today is SpeechT5, which needs a
+   * processor + HiFi-GAN vocoder this app does not ship (see its entry).
+   */
+  hidden?: boolean;
 }
 
 export const MODELS: TTSModel[] = [
   {
     id: 'kokoro-82m',
-    name: 'Kokoro-82M (int8)',
+    name: 'Kokoro-82M',
+    variant: 'int8',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
     modelFile: 'onnx/model_quantized.onnx',
     description: 'High-quality 82M TTS. 28 built-in voices. int8 quantized (~88MB).',
@@ -107,7 +133,8 @@ export const MODELS: TTSModel[] = [
   },
   {
     id: 'kokoro-82m-fp16',
-    name: 'Kokoro-82M (fp16)',
+    name: 'Kokoro-82M',
+    variant: 'fp16',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
     modelFile: 'onnx/model_fp16.onnx',
     description: 'Kokoro-82M fp16 (~156MB). Higher quality than int8, larger download. Needs a GPU with f16 support.',
@@ -121,7 +148,19 @@ export const MODELS: TTSModel[] = [
     defaultVoiceId: 'af_heart',
   },
   {
+    // HIDDEN from the picker (hidden: true). SpeechT5 is a text→mel model:
+    // running it alone produces noise, and a usable card needs the full
+    // stack — the SpeechT5 processor plus a HiFi-GAN vocoder to turn the
+    // mel spectrogram into audio. Transformers.js's text-to-audio
+    // pipeline does not assemble that stack for this checkpoint, so the
+    // card looked functional but could only ever emit garbage (documented
+    // in docs/tts-model-landscape.md). The entry stays in the registry so
+    // the persisted-settings code and the historical job records that
+    // reference 'speecht5' keep resolving; UI loops skip hidden entries.
+    // Re-showing it means wiring processor + vocoder first, not flipping
+    // this flag.
     id: 'speecht5',
+    hidden: true,
     name: 'SpeechT5',
     modelId: 'Xenova/speecht5_tts',
     description: 'Microsoft transformer-based TTS. Multiple voices via speaker embeddings.',
@@ -149,7 +188,7 @@ export const MODELS: TTSModel[] = [
   },
   {
     id: 'kitten-mini',
-    name: 'Kitten TTS Mini (~78MB)',
+    name: 'Kitten TTS Mini',
     modelId: 'KittenML/kitten-tts-mini-0.8',
     modelFile: 'kitten_tts_mini_v0_8.onnx',
     description: 'Larger Kitten model, better quality. Same 8 voice IDs as Kitten Nano but with Mini-trained embeddings.',
@@ -168,7 +207,7 @@ export const MODELS: TTSModel[] = [
   },
   {
     id: 'kitten-nano',
-    name: 'Kitten TTS Nano (~24MB)',
+    name: 'Kitten TTS Nano',
     modelId: 'KittenML/kitten-tts-nano-0.8-int8',
     description: 'Tiny fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
     category: 'fast',
@@ -244,7 +283,7 @@ export interface GenerationJob {
    * Per-word start times in seconds, relative to the start of this job's
    * audio. Same length as the number of words in `text` after splitting
    * on whitespace. Populated by engines that expose phoneme durations
-   * (e.g. kokoro-js via `stream()`); engines that don't (kitten, MMS)
+   * (e.g. the Kokoro engine, sentence by sentence); engines that don't (kitten, MMS)
    * leave this undefined and the reader falls back to chunk-level
    * position-ratio highlighting.
    */
@@ -320,8 +359,8 @@ export interface EngineEvents {
 // receives the raw job and returns a Float32Array + sample rate.
 
 /**
- * Called by engines that generate in segments (e.g. kokoro-js's
- * `stream()` yields one sentence at a time) so progress can cross the
+ * Called by engines that generate in segments (e.g. Kokoro synthesizes
+ * one sentence at a time) so progress can cross the
  * worker boundary while generation is still running.
  */
 export type SegmentProgressCallback = (progress: {
@@ -329,7 +368,7 @@ export type SegmentProgressCallback = (progress: {
   segmentsDone: number;
   /**
    * Total expected segments when known up front; undefined for engines
-   * that discover segments lazily (kokoro-js streams sentence-by-sentence
+   * that discover segments lazily (Kokoro streams sentence-by-sentence
    * without a total).
    */
   segmentsTotal?: number;
@@ -929,8 +968,8 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           }));
           audio = result.audio;
           samplingRate = result.samplingRate;
-          // Engines that expose per-word start times (e.g. kokoro-js via
-          // `stream()`) populate this so the document reader can highlight
+          // Engines that expose per-word start times (e.g. Kokoro)
+          // populate this so the document reader can highlight
           // accurately across chunk boundaries.
           if (result.wordTimings) {
             next.wordTimings = result.wordTimings;

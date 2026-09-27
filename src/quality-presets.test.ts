@@ -26,10 +26,28 @@ describe('quality presets — data', () => {
   });
 
   it('orders the ladder by download size, Low smallest', () => {
-    const size = (id: string) => MODELS.find(m => m.id === id)!.sizeMB ?? 0;
-    const [low, med, high] = QUALITY_PRESETS.map(p => size(p.modelId));
+    const [low, med, high] = QUALITY_PRESETS.map(p => p.sizeMB);
     expect(low).toBeLessThan(med);
     expect(med).toBeLessThan(high);
+  });
+
+  it('agrees with the registry about each model size', () => {
+    // sizeMB is duplicated onto the preset so the advanced chip can render
+    // without importing the registry into the preset module. That copy is a
+    // cache, so pin it: a stale figure here would be a wrong download size.
+    for (const p of QUALITY_PRESETS) {
+      const model = MODELS.find(m => m.id === p.modelId)!;
+      expect(p.sizeMB, `${p.id} sizeMB`).toBe(model.sizeMB);
+    }
+  });
+
+  it('keeps the download size out of the blurb and the tooltip copy', () => {
+    // A size is an engineering fact; the simple view shows "Fastest", not
+    // "Fastest · ~24MB". See src/ui/layout.ts, which renders sizeMB into a
+    // data-advanced chip.
+    for (const p of QUALITY_PRESETS) {
+      expect(p.blurb, `${p.id} blurb`).not.toMatch(/MB/i);
+    }
   });
 
   it('defaults to Medium, where the natural Kokoro voices live', () => {

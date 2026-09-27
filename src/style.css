@@ -1163,6 +1163,19 @@ body {
   color: var(--text-dim);
   font-family: ui-monospace, monospace;
 }
+/* Quantisation/build qualifier ("int8", "fp16"). Advanced view only — it
+   disambiguates the two Kokoro builds on the card, where the name no longer
+   carries it. */
+.model-card__variant {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+}
 .model-card__lang {
   font-size: 0.65rem;
   font-weight: 700;
@@ -2332,6 +2345,15 @@ body::before {
 :root:not([data-advanced='on']) [data-advanced] {
   display: none !important;
 }
+/* The mirror rule, for copy that only makes sense on the short path: a
+   plain-language sentence that the advanced view replaces with a more
+   precise one. Without this both would render side by side and the
+   banner would say the same thing twice. Note the attribute form:
+   `:root(...)` is not a valid functional pseudo-class, and a browser
+   drops the whole rule without a word when you write it that way. */
+:root[data-advanced='on'] [data-simple] {
+  display: none !important;
+}
 .advanced-toggle {
   color: var(--text-dim);
   cursor: pointer;
@@ -2418,6 +2440,15 @@ body::before {
 }
 .quality-preset--active .quality-preset__blurb {
   color: var(--text-muted);
+}
+/* Download size for the quality ladder. Advanced view only (data-advanced),
+   so the simple view reads "Fastest / Natural voices / Best fidelity" with
+   no engineering figures in the way. */
+.quality-preset__size {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+  text-align: center;
 }
 
 /* ── Bottom bar ──────────────────────────────────────────────

@@ -24,6 +24,8 @@ Usage:
 import json
 import time
 import base64
+import re
+import fnmatch
 import os
 import sys
 import traceback
@@ -392,14 +394,22 @@ def step_attach_and_navigate(cdp_holder):
     nav_id = cdp.send('Page.navigate', {'url': URL}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
     print(f'      Navigated to {URL}; waiting for app render…')
-    time.sleep(2)
 
 
 def step_verify_page_render(cdp_holder):
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
-    ready = cdp.eval(
-        """(function() {
+
+    # Poll for the app to actually mount. A fixed sleep raced a cold
+    # dev-server profile: the first page load pays for Vite's initial
+    # module transform, which can take far longer than any fixed wait, and
+    # every downstream step then cascaded off '#app not mounted'.
+    POLL_TIMEOUT = float(os.environ.get('YAPPER_RENDER_TIMEOUT', '60'))
+    start = time.time()
+    state: dict = {}
+    while time.time() - start < POLL_TIMEOUT:
+        ready = cdp.eval(
+            """(function() {
             return {
                 title: document.title,
                 hasApp: !!document.getElementById('app'),
@@ -408,10 +418,14 @@ def step_verify_page_render(cdp_holder):
                 loadBtnExists: !!document.getElementById('load-btn'),
                 gpuText: document.querySelector('.gpu-status__label')?.textContent?.trim(),
             };
-        })()""",
-        target['id'], timeout=10,
-    )
-    state = v(ready)
+            })()""",
+            target['id'], timeout=10,
+        )
+        state = v(ready)
+        if state.get('models', 0) >= 5:
+            break
+        time.sleep(1)
+
     print(f'      title:  {state.get("title")}')
     print(f'      models: {state.get("models")}')
     print(f'      GPU:    {state.get("gpuText", "")}')
@@ -430,6 +444,41 @@ MODE_STATE_JS = """(function() {
         if (!el) return null;
         return getComputedStyle(el).display !== 'none';
     };
+    // Every scrap of copy a first-time visitor can actually read right now:
+    // walk the rendered tree, keep what is genuinely on screen, and report
+    // the memory figures. Unit tests assert the same rule against the markup
+    // (src/advanced-mode.test.ts); this one trusts the stylesheet instead,
+    // so a region marked data-advanced that the CSS failed to hide is caught
+    // here rather than by a user.
+    const visibleSizeFigures = (() => {
+        const SIZE = /\\d+(?:\\.\\d+)?\\s*(?:MB|MiB|KB|GB)\\b/i;
+        // One surface is allowed to quote a number: the upload cap, which is
+        // a limit the user has to respect before they pick a file, not a
+        // description of what the app is downloading. Selector-based on
+        // purpose — it cannot be defeated by a reword. The fp16-fallback
+        // warning is *not* exempt: it is always visible, so it carries a
+        // plain-language sentence in this view and puts its byte counts in a
+        // data-advanced span instead.
+        const ALLOWED = '#document-formats';
+        const hits = [];
+        const walk = (el) => {
+            if (el.nodeType !== 1) return;
+            const style = getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return;
+            const allowed = el.closest(ALLOWED) !== null;
+            let text = '';
+            for (const n of el.childNodes) {
+                if (n.nodeType === 3) text += n.textContent;
+            }
+            text = text.trim();
+            if (!allowed && (SIZE.test(text) || SIZE.test(el.title || ''))) {
+                hits.push(`${el.tagName.toLowerCase()}.${el.className || '-'}: ${text || el.title}`);
+            }
+            for (const child of el.children) walk(child);
+        };
+        walk(document.querySelector('#app') || document.body);
+        return hits;
+    })();
     return {
         advanced: document.documentElement.dataset.advanced === 'on',
         stored: localStorage.getItem('yapper.advanced.v1'),
@@ -448,6 +497,19 @@ MODE_STATE_JS = """(function() {
         speedRow: shown('.speed-row'),
         textInput: shown('#text-input'),
         loadBtn: shown('#load-btn'),
+        presetBlurbs: [...document.querySelectorAll('.quality-preset__blurb')]
+            .map(el => el.textContent.trim()),
+        presetSizesShown: [...document.querySelectorAll('.quality-preset__size')]
+            .map(el => getComputedStyle(el).display !== 'none'),
+        // How many of the two fp16-fallback sentences are on screen. One per
+        // view, never two: the simple one is data-simple, the technical one
+        // is data-advanced, and the stylesheet keeps them apart.
+        f16Sentences: ['f16-copy', 'f16-copy-detail']
+            .filter(role => {
+                const el = document.querySelector(`[data-role="${role}"]`);
+                return !!el && getComputedStyle(el).display !== 'none' && !!el.textContent.trim();
+            }).length,
+        sizeFigures: visibleSizeFigures,
     };
 })()"""
 
@@ -479,8 +541,26 @@ def step_assert_simple_mode(cdp_holder):
         raise AssertionError(f'bottom-bar toggle should read "More" in the simple view: {s}')
     if not s.get('textInput') or not s.get('loadBtn'):
         raise AssertionError(f'the short path is not intact in the simple view: {s}')
+    # The point of the simple view: a download size is an engineering fact,
+    # and nobody reading their sentence back needs one on screen.
+    if s.get('sizeFigures'):
+        raise AssertionError(
+            f'memory figures are visible in the simple view: {s.get("sizeFigures")}')
+    if any(s.get('presetSizesShown') or []):
+        raise AssertionError(
+            f'quality-preset size chips are rendered in the simple view: {s}')
+    for blurb in s.get('presetBlurbs') or []:
+        if re.search(r'\d+\s*MB', blurb, re.I):
+            raise AssertionError(f'quality preset blurb leaks a size: {blurb!r}')
+    if s.get('bottomModel') and re.search(r'\d+\s*MB', s['bottomModel'], re.I):
+        raise AssertionError(f'bottom bar names a download size: {s["bottomModel"]!r}')
+    if s.get('f16Sentences', 0) > 1:
+        raise AssertionError(
+            f'the fp16 warning shows both registers at once: {s}')
     print(f'      ✓ simple view: grid hidden, quality={s.get("activePreset")} '
           f'({s.get("bottomModel")}), text box and load button present')
+    print(f'      ✓ no memory figures on screen (presets read '
+          f'{s.get("presetBlurbs")})')
 
 
 def step_enable_advanced_mode(cdp_holder):
@@ -514,8 +594,19 @@ def step_enable_advanced_mode(cdp_holder):
         raise AssertionError(f'toggle aria-pressed out of step: {s.get("togglePressed")!r}')
     if s.get('toggleLabel') != 'Less':
         raise AssertionError(f'bottom-bar toggle should read "Less" when revealed: {s.get("toggleLabel")!r}')
+    # The figures were relocated, not deleted — the whole point of hiding
+    # them is that they are one toggle away.
+    if not all(s.get('presetSizesShown') or []):
+        raise AssertionError(
+            f'quality-preset size chips are still hidden in advanced mode: {s}')
+    if len(s.get('presetSizesShown') or []) != 3:
+        raise AssertionError(f'expected a size chip on all three presets: {s}')
+    if s.get('f16Sentences', 0) > 1:
+        raise AssertionError(
+            f'the fp16 warning shows both registers at once: {s}')
     print(f'      ✓ advanced view: grid visible, language filter and speed back '
           f'(aria-pressed={s.get("togglePressed")}, stored={s.get("stored")})')
+    print(f'      ✓ download sizes back on screen where the numbers belong')
 
 
 def step_select_model(cdp_holder):
@@ -755,10 +846,12 @@ def _run_kokoro_generation(cdp_holder, text: str):
             const pickBtn = card.querySelector('[data-action="pick"]');
             if (!pickBtn) return { ok: false, msg: 'no pick button on kokoro card' };
             pickBtn.click();
+            // Since auto-load (selecting a model starts the download), the
+            // load control flips into its disabled status-pill form while the
+            // download runs. A manual click is only the fallback path.
             const loadBtn = document.getElementById('load-btn');
-            if (!loadBtn || loadBtn.disabled) return { ok: false, msg: 'load button unavailable' };
-            loadBtn.click();
-            return { ok: true };
+            if (loadBtn && !loadBtn.disabled) loadBtn.click();
+            return { ok: true, autoLoad: !!(loadBtn && loadBtn.disabled) };
         })()""",
         target['id'], timeout=15,
     )
@@ -1410,6 +1503,36 @@ def main():
         ('switch_to_studio', lambda: step_switch_to_studio(cdp_holder)),
         ('kokoro_segment_progress', lambda: step_kokoro_segment_progress(cdp_holder)),
     ]
+
+    # YAPPER_E2E_ONLY selects a subset of steps by shell-style pattern, in
+    # their original order. Most steps download a real model, so the full
+    # suite outlasts a short shell window; this makes a fast loop on one
+    # area possible without reordering or editing the list above. The first
+    # three steps always run: the suite cannot evaluate anything without a
+    # page.
+    #
+    # Patterns, not substrings, and the difference is not cosmetic: with a
+    # substring filter "mode" also matches "select_model", so a run meant to
+    # touch the simple/advanced steps silently dragged in model selection.
+    #   YAPPER_E2E_ONLY=assert_simple_mode   exact name
+    #   YAPPER_E2E_ONLY='*mode'              both mode steps, not select_model
+    #   YAPPER_E2E_ONLY='kokoro*,*reader'    a comma-separated list
+    only = os.environ.get('YAPPER_E2E_ONLY', '').strip()
+    if only:
+        patterns = [p.strip() for p in only.split(',') if p.strip()]
+        always = {'connect_to_cdp', 'attach_and_navigate', 'verify_page_render'}
+        picked = [(n, f) for (n, f) in steps
+                  if n in always or any(fnmatch.fnmatch(n, p) for p in patterns)]
+        # A pattern that matches nothing is a typo, and running just the
+        # three bootstrap steps would report a cheerful "3 STEPS PASSED"
+        # for a run that tested nothing at all. Say so and stop.
+        selected = [n for (n, _) in picked if n not in always]
+        if not selected:
+            print(f'  YAPPER_E2E_ONLY={only!r} matched no step.', file=sys.stderr)
+            print('  Known steps: ' + ', '.join(n for (n, _) in steps), file=sys.stderr)
+            sys.exit(2)
+        steps = picked
+        print(f'  (filtered: {patterns} → {selected})')
 
     for name, fn in steps:
         results.append(run_step(name, fn))

@@ -203,19 +203,24 @@ describe('MODELS registry', () => {
 });
 
 describe('chooseKokoroRuntime', () => {
-  it('leaves the selection alone on a GPU with f16 support', () => {
+  it('forces WebGPU on an adapter with f16 support', () => {
+    // device:null is NOT "ORT decides" in the transformers 3.8.1 build
+    // kokoro-js pins — it resolves to ['wasm'], silently CPU-bound. With
+    // shader-f16 available the GPU is requested explicitly; load() retries
+    // on WASM if the session cannot be created.
     expect(chooseKokoroRuntime('q8', true)).toEqual({
-      dtype: 'q8', device: null, downgradedForF16: false,
+      dtype: 'q8', device: 'webgpu', downgradedForF16: false,
     });
     expect(chooseKokoroRuntime('fp16', true)).toEqual({
-      dtype: 'fp16', device: null, downgradedForF16: false,
+      dtype: 'fp16', device: 'webgpu', downgradedForF16: false,
     });
   });
 
-  it('keeps the int8 graph on the GPU when f16 is unavailable', () => {
-    // The regression this guards: the int8 graph (q8 -> model_quantized.onnx)
-    // has no f16 anywhere, so it runs on WebGPU fine. Pinning WASM here sent
-    // a perfectly GPU-capable model to the CPU for nothing.
+  it('keeps kokoro-js\'s WASM default when f16 is unavailable and the graph needs no f16', () => {
+    // The int8 graph (q8 → model_quantized.onnx) is fp32-compute, so it
+    // never asks for f16 kernels and is safe on the WASM EP. Requesting
+    // WebGPU without shader-f16 would fail f16 WGSL validation on kernels
+    // ORT does emit for other ops, so the conservative default stands.
     const choice = chooseKokoroRuntime('q8', false);
     expect(choice.dtype).toBe('q8');
     expect(choice.device).toBeNull();
@@ -231,14 +236,10 @@ describe('chooseKokoroRuntime', () => {
     }
   });
 
-  it('never pins WASM, whatever the dtype', () => {
-    // The device is left to ORT in every branch: measured on an f16-less
-    // adapter the int8 graph ran 4.8s on WASM vs 5.4s on an emulated
-    // WebGPU adapter, so hard-pinning a provider buys nothing.
-    for (const hasF16 of [true, false]) {
-      for (const dtype of ['q8', 'fp16', 'q4f16', 'fp32', undefined]) {
-        expect(chooseKokoroRuntime(dtype, hasF16).device, `${dtype}/${hasF16}`).toBeNull();
-      }
+  it('never pins WebGPU without shader-f16, and always pins it with', () => {
+    for (const dtype of ['q8', 'fp16', 'q4f16', 'fp32', undefined]) {
+      expect(chooseKokoroRuntime(dtype, false).device, `${dtype}/no-f16`).toBeNull();
+      expect(chooseKokoroRuntime(dtype, true).device, `${dtype}/f16`).toBe('webgpu');
     }
   });
 
