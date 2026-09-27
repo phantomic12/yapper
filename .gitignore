@@ -44,3 +44,6 @@ scripts/demo-shots/
 
 # Local scratch
 __pycache__/
+
+# Local tooling markers (per-checkout state, not project source)
+.freebuff/

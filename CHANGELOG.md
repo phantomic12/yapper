@@ -6,6 +6,32 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **Streaming playback**: a Play button and stream bar that start reading
+  the text box out loud, sentence by sentence, while synthesis is still
+  running. Audio is scheduled in overlapping parts (`src/ui/stream-player.ts`)
+  with a two-part lookahead, so speech starts after the first chunk instead of
+  waiting for the whole document. Pause/Stop and a "speaking sentence" readout
+  are available throughout.
+- **Persistence across reloads**: model, voice, speed, draft text, and language
+  filter are saved to `localStorage`, and the generation history (with playable
+  audio) is stored in IndexedDB under `yapper` / `jobs`
+  (`src/persistence.ts`). Jobs that were mid-generation when the tab closed come
+  back as pending rather than stuck. Writes are debounced and flushed on
+  `pagehide`.
+- **Download all as one file**: every finished clip is concatenated oldest-first
+  into a single WAV audiobook (`src/audio-export.ts`, 0.35s gaps, resampled to
+  the highest clip rate so mixed-rate histories don't sound pitch-shifted).
+- **Two-page UI with a Document Reader**: the app is now split into Studio
+  (models, voice, text, queue) and Reader (upload, OCR, extraction), with
+  hash-routed pill tabs (`src/ui/page-nav.ts`). Includes a visual refresh —
+  ambient gradient background, gradient hero text, page-transition animation,
+  and hover lift on primary actions.
+- **Document structure classification**: extracted text is split into blocks and
+  labelled heading / paragraph / list / quote / code / table, using both text
+  heuristics and PDF layout geometry (`src/document-classify.ts`). The Reader
+  page shows a count chip per kind and a card per block, each with its own
+  Speak button. PDF heading detection uses the block's width and position
+  relative to the widest block on the page.
 - **Live generation progress** on job cards. A `jobProgress` heartbeat
   (~500ms) from `TTSEngine.processQueue` drives a ticking seconds counter,
   an indeterminate progress bar, and — for Kokoro's streaming path — a
@@ -20,6 +46,28 @@ All notable changes to Yapper are recorded here. Versions follow
   (multi-sentence input shows segment markers) steps in `e2e_test.py`.
 
 ### Fixed
+- **Kitten output was garbled**: the bundled `voices.npz` style bank is indexed
+  by *token count*, not by voice, and the engine was always reading row 0 —
+  producing a ~1.35s burst of noise with a peak near 20 instead of speech. The
+  row is now selected by the clip's token count, per-voice `speed_priors` are
+  read from the model's `config.json` and multiplied into the user's speed
+  setting, and 5000 samples of trailing decoder artifact are trimmed. Typical
+  sentence now renders in ~3s at peak 0.77 with natural prosody.
+- **Queue ran newest-first**: `processQueue` picked the first *pending* job in
+  insertion order, which meant the most recently added item jumped the queue.
+  Scheduling is now FIFO, and the "Nth in queue" labels were recounted to match
+  (the list is rendered newest-first, so positions were being counted backwards).
+- **Clipped/over-modulated audio**: a `limitPeaks` stage now scales a clip only
+  when it is genuinely over-modulated, clamping isolated spikes (under 1% over)
+  instead of attenuating the whole waveform.
+- **Console storm and wrong audio on f16-less GPUs**: ORT's WebGPU kernels for
+  these models are generated with WGSL `f16` storage. Adapters without the
+  `shader-f16` feature failed WGSL validation on every kernel and produced bad
+  audio. The execution provider is now pinned to WASM when the adapter lacks
+  `shader-f16` (`webgpuAdapterHasFeature` in `src/capability.ts`).
+- **A 26px phantom sliver** rendered under the queue whenever the queue count was
+  zero, because the stylesheet's `display: flex` beat the `hidden` attribute.
+  `hidden` is now forced globally.
 - **Silent PDF extraction failures**: on engines without `Promise.try`
   (Chrome < ~128), pdfjs 6's worker protocol hangs instead of rejecting —
   every extraction died as an unhandled rejection while the document panel
