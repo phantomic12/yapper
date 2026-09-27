@@ -59,6 +59,13 @@ All notable changes to Yapper are recorded here. Versions follow
   `<blockquote>`, headings as headings. Rows, columns and text length are all
   capped, and the caps say how much was hidden — a one-column "table" falls back
   to a paragraph rather than rendering a pointless grid.
+- **A sample document on the Reader page**: "No document handy? Read a sample"
+  under the drop zone loads a built-in passage (`src/sample-document.ts`)
+  through the real extraction, classification and reader pipeline, so a
+  first-time visitor can see what the Reader does without going to find a
+  PDF. The sample is deliberately shaped to exercise every block kind the
+  classifier knows — heading, paragraph, list, quote, table — and a test
+  fails if one of them stops being recognised.
 - **Document structure classification**: extracted text is split into blocks and
   labelled heading / paragraph / list / quote / code / table, using both text
   heuristics and PDF layout geometry (`src/document-classify.ts`). The Reader
@@ -79,6 +86,11 @@ All notable changes to Yapper are recorded here. Versions follow
   (multi-sentence input shows segment markers) steps in `e2e_test.py`.
 
 ### Fixed
+- **Quoted blocks showed their ">" markers**: the block renderer strips the
+  bullet from list items (which otherwise showed a doubled glyph) but passed a
+  blockquote's `>` straight through, so a quotation in a real document rendered
+  as a line of angle brackets. Every line's marker is now dropped, the same way
+  the list branch does it.
 - **Kokoro could not load at all**: kokoro-js bundles its own copy of
   `@huggingface/transformers` (3.8.1) and its own `onnxruntime-web` instance, so
   the `wasmPaths` that `src/engine.ts` configures for the app's top-level

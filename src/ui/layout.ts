@@ -219,6 +219,11 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <p class="document-formats" id="document-formats">PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD. Max 25 MB.</p>
           </div>
 
+          <p class="document-sample" id="document-sample">
+            No document handy? <button type="button" class="link-btn" id="document-sample-btn">Read a sample</button>
+            to see how the reader works.
+          </p>
+
           <div class="document-need-model" id="document-need-model">
             <p>📄 Upload a document to see its structure and extracted text. To hear it read aloud, <button type="button" class="link-btn" data-page-jump="studio">load a model on the Studio page</button> first.</p>
           </div>

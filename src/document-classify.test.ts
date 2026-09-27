@@ -168,6 +168,18 @@ describe('renderBlockHtml', () => {
     expect(h).toContain('<h4 class="classify-heading">Install</h4>');
   });
 
+  it('strips the ">" markers instead of showing them as content', () => {
+    // Same reasoning as the list branch dropping bullets: the blockquote
+    // already means "this was quoted", so the source marker is noise.
+    expect(renderBlockHtml('quote', '> hello')).toContain('>hello<');
+    expect(renderBlockHtml('quote', '> hello')).not.toContain('&gt;');
+    // A wrapped quote repeats the marker on every line; all of them go.
+    const wrapped = renderBlockHtml('quote', '> one line\n> and the next');
+    expect(wrapped).toBe('<blockquote class="classify-quote">one line\nand the next</blockquote>');
+    // Text that only looks quoted keeps its own punctuation.
+    expect(renderBlockHtml('quote', '"Famous last words."')).toContain('&quot;Famous last words.&quot;');
+  });
+
   it('escapes document text in every kind', () => {
     // The one rule for this module: block text is never interpolated raw.
     const nasty = '<img src=x onerror="alert(1)">';

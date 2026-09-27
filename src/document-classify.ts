@@ -227,8 +227,17 @@ export function renderBlockHtml(
       const unfenced = body.replace(/^```[a-zA-Z0-9]*\n?/, '').replace(/```\s*$/, '');
       return `<pre class="classify-code"><code>${esc(unfenced)}</code></pre>`;
     }
-    case 'quote':
-      return `<blockquote class="classify-quote">${esc(body)}</blockquote>`;
+    case 'quote': {
+      // Drop the leading ">" markers the same way the list branch drops its
+      // bullets: the <blockquote> already carries the meaning, so leaving
+      // them in shows the reader the source punctuation instead of the text.
+      const unquoted = body
+        .split('\n')
+        .map(l => l.replace(/^\s*(?:>+\s*)?/, ''))
+        .join('\n')
+        .trim();
+      return `<blockquote class="classify-quote">${esc(unquoted)}</blockquote>`;
+    }
     case 'list': {
       const items = body
         .split('\n')

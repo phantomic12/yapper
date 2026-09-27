@@ -17,6 +17,7 @@ import {
 } from '../document-classify';
 import type { AppState } from '../app-state';
 import { showStatus } from '../dom-utils';
+import { SAMPLE_DOCUMENT } from '../sample-document';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -87,6 +88,8 @@ export function bindDocumentEvents(state: AppState): void {
   const readerOverlayClose = document.getElementById('reader-overlay-close') as HTMLButtonElement;
   const layoutDetails = document.getElementById('layout-details') as HTMLDetailsElement;
   const layoutPre = document.getElementById('layout-pre') as HTMLPreElement;
+  const sampleEl = document.getElementById('document-sample') as HTMLElement;
+  const sampleBtn = document.getElementById('document-sample-btn') as HTMLButtonElement;
 
   function openReaderOverlay() {
     if (readerOverlay.style.display === 'none') {
@@ -177,6 +180,34 @@ export function bindDocumentEvents(state: AppState): void {
 
   let classifiedBlocks: ClassifiedBlock[] = [];
 
+  /**
+   * Show an extracted document in the Reader page. Shared by the upload path
+   * and the built-in sample, so the sample goes through exactly the same
+   * rendering as a real file instead of a simplified preview.
+   */
+  function showDocument(doc: ExtractedDocument) {
+    state.extractedDocument = doc;
+    renderReaderView(doc.text);
+    classifiedBlocks = renderClassification(doc);
+    preview.style.display = '';
+    options.style.display = '';
+    // The sample offer has done its job once there is a document to look at.
+    sampleEl.hidden = true;
+    layoutDetails.style.display = doc.layoutBlocks && doc.layoutBlocks.length ? '' : 'none';
+    if (doc.layoutBlocks && doc.layoutBlocks.length) {
+      layoutPre.textContent = JSON.stringify(doc.layoutBlocks.slice(0, 50), null, 2)
+        + (doc.layoutBlocks.length > 50 ? '\n…' : '');
+    }
+    setProgress(`Loaded ${doc.name} · ${doc.text.length.toLocaleString()} chars`);
+    readerView.focus();
+  }
+
+  sampleBtn.addEventListener('click', () => {
+    clearReaderError();
+    setProgress('Loading sample…');
+    showDocument({ ...SAMPLE_DOCUMENT });
+  });
+
   function handleFile(file: File) {
     if (file.size > 25 * 1024 * 1024) {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
@@ -187,18 +218,7 @@ export function bindDocumentEvents(state: AppState): void {
     const useOcr = ocrToggle.checked && file.name.toLowerCase().endsWith('.pdf');
     extractDocument(file, { useOcr, ocrMode: state.ocrMode, onProgress: setProgress })
       .then(doc => {
-        state.extractedDocument = doc;
-        renderReaderView(doc.text);
-        classifiedBlocks = renderClassification(doc);
-        preview.style.display = '';
-        options.style.display = '';
-        layoutDetails.style.display = doc.layoutBlocks && doc.layoutBlocks.length ? '' : 'none';
-        if (doc.layoutBlocks && doc.layoutBlocks.length) {
-          layoutPre.textContent = JSON.stringify(doc.layoutBlocks.slice(0, 50), null, 2)
-            + (doc.layoutBlocks.length > 50 ? '\n…' : '');
-        }
-        setProgress(`Loaded ${doc.name} · ${doc.text.length.toLocaleString()} chars`);
-        readerView.focus();
+        showDocument(doc);
       })
       .catch(err => {
         clearProgress();
