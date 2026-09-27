@@ -1,11 +1,22 @@
 import { defineConfig, type Plugin } from 'vite';
 import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
+import { syncPdfWorker } from './scripts/copy-pdf-worker.mjs';
 
 /**
  * Vite plugin: copies pdfjs-dist's worker into `public/` so the document
  * reader can find it at runtime without needing a Vite-specific import.
  * Runs on `build` so a fresh clone works out of the box.
+ *
+ * The work is done by scripts/copy-pdf-worker.mjs — the same function the
+ * postinstall hook runs — because the copy is not a plain copyFileSync: it
+ * prepends the engine shim the worker needs (see that file). This plugin
+ * used to do its own bare copy, which quietly overwrote the shimmed worker
+ * with one that dies on Chrome 128–139.
+ *
+ * buildStart, not closeBundle: the files land in public/, and Vite copies
+ * publicDir into dist/ after this hook — writing at closeBundle meant a
+ * fresh checkout shipped a dist with no worker at all.
  *
  * The worker is gitignored — see .gitignore — because it's a binary
  * vendored artifact, not source.
@@ -14,26 +25,11 @@ function copyPdfWorkerPlugin(): Plugin {
   return {
     name: 'copy-pdf-worker',
     apply: 'build',
-    closeBundle() {
+    buildStart() {
       // Vite sets config.root to the project directory at config-time. Use
       // it instead of import.meta.url, which resolves to dist/ after the
       // build runs.
-      const projectRoot = process.cwd();
-      const src = resolve(projectRoot, 'node_modules/pdfjs-dist/build/pdf.worker.mjs');
-      const destDir = resolve(projectRoot, 'public');
-      const dest = resolve(destDir, 'pdf.worker.mjs');
-      if (!existsSync(src)) {
-        // During `npm run build` on a fresh checkout the worker should be
-        // there from `npm install`. If it isn't, fail loud rather than
-        // ship a broken dist.
-        throw new Error(
-          `pdfjs-dist worker not found at ${src}. ` +
-          `Run \`npm install\` or check that pdfjs-dist is in dependencies.`,
-        );
-      }
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(src, dest);
-      console.log(`[copy-pdf-worker] copied ${src} → ${dest}`);
+      syncPdfWorker({ projectRoot: process.cwd(), required: true });
     },
   };
 }

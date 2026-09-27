@@ -1,3 +1,7 @@
+// Must come first: pdfjs 6.3 assumes a handful of built-ins that postdate
+// this app's advertised engine floor (Chrome 128+), and without them every
+// PDF import fails on Chrome 128–139. See the shim for the full list.
+import './pdfjs-engine-shim.js';
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { getOcrEngine } from './ocr';

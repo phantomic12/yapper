@@ -12,6 +12,9 @@ dist/
 # Copied public assets
 public/pdf.worker.mjs
 public/pdf.worker.mjs.map
+# Shim the copied pdfjs worker imports for engines without the ES2025
+# built-ins it assumes (see src/pdfjs-engine-shim.js).
+public/pdfjs-engine-shim.mjs
 # Vite-emitted ORT WASM files: copies of node_modules/onnxruntime-web/dist/*.wasm
 # kept under stable names so the inference Web Worker can resolve them
 # via wasmPaths / locateFile when the runtime would otherwise lose track

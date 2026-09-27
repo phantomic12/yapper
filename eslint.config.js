@@ -9,7 +9,10 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts'],
+    // The engine shim is plain JS (it is imported by the pdfjs worker as a
+    // module, and by src TS code for its side effect), so it is linted with
+    // the same browser globals as everything else rather than skipped.
+    files: ['src/**/*.ts', 'src/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
@@ -59,6 +62,8 @@ export default tseslint.config(
         clearTimeout: 'readonly',
         clearInterval: 'readonly',
         console: 'readonly',
+        btoa: 'readonly',
+        atob: 'readonly',
       },
     },
     rules: {
