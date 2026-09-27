@@ -6,6 +6,14 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **Light and dark themes**: a header control cycles Auto (follow the OS) →
+  the opposite of the current appearance → the other explicit theme, and the
+  choice persists across reloads. The palette was already entirely custom
+  properties, so the switch is one attribute on `<html>`; a small inline
+  script in `<head>` applies the stored theme before first paint so nobody
+  gets a white flash on a dark page (or vice versa). The classified-block
+  colours get darker equivalents in light mode — the pastel set was tuned for
+  a near-black surface and falls under 3:1 on white.
 - **Honest half-precision notice**: when the WebGPU adapter exists but lacks
   the `shader-f16` feature, the model panel now says so and explains that fp16
   cards (Kokoro-82M fp16) quietly resolve to the 88MB int8 build instead of the

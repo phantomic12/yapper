@@ -23,6 +23,41 @@
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 }
 
+/* ─── Light theme ────────────────────────────────────────────────
+   Applied via <html data-theme="light">. The dark palette above is the
+   default, so an unset attribute (and "follow the system" in a light OS)
+   falls through to the prefers-color-scheme block at the bottom.
+   Values are the dark palette's roles, not inversions: surfaces get
+   lighter, text darker, and the accent darkens so it still clears
+   4.5:1 on white. */
+:root[data-theme='light'] {
+  --bg: #f6f6fb;
+  --bg-elevated: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-hover: #ececf6;
+  --border: #d8d8e6;
+  --border-focus: #4f46e5;
+  --text: #17171f;
+  --text-muted: #55556d;
+  /* Darker than the dark theme's --text-dim on purpose: that value is
+     #55556a, which only clears 4.5:1 against a near-black surface. On white
+     it needs to drop to ~5.2:1 to stay legible as small text. */
+  --text-dim: #6b6b82;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-glow: rgba(79, 70, 229, 0.12);
+  --success: #15803d;
+  --success-bg: rgba(21, 128, 61, 0.1);
+  --warning: #b45309;
+  --warning-bg: rgba(180, 83, 9, 0.1);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.1);
+  /* White overlays read as "a touch lighter than the surface" on dark; on
+     light they have to become a touch *darker* or they disappear. */
+  --overlay-subtle: rgba(23, 23, 31, 0.05);
+  --overlay-border: rgba(23, 23, 31, 0.14);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html {
@@ -2024,4 +2059,82 @@ body::before {
 .load-btn:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
+}
+
+/* ─── Light-theme corrections for the visual refresh ───────────
+   The classified-block palette below is built from light pastels so
+   each kind reads as a distinct hue against a near-black surface. On
+   white those same pastels fall under 3:1, so the light theme swaps
+   in darker equivalents of the same hues — same encoding, legible.
+   Placed last so it wins on source order as well as specificity. */
+:root[data-theme='light'] {
+  --shadow-sm: 0 1px 2px rgba(23, 23, 31, 0.08);
+  --shadow-md: 0 8px 24px rgba(23, 23, 31, 0.12);
+  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 55%, #9333ea 100%);
+}
+
+:root[data-theme='light'] .classify-chip--heading,
+:root[data-theme='light'] .classify-badge--heading {
+  color: #4338ca;
+  border-color: rgba(79, 70, 229, 0.3);
+  background: rgba(79, 70, 229, 0.1);
+}
+
+:root[data-theme='light'] .classify-chip--list,
+:root[data-theme='light'] .classify-badge--list {
+  color: #15803d;
+  border-color: rgba(21, 128, 61, 0.28);
+  background: rgba(21, 128, 61, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--quote,
+:root[data-theme='light'] .classify-badge--quote {
+  color: #7e22ce;
+  border-color: rgba(126, 34, 206, 0.28);
+  background: rgba(168, 85, 247, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--code,
+:root[data-theme='light'] .classify-badge--code {
+  color: #c2410c;
+  border-color: rgba(194, 65, 12, 0.28);
+  background: rgba(249, 115, 22, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--table,
+:root[data-theme='light'] .classify-badge--table {
+  color: #0e7490;
+  border-color: rgba(14, 116, 144, 0.28);
+  background: rgba(6, 182, 212, 0.09);
+}
+
+:root[data-theme='light'] .classify-block--table { border-left-color: #0891b2; }
+
+/* The ambient glow is a light wash on dark; on light it would be an
+   invisible smudge, so it moves to a cool tint instead. */
+:root[data-theme='light'] body::before {
+  background:
+    radial-gradient(900px 420px at 18% -8%, rgba(99, 102, 241, 0.1), transparent 65%),
+    radial-gradient(700px 380px at 92% 4%, rgba(168, 85, 247, 0.08), transparent 60%);
+}
+
+/* Header control for the theme toggle, sized to sit beside the GPU
+   status pill without shouting. */
+.theme-toggle {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-glow);
 }

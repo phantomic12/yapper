@@ -10,6 +10,7 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindThemeToggle } from './theme';
 import { bindPageNav } from './ui/page-nav';
 import { buildAppMarkup } from './ui/layout';
 import {
@@ -148,6 +149,7 @@ async function render(): Promise<void> {
     onModelLoaded: () => updateDocumentSectionVisibility(state),
   });
   bindPageNav();
+  bindThemeToggle();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
   bindStreamPlayer(state);

@@ -56,10 +56,11 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         </nav>
       </header>
 
-      <!-- GPU Status -->
+      <!-- GPU Status + theme control -->
       <div class="gpu-status" role="status" aria-live="polite" title="${capInfo.detail}">
         <div class="gpu-status__dot ${capability === 'full' ? 'gpu-status__dot--on' : capability === 'partial' ? 'gpu-status__dot--partial' : 'gpu-status__dot--off'}"></div>
         <span class="gpu-status__label">${capInfo.label}</span>
+        <button class="theme-toggle" id="theme-toggle" type="button" data-theme-choice="system">Auto</button>
       </div>
 
       <!-- ══════════ Studio page ══════════ -->

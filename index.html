@@ -6,6 +6,19 @@
   <title>Yapper — Private Text-to-Speech</title>
   <meta name="description" content="Run text-to-speech directly in your browser. No data leaves your device. Powered by WebGPU." />
   <meta name="theme-color" content="#6366f1" />
+  <!-- Apply the stored theme before first paint. The app module is deferred,
+       so setting it from src/theme.ts would paint the default (dark) first and
+       then flip — a visible white flash for anyone who chose light. This has
+       to be inline and in <head> for that reason; the real logic, including
+       the toggle and "follow system", still lives in src/theme.ts. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('yapper.theme.v1');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* storage blocked: fall through to the system default */ }
+    })();
+  </script>
   <!-- Content Security Policy: restrict all resources to self + Hugging Face
        (model downloads). wasm-unsafe-eval is required for ONNX Runtime Web
        and Tesseract.js WASM. blob: is needed for Worker creation and audio
