@@ -206,7 +206,6 @@ export default defineConfig({
     copyOrtWasmPlugin(),
     swCacheBustPlugin(),
   ],
-  base: './',
   build: {
     outDir: 'dist',
     target: 'es2022',
@@ -227,6 +226,19 @@ export default defineConfig({
       },
     },
   },
+  base: './',
+  // NOTE: cross-origin isolation (COOP same-origin + COEP require-corp) is the
+  // standard way to let ORT use its thread pool, and it is deliberately NOT
+  // enabled here. Measured on this machine with both headers set:
+  // `crossOriginIsolated` became true, but the inference worker's ORT init then
+  // failed outright ("Load failed", no message) and the main-thread path
+  // stalled past two minutes, versus a 2s load and 4.8s generation without
+  // them. `navigator.hardwareConcurrency` is 24 here, so ORT's thread pool
+  // oversubscribes badly on this box.
+  //
+  // Enabling it is a deployment decision, not a default: it also needs host
+  // support (GitHub Pages cannot set response headers at all) and it puts
+  // every cross-origin subresource behind CORP. See docs/threaded-wasm.md.
   optimizeDeps: {
     // @huggingface/transformers and pdfjs-dist pull in WASM + worker assets
     // at runtime; pre-bundling breaks the dynamic import / ?url resolution

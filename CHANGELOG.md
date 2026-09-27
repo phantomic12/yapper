@@ -92,6 +92,17 @@ All notable changes to Yapper are recorded here. Versions follow
   a broken build and sent this investigation down the wrong path twice.
   Registration moved from an inline script in `index.html` to `src/main.ts`
   behind `import.meta.env.PROD`.
+
+### Documentation
+- **`docs/threaded-wasm.md`**: why cross-origin isolation is not enabled by
+  default. COOP + COEP is the standard lever for ORT's thread pool, but
+  measured here it made things worse — the inference worker's ORT init failed
+  outright and the main thread stalled past two minutes, against a 2s load and
+  4.8s generation without the headers (`hardwareConcurrency` is 24 on the test
+  machine, so the default thread pool oversubscribes). The doc records the
+  measurements, how to cap `numThreads` before trying it, the host requirements
+  (GitHub Pages cannot set response headers at all), and what else to re-check
+  under `require-corp`.
 - **Kitten output was garbled**: the bundled `voices.npz` style bank is indexed
   by *token count*, not by voice, and the engine was always reading row 0 —
   producing a ~1.35s burst of noise with a peak near 20 instead of speech. The
