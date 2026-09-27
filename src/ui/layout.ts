@@ -1,5 +1,6 @@
 import { MODELS, LANGUAGE_NAMES, getSupportedLanguages } from '../engine';
 import { CAPABILITY_INFO, type CapabilityClass } from '../capability';
+import { QUALITY_PRESETS, presetForModel } from '../quality-presets';
 
 export interface LayoutOptions {
   /** Three-class WebGPU capability of this browser ('none' | 'partial' | 'full'). */
@@ -12,6 +13,11 @@ export function buildAppMarkup(opts: LayoutOptions): string {
   const { capability, selectedModelId } = opts;
   const capInfo = CAPABILITY_INFO[capability];
   const selectedModel = MODELS.find(m => m.id === selectedModelId);
+  // Which quality preset (if any) matches the selected model. A model off the
+  // ladder — an MMS language model picked in the advanced grid — lights up no
+  // preset, and the bottom bar says "Custom". That is the truthful answer.
+  const activePreset = presetForModel(selectedModelId);
+  const activePresetDef = QUALITY_PRESETS.find(p => p.id === activePreset);
   // Main-thread models (SpeechT5, MMS) freeze the UI during synthesis —
   // warn up front so the choice is honest (see docs/capability-banner.md).
   const showMainThreadWarning = !!selectedModel?.runsOnMainThread;
@@ -55,15 +61,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           </button>
         </nav>
 
-        <!-- Simple mode is the default view; this reveals the model grid,
-             language filter, speed and the rest. See src/advanced-mode.ts. -->
-        <div class="header-tools">
-          <button class="advanced-toggle" id="advanced-toggle" type="button" aria-pressed="false"
-                  title="Show model choice, language filter, speed and download options">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            <span>Advanced</span>
-          </button>
-        </div>
       </header>
 
       <!-- GPU Status + theme control. Technical detail: advanced view only,
@@ -71,7 +68,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <div class="gpu-status" data-advanced role="status" aria-live="polite" title="${capInfo.detail}">
         <div class="gpu-status__dot ${capability === 'full' ? 'gpu-status__dot--on' : capability === 'partial' ? 'gpu-status__dot--partial' : 'gpu-status__dot--off'}"></div>
         <span class="gpu-status__label">${capInfo.label}</span>
-        <button class="theme-toggle" id="theme-toggle" type="button" data-theme-choice="system">Auto</button>
       </div>
 
       <!-- ══════════ Studio page ══════════ -->
@@ -106,16 +102,24 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         </select>
       </div>
 
-      <!-- Simple view: one line saying which voice model is in use, with a
-           shortcut into the grid. Replaced by the grid itself in advanced
-           mode, so the two are never both on screen. -->
-      <div class="model-summary" id="model-summary">
-        <div class="model-summary__text">
-          <span class="model-summary__label">Voice</span>
-          <span class="model-summary__name" id="model-summary-name">${selectedModel?.name ?? 'Voice model'}</span>
-          <span class="model-summary__size" id="model-summary-size">${selectedModel?.sizeMB ? `~${selectedModel.sizeMB}MB` : ''}</span>
+      <!-- Quality presets: the one model knob in the default view. Each maps
+           to a real model (see src/quality-presets.ts) so it stays honest;
+           the full model grid lives in the advanced panel behind the bottom
+           bar's More toggle. -->
+      <div class="quality-row">
+        <div class="quality-label" id="quality-label">Quality</div>
+        <div class="quality-presets" id="quality-presets" role="radiogroup" aria-labelledby="quality-label">
+          ${QUALITY_PRESETS.map(p => {
+            const active = p.id === activePreset;
+            return `
+            <button class="quality-preset ${active ? 'quality-preset--active' : ''}" type="button"
+                    role="radio" data-quality="${p.id}" aria-checked="${active}" tabindex="${active ? 0 : -1}"
+                    title="${p.label} quality — ${p.blurb}">
+              <span class="quality-preset__label">${p.label}</span>
+              <span class="quality-preset__blurb">${p.blurb}</span>
+            </button>`;
+          }).join('')}
         </div>
-        <button class="clear-btn model-summary__change" id="model-change-btn" type="button">Change</button>
       </div>
 
       <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
@@ -139,6 +143,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Voice Selection (hidden if model has no voices) -->
       <div class="voice-section" id="voice-section" style="display:none">
         <div class="section-label" id="voice-section-label">Voice</div>
+        <div class="voice-hint">Press <strong>Hear it</strong> on any voice to hear a sample, then pick the one you like.</div>
         <div class="voice-grid" id="voice-grid" role="radiogroup" aria-labelledby="voice-section-label"></div>
         <div class="custom-voice-input" id="custom-voice-input" style="display:none">
           <input type="url" id="custom-voice-url" placeholder="https://example.com/your-speaker-embedding.bin" />
@@ -313,6 +318,26 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <a href="https://github.com/phantomic12/yapper" target="_blank" rel="noopener noreferrer">Source</a>
         </p>
       </footer>
+
+      <!-- Bottom bar: the home for settings a newcomer does not need on
+           screen. The More toggle reveals every data-advanced region inline
+           (model grid, language filter, speed, downloads, storage, GPU
+           readout). Theme lives here too so it stays reachable without
+           entering dev mode. See src/advanced-mode.ts for the toggle. -->
+      <div class="bottom-bar" id="bottom-bar">
+        <div class="bottom-bar__status" title="Currently selected voice model">
+          <span class="bottom-bar__model" id="bottom-bar-model">${selectedModel?.name ?? 'Voice model'}</span>
+          <span class="bottom-bar__preset" id="bottom-bar-preset">${activePresetDef ? activePresetDef.label : 'Custom'}</span>
+        </div>
+        <div class="bottom-bar__tools">
+          <button class="theme-toggle" id="theme-toggle" type="button" data-theme-choice="system">Auto</button>
+          <button class="advanced-toggle" id="advanced-toggle" type="button" aria-pressed="false"
+                  title="Show model choice, language filter, speed and download options">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span id="advanced-toggle-label">More</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Full-screen reader overlay -->

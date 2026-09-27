@@ -1,9 +1,39 @@
 import { MODELS, type TTSModel, type EngineState } from '../engine';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
+import {
+  PREVIEW_TEXT,
+  VoicePreviewPlayer,
+  createAudioSink,
+  groupVoices,
+  previewButtonLabel,
+  supportsVoicePreview,
+} from '../voice-preview';
+import {
+  modelIdForPreset,
+  presetDef,
+  presetForModel,
+  type QualityPreset,
+} from '../quality-presets';
 
 const SAMPLE_TEXT =
   'The quick brown fox jumps over the lazy dog. Yapper runs entirely in your browser, with no data sent to any server.';
+
+/**
+ * One audition player for the whole page. A single <audio> element is
+ * deliberate: clicking a third voice must interrupt the second, not stack a
+ * second decoder on top of it. Created lazily so importing this module in a
+ * test does not reach for the DOM.
+ */
+let previewPlayer: VoicePreviewPlayer | null = null;
+/** Elapsed-time ticker for the audition button; see renderPreviewButtons. */
+let previewTicker: ReturnType<typeof setInterval> | null = null;
+let previewStartedAt = 0;
+
+function getPreviewPlayer(): VoicePreviewPlayer {
+  if (!previewPlayer) previewPlayer = new VoicePreviewPlayer(createAudioSink());
+  return previewPlayer;
+}
 
 export function renderLanguageFilter(state: AppState): void {
   const select = document.getElementById('language-filter') as HTMLSelectElement;
@@ -61,10 +91,57 @@ export function runModelSample(state: AppState): void {
   });
 }
 
+function renderVoiceCard(
+  voiceId: string,
+  name: string,
+  detail: string,
+  traits: string,
+  selectedId: string | undefined,
+  previewable: boolean,
+  previewReady: boolean,
+): string {
+  const selected = voiceId === selectedId;
+  // Traits belong in the accessible name even when the group heading already
+  // shows them: a screen reader lands on one card, not on the whole group.
+  const spoken = traits ? `${name}, ${traits}` : name;
+  return `
+    <div class="voice-card ${selected ? 'voice-card--selected' : ''}" data-voice-id="${voiceId}" role="radio"
+         tabindex="${selected ? 0 : -1}" aria-checked="${selected}" aria-label="${escapeHtml(spoken)}">
+      <button class="voice-card__pick" type="button" tabindex="-1" aria-label="Select ${escapeHtml(spoken)}">
+        <span class="voice-card__name">${escapeHtml(name)}</span>
+        ${detail ? `<span class="voice-card__desc">${escapeHtml(detail)}</span>` : ''}
+      </button>
+      ${previewable
+        ? `<button class="voice-card__play" type="button" data-action="preview" data-label="Hear ${escapeHtml(name)}"
+             aria-label="Hear ${escapeHtml(name)}"
+             ${previewReady ? '' : 'data-blocked="1" title="Load the model first to hear these voices"'}
+             >${previewButtonLabel(false)}</button>`
+        : ''}
+    </div>
+  `;
+}
+
+/**
+ * Build the voice picker for the selected model.
+ *
+ * Two things this fixes. A flat grid of 28 identical buttons is a wall;
+ * grouping by accent and gender turns the same 28 into four scannable rows,
+ * which is the question people are actually answering ("the British one",
+ * "male or female"). And every card gets a "Hear it" button, because a name
+ * like "Nova" tells you nothing until you have heard it.
+ *
+ * The DOM is rebuilt only when the model changes. Selecting a voice goes
+ * through syncVoiceSelection() so a clip mid-playback is not torn out from
+ * under its own button.
+ */
 export function renderVoiceSection(state: AppState): void {
   const section = document.getElementById('voice-section')!;
   const grid = document.getElementById('voice-grid')!;
   const customInput = document.getElementById('custom-voice-input')!;
+
+  // An audition belongs to the model that produced it. Switching models
+  // mid-clip would leave a button claiming a voice the new model lacks.
+  getPreviewPlayer().stop();
 
   if (!state.selectedModel.voices || state.selectedModel.voices.length === 0) {
     section.style.display = 'none';
@@ -73,11 +150,26 @@ export function renderVoiceSection(state: AppState): void {
   }
 
   section.style.display = '';
-  grid.innerHTML = state.selectedModel.voices.map(v => `
-    <button class="voice-card ${v.id === state.selectedVoiceId ? 'voice-card--selected' : ''}" data-voice-id="${v.id}" role="radio" aria-checked="${v.id === state.selectedVoiceId}">
-      <div class="voice-card__name">${escapeHtml(v.name)}</div>
-      ${v.description ? `<div class="voice-card__desc">${escapeHtml(v.description)}</div>` : ''}
-    </button>
+  const previewable = supportsVoicePreview(state.selectedModel);
+  const previewReady = previewable && state.engine?.getEngineState() === 'ready';
+
+  const groups = groupVoices(state.selectedModel.voices);
+  grid.innerHTML = groups.map((group, gi) => `
+    <div class="voice-group"${group.label ? ` role="group" aria-labelledby="voice-group-label-${gi}"` : ''}>
+      ${group.label ? `<div class="voice-group__label" id="voice-group-label-${gi}">${escapeHtml(group.label)}</div>` : ''}
+      ${group.items.map(item => renderVoiceCard(
+        item.voice.id,
+        item.name,
+        // The group heading already says "American Female" — repeating it on
+        // every card in the group is noise. Only fall back to the traits when
+        // there is no heading to carry them.
+        item.voice.description ?? (group.label ? '' : [item.accent, item.gender].filter(Boolean).join(' · ')),
+        [item.accent, item.gender].filter(Boolean).join(', '),
+        state.selectedVoiceId,
+        previewable,
+        previewReady,
+      )).join('')}
+    </div>
   `).join('');
 
   // Show custom URL input if "Custom" is selected
@@ -88,21 +180,134 @@ export function renderVoiceSection(state: AppState): void {
     customInput.style.display = 'none';
   }
 
-  // Bind voice card clicks
-  grid.querySelectorAll<HTMLButtonElement>('.voice-card').forEach(card => {
-    card.addEventListener('click', () => {
+  bindVoiceCardEvents(state, grid);
+  renderPreviewButtons();
+}
+
+/** Move the selection without rebuilding the grid (see renderVoiceSection). */
+export function syncVoiceSelection(state: AppState): void {
+  document.querySelectorAll<HTMLElement>('.voice-card').forEach(card => {
+    const selected = card.dataset.voiceId === state.selectedVoiceId;
+    card.classList.toggle('voice-card--selected', selected);
+    card.setAttribute('aria-checked', String(selected));
+    card.tabIndex = selected ? 0 : -1;
+  });
+  const customVoice = state.selectedModel.voices?.find(v => v.id === 'custom');
+  if (customVoice) {
+    const customInput = document.getElementById('custom-voice-input')!;
+    customInput.style.display = state.selectedVoiceId === 'custom' ? '' : 'none';
+  }
+}
+
+/**
+ * Enable or disable the audition buttons. An audition needs a loaded model:
+ * pressing "Hear it" on a 88MB download that has not started would either do
+ * nothing or kick off a silent 88MB fetch the user did not ask for.
+ */
+export function updateVoicePreviewAvailability(state: AppState): void {
+  const ready = state.engine?.getEngineState() === 'ready';
+  document.querySelectorAll<HTMLButtonElement>('.voice-card__play').forEach(btn => {
+    // Two independent reasons a button can be dead, tracked separately so a
+    // busy player does not overwrite the "load the model first" explanation.
+    if (ready) {
+      btn.removeAttribute('data-blocked');
+      btn.removeAttribute('title');
+    } else {
+      btn.setAttribute('data-blocked', '1');
+      btn.title = 'Load the model first to hear these voices';
+    }
+  });
+  renderPreviewButtons();
+}
+
+/**
+ * Repaint every "Hear it" button from the player's state. The playing
+ * voice's button becomes "Stop"; while a clip is synthesising the rest are
+ * disabled, because a second press could only be refused with a busy error
+ * and a dead-looking button beats a rejection.
+ */
+function renderPreviewButtons(): void {
+  const player = getPreviewPlayer();
+  // An audition can take seconds, and on a struggling worker it can take
+  // minutes. A button that says "…" for all of that looks exactly like a
+  // dropped click, so count up instead — same reasoning as the queue's
+  // generation feedback (see startGenerationFeedback).
+  if (player.busy && !previewTicker) {
+    previewStartedAt = Date.now();
+    previewTicker = setInterval(renderPreviewButtons, 500);
+  } else if (!player.busy && previewTicker) {
+    clearInterval(previewTicker);
+    previewTicker = null;
+  }
+  const elapsed = previewTicker ? Math.round((Date.now() - previewStartedAt) / 1000) : 0;
+  document.querySelectorAll<HTMLElement>('.voice-card').forEach(card => {
+    const btn = card.querySelector<HTMLButtonElement>('.voice-card__play');
+    if (!btn) return;
+    const active = player.isActive(card.dataset.voiceId!);
+    const baseLabel = btn.dataset.label ?? 'Hear it';
+    btn.textContent = active
+      ? player.busy ? `… ${elapsed}s` : previewButtonLabel(true)
+      : previewButtonLabel(false);
+    btn.classList.toggle('voice-card__play--active', active);
+    btn.setAttribute('aria-label', active ? baseLabel.replace(/^Hear/, 'Stop') : baseLabel);
+    btn.disabled = btn.hasAttribute('data-blocked') || (player.busy && !active);
+  });
+}
+
+async function auditionVoice(state: AppState, voiceId: string): Promise<void> {
+  const engine = state.engine;
+  if (!engine) return;
+  const player = getPreviewPlayer();
+  // audition() marks the voice active synchronously, before the multi-second
+  // synthesis starts — so paint before awaiting, or the button sits there
+  // looking exactly as it did before the click and the click reads as a no-op.
+  const pending = player.audition(voiceId, id => engine.preview(PREVIEW_TEXT, id, state.currentSpeed));
+  renderPreviewButtons();
+  try {
+    await pending;
+  } catch (err) {
+    // A preview that failed is not a job failure, so it must not wipe the
+    // status banner the user is reading — say what happened and move on.
+    showStatus('error', `Voice preview failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    renderPreviewButtons();
+  }
+}
+
+function bindVoiceCardEvents(state: AppState, grid: HTMLElement): void {
+  grid.querySelectorAll<HTMLElement>('.voice-card').forEach(card => {
+    // One listener on the card covers both the pick button and the play
+    // button inside it; the play button is identified and handled separately
+    // so pressing it never also selects the voice.
+    card.addEventListener('click', (e) => {
+      const playBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="preview"]');
+      if (playBtn) {
+        e.stopPropagation();
+        if (!playBtn.disabled) void auditionVoice(state, card.dataset.voiceId!);
+        return;
+      }
       state.selectedVoiceId = card.dataset.voiceId;
-      renderVoiceSection(state);
+      syncVoiceSelection(state);
     });
     card.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      const target = e.target as HTMLElement;
+      // Arrows roam the picker; the play button handles its own Enter/Space.
+      if (target !== card) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        const next = card.nextElementSibling as HTMLButtonElement | null;
-        next?.focus();
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        const cards = Array.from(grid.querySelectorAll<HTMLElement>('.voice-card'));
+        const idx = cards.indexOf(card);
+        const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
+        const next = cards[(idx + step + cards.length) % cards.length];
+        if (next) {
+          next.focus();
+          next.tabIndex = 0;
+          card.tabIndex = -1;
+        }
+      } else if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        const prev = card.previousElementSibling as HTMLButtonElement | null;
-        prev?.focus();
+        state.selectedVoiceId = card.dataset.voiceId;
+        syncVoiceSelection(state);
       }
     });
   });
@@ -125,7 +330,7 @@ export function bindModelPanelEvents(
       const modelId = card.dataset.modelId!;
       const newModel = MODELS.find(m => m.id === modelId);
       if (!newModel) return;
-      selectModel(state, newModel, card);
+      selectModel(state, newModel);
     });
     card.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -134,6 +339,32 @@ export function bindModelPanelEvents(
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
         focusVisibleModelCard(card, -1);
+      }
+    });
+  });
+
+  // Quality presets: the default view's model chooser. Selecting a preset is
+  // exactly the same as picking that model card, so it routes through
+  // selectModel and keeps the voice grid, warnings and card states in step.
+  document.querySelectorAll<HTMLButtonElement>('.quality-preset').forEach(btn => {
+    const selectThis = (): void => {
+      const preset = btn.dataset.quality as QualityPreset;
+      const model = MODELS.find(m => m.id === modelIdForPreset(preset));
+      if (model) selectModel(state, model);
+    };
+    btn.addEventListener('click', selectThis);
+    // ARIA radio-group arrows: move focus *and* select, the way a real radio
+    // group behaves (not just move focus like the model cards do).
+    btn.addEventListener('keydown', (e) => {
+      const btns = Array.from(document.querySelectorAll<HTMLButtonElement>('.quality-preset'));
+      const idx = btns.indexOf(btn);
+      let target = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') target = (idx + 1) % btns.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') target = (idx - 1 + btns.length) % btns.length;
+      if (target >= 0) {
+        e.preventDefault();
+        btns[target].focus();
+        btns[target].click();
       }
     });
   });
@@ -181,18 +412,23 @@ export function bindModelPanelEvents(
   updatePrecisionWarning(state);
 }
 
-function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): void {
+/**
+ * Select a model and re-render everything that depends on it. Called from
+ * both the model cards (advanced grid) and the quality presets (default
+ * view), so it derives the card selection from the model id rather than
+ * needing the clicked element passed in.
+ */
+function selectModel(state: AppState, newModel: TTSModel): void {
   state.selectedModel = newModel;
   // Reset voice selection to this model's default
   state.selectedVoiceId = newModel.defaultVoiceId ?? newModel.voices?.[0]?.id;
   state.customEmbeddingUrl = '';
   document.querySelectorAll<HTMLElement>('.model-card').forEach(c => {
-    c.classList.remove('model-card--selected');
-    c.setAttribute('aria-checked', 'false');
+    const isSel = c.dataset.modelId === newModel.id;
+    c.classList.toggle('model-card--selected', isSel);
+    c.setAttribute('aria-checked', String(isSel));
   });
-  card.classList.add('model-card--selected');
-  card.setAttribute('aria-checked', 'true');
-  updateModelSummary(state);
+  updateQualitySelection(state);
   renderVoiceSection(state);
   renderModelCardStatuses(state);
   updateMainThreadWarning(state);
@@ -200,20 +436,27 @@ function selectModel(state: AppState, newModel: TTSModel, card: HTMLElement): vo
 }
 
 /**
- * Keep the simple view's one-line model readout in sync.
+ * Keep the quality-preset control and the bottom-bar readout in sync with
+ * whatever model is actually selected.
  *
- * The simple view hides the model grid, so without this the selected model
- * would be invisible: the only clue that you are on Kokoro rather than
- * Kitten would be the list of voices below. Cheap, and it is the one piece
- * of model information a newcomer actually wants.
+ * The presets are a *view* over model selection, not a second source of
+ * truth: the active one is derived from `presetForModel(selectedModel.id)`.
+ * Pick a model that is not on the ladder (an MMS language model in the
+ * advanced grid) and no preset lights up while the bar reads "Custom" —
+ * truthful rather than pretending one of Low/Med/High applies.
  */
-export function updateModelSummary(state: AppState): void {
-  const name = document.getElementById('model-summary-name');
-  if (!name) return;
-  const model = state.selectedModel;
-  name.textContent = model.name;
-  const size = document.getElementById('model-summary-size');
-  if (size) size.textContent = model.sizeMB ? `~${model.sizeMB}MB` : '';
+export function updateQualitySelection(state: AppState): void {
+  const activePreset = presetForModel(state.selectedModel.id);
+  document.querySelectorAll<HTMLButtonElement>('.quality-preset').forEach(btn => {
+    const on = btn.dataset.quality === activePreset;
+    btn.classList.toggle('quality-preset--active', on);
+    btn.setAttribute('aria-checked', String(on));
+    btn.tabIndex = on ? 0 : -1;
+  });
+  const modelEl = document.getElementById('bottom-bar-model');
+  if (modelEl) modelEl.textContent = state.selectedModel.name;
+  const presetEl = document.getElementById('bottom-bar-preset');
+  if (presetEl) presetEl.textContent = activePreset ? presetDef(activePreset)!.label : 'Custom';
 }
 
 /**
@@ -296,6 +539,9 @@ export function handleEngineStateChange(
   engineState: EngineState,
   opts: { onReadyChange?: () => void } = {},
 ): void {
+  // Auditioning needs a loaded model, so the voice buttons track engine state
+  // exactly as the Speak button does.
+  updateVoicePreviewAvailability(state);
   const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
   const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
   const textInput = document.getElementById('text-input') as HTMLTextAreaElement;
@@ -345,7 +591,7 @@ export function handleEngineStateChange(
   // Document section visibility is derived purely from engine state, so
   // we update it once per state change instead of duplicating the call
   // in every branch above.
-  updateModelSummary(state);
+  updateQualitySelection(state);
   opts.onReadyChange?.();
   renderModelCardStatuses(state);
 }

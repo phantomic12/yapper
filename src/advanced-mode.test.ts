@@ -84,14 +84,14 @@ describe('advanced mode — applying to the document', () => {
     expect(toggle.title).toMatch(/Show/);
   });
 
-  it('hides the "Change" shortcut once the grid is on screen', () => {
-    // In advanced mode the grid *is* the affordance, so a second button
-    // pointing at it would be redundant.
-    const change = document.getElementById('model-change-btn') as HTMLButtonElement;
+  it('flips the bottom-bar toggle label between More and Less', () => {
+    // The toggle reads as an action on the bottom bar, so its word tracks the
+    // mode instead of sitting at a static "Advanced".
+    const label = document.getElementById('advanced-toggle-label')!;
     applyAdvancedMode(false);
-    expect(change.hidden).toBe(false);
+    expect(label.textContent).toBe('More');
     applyAdvancedMode(true);
-    expect(change.hidden).toBe(true);
+    expect(label.textContent).toBe('Less');
   });
 
   it('restores the stored preference', () => {
@@ -126,7 +126,7 @@ describe('advanced mode — markup', () => {
 
   it('leaves the essentials and the warnings visible in the simple view', () => {
     const root = mountApp();
-    for (const id of ['text-input', 'generate-btn', 'stream-btn', 'voice-grid', 'load-btn', 'model-summary']) {
+    for (const id of ['text-input', 'generate-btn', 'stream-btn', 'voice-grid', 'load-btn', 'quality-presets', 'bottom-bar']) {
       expect(root.querySelector(`#${id}`), `#${id} must exist`).not.toBeNull();
     }
     // A warning that is true regardless of view must not be hidden: someone
@@ -138,9 +138,22 @@ describe('advanced mode — markup', () => {
     }
   });
 
-  it('names the selected model in the simple-view summary', () => {
+  it('reflects the selected model in the quality presets and bottom bar', () => {
     const root = mountApp();
-    expect(root.querySelector('#model-summary-name')!.textContent).toBe('Kitten TTS Nano (~24MB)');
+    // mountApp selects kitten-nano, which is the "low" preset.
+    expect(root.querySelector('.quality-preset--active')?.getAttribute('data-quality')).toBe('low');
+    expect(root.querySelector('#bottom-bar-preset')!.textContent).toBe('Low');
+    expect(root.querySelector('#bottom-bar-model')!.textContent).toBe('Kitten TTS Nano (~24MB)');
+  });
+
+  it('drops the old model-summary clutter from the default view', () => {
+    // The model grid + jargon-y summary are exactly the info dump the default
+    // view should not have; they are replaced by the preset control + bar.
+    const root = mountApp();
+    expect(root.querySelector('#model-summary')).toBeNull();
+    expect(root.querySelector('#model-change-btn')).toBeNull();
+    expect(root.querySelector('#quality-presets')).not.toBeNull();
+    expect(root.querySelector('#bottom-bar')).not.toBeNull();
   });
 });
 
@@ -161,13 +174,17 @@ describe('advanced mode — toggle', () => {
     expect(readStoredAdvanced()).toBe(false);
   });
 
-  it('"Change model" opens the grid, so the model choice is one click away', () => {
+  it('the bottom-bar More toggle reveals the advanced regions', () => {
     mountApp();
     bindAdvancedToggle();
-    const change = document.getElementById('model-change-btn')!;
+    const toggle = document.getElementById('advanced-toggle')!;
     expect(isAdvanced()).toBe(false);
-    change.click();
+    toggle.click();
     expect(isAdvanced()).toBe(true);
+    expect(document.getElementById('advanced-toggle-label')!.textContent).toBe('Less');
+    toggle.click();
+    expect(isAdvanced()).toBe(false);
+    expect(document.getElementById('advanced-toggle-label')!.textContent).toBe('More');
   });
 
   it('starts from the stored choice rather than always the simple view', () => {

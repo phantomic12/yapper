@@ -4,7 +4,7 @@ import { detectCapability, webgpuAdapterHasFeature } from './capability';
 import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
-import { REQUEST_TIMEOUTS, TimeoutError, formatGenerateTimeout } from './engines/timeouts';
+import { REQUEST_TIMEOUTS, TimeoutError, PreviewBusyError, formatGenerateTimeout } from './engines/timeouts';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -383,6 +383,12 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   private processing = false;
   private nextJobId = 1;
   /**
+   * True while a voice audition is synthesising. Only one inference call may
+   * run at a time, so a second request is rejected with PreviewBusyError
+   * rather than queued — see src/voice-preview.ts for the UI that drives it.
+   */
+  private previewInFlight = false;
+  /**
    * Heartbeat interval handle for the currently generating job. Ticks
    * every ~500ms emitting `jobProgress` so live UI (ticking timer) can
    * re-render without waiting for a state change. Cleared on done,
@@ -717,6 +723,70 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     // Try to process immediately
     queueMicrotask(() => this.processQueue());
     return job;
+  }
+
+  /**
+   * One-shot generation for the voice picker, bypassing the job queue.
+   *
+   * A preview must not become a job: it would show up in the queue, get
+   * persisted to IndexedDB with the user's history, and count against the
+   * storage budget — all for a two-second "is this the voice I want" clip
+   * nobody asked to keep. So this calls the loaded custom engine directly
+   * and returns a WAV blob the caller can play and drop.
+   *
+   * Only custom (worker-backed) engines are previewable, and those are
+   * exactly the models with more than one voice. The transformers.js
+   * pipeline models (SpeechT5, MMS) have a single fixed voice each, so
+   * there is nothing to choose between and no preview button is shown.
+   *
+   * One preview at a time: the worker holds a single inference slot, and
+   * hammering it with a click per voice would queue them all behind each
+   * other anyway.
+   */
+  async preview(text: string, voiceId?: string, speed = 1): Promise<Blob> {
+    if (this.previewInFlight) {
+      throw new PreviewBusyError();
+    }
+    const model = this.currentModel;
+    if (!model) throw new Error('No model is loaded.');
+    if (!model.custom) {
+      throw new Error(`${model.name} has a single fixed voice, so there is nothing to preview.`);
+    }
+    if (this.getEngineState() !== 'ready') {
+      throw new Error('The model is still loading.');
+    }
+    const custom = customEngines.get(model.modelId);
+    if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
+
+    this.previewInFlight = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const startedAt = Date.now();
+      // Custom engines already bound each request internally, so this race
+      // is a belt-and-braces guard against a wedged worker; it also gives
+      // the caller a typed TimeoutError with the canonical wording. The
+      // timer is cleared on every exit path — auditioning twenty voices
+      // would otherwise leave twenty 3-minute timers pending.
+      const watchdog = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const elapsedMs = Date.now() - startedAt;
+          reject(new TimeoutError(
+            formatGenerateTimeout(elapsedMs),
+            { elapsedMs, engineKind: 'custom', requestType: 'generate' },
+          ));
+        }, REQUEST_TIMEOUTS.generate);
+      });
+      const result = await Promise.race([
+        custom.generate(model, voiceId, text, { speed }),
+        watchdog,
+      ]);
+      // Same peak-limiting the queue path applies: TTS output can exceed ±1
+      // and the WAV encoder would hard-clamp that into audible distortion.
+      return float32ToWav(limitPeaks(result.audio), result.samplingRate);
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.previewInFlight = false;
+    }
   }
 
   cancel(jobId: string): void {

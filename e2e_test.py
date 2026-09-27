@@ -435,9 +435,15 @@ MODE_STATE_JS = """(function() {
         stored: localStorage.getItem('yapper.advanced.v1'),
         togglePressed: document.getElementById('advanced-toggle')
             ?.getAttribute('aria-pressed') || null,
+        toggleLabel: document.getElementById('advanced-toggle-label')
+            ?.textContent || null,
         modelGrid: shown('#model-grid'),
-        modelSummary: shown('#model-summary'),
-        summaryName: document.getElementById('model-summary-name')?.textContent || null,
+        qualityPresets: shown('#quality-presets'),
+        activePreset: document.querySelector('.quality-preset--active')
+            ?.dataset.quality || null,
+        bottomBar: shown('#bottom-bar'),
+        bottomPreset: document.getElementById('bottom-bar-preset')?.textContent || null,
+        bottomModel: document.getElementById('bottom-bar-model')?.textContent || null,
         languageFilter: shown('.language-select-wrapper'),
         speedRow: shown('.speed-row'),
         textInput: shown('#text-input'),
@@ -463,14 +469,18 @@ def step_assert_simple_mode(cdp_holder):
     hidden = [k for k in ('modelGrid', 'languageFilter', 'speedRow') if s.get(k) is not False]
     if hidden:
         raise AssertionError(f'advanced regions visible in the simple view: {hidden} ({s})')
-    if not s.get('modelSummary'):
-        raise AssertionError(f'model summary is hidden in the simple view: {s}')
-    if not s.get('summaryName'):
-        raise AssertionError(f'model summary does not name a model: {s}')
+    if not s.get('qualityPresets'):
+        raise AssertionError(f'quality presets are hidden in the simple view: {s}')
+    if not s.get('activePreset'):
+        raise AssertionError(f'no quality preset is active in the simple view: {s}')
+    if not s.get('bottomBar') or not s.get('bottomPreset'):
+        raise AssertionError(f'bottom bar is missing its preset readout: {s}')
+    if s.get('toggleLabel') != 'More':
+        raise AssertionError(f'bottom-bar toggle should read "More" in the simple view: {s}')
     if not s.get('textInput') or not s.get('loadBtn'):
         raise AssertionError(f'the short path is not intact in the simple view: {s}')
-    print(f'      ✓ simple view: grid hidden, summary="{s.get("summaryName")}", '
-          f'text box and load button present')
+    print(f'      ✓ simple view: grid hidden, quality={s.get("activePreset")} '
+          f'({s.get("bottomModel")}), text box and load button present')
 
 
 def step_enable_advanced_mode(cdp_holder):
@@ -502,8 +512,8 @@ def step_enable_advanced_mode(cdp_holder):
         raise AssertionError(f'advanced mode was not persisted: stored={s.get("stored")!r}')
     if s.get('togglePressed') != 'true':
         raise AssertionError(f'toggle aria-pressed out of step: {s.get("togglePressed")!r}')
-    if s.get('modelSummary') is not False:
-        raise AssertionError('the simple-view summary is still on screen next to the grid')
+    if s.get('toggleLabel') != 'Less':
+        raise AssertionError(f'bottom-bar toggle should read "Less" when revealed: {s.get("toggleLabel")!r}')
     print(f'      ✓ advanced view: grid visible, language filter and speed back '
           f'(aria-pressed={s.get("togglePressed")}, stored={s.get("stored")})')
 

@@ -23,7 +23,7 @@ import {
   updatePrecisionWarning,
   renderModelCardStatuses,
   renderVoiceSection,
-  updateModelSummary,
+  updateQualitySelection,
 } from './ui/model-panel';
 import { bindJobQueueEvents, renderJobList } from './ui/job-queue';
 import {
@@ -146,7 +146,7 @@ async function render(): Promise<void> {
   renderJobList(state);
   updateDocumentSectionVisibility(state);
   updatePrecisionWarning(state);
-  updateModelSummary(state);
+  updateQualitySelection(state);
 
   bindModelPanelEvents(state, {
     onModelLoaded: () => updateDocumentSectionVisibility(state),

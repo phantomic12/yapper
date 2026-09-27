@@ -5,8 +5,8 @@
  * filter, a speed slider, dtype/device trade-offs, a storage budget readout.
  * All of it is real, and all of it is noise to someone who opened a
  * text-to-speech site to type a sentence and hear it. So the default view
- * is the short path (pick a voice, type, speak) and everything else sits
- * behind one toggle.
+ * is the short path (pick a quality, pick a voice, type, speak) and
+ * everything else sits behind the bottom bar's "More" toggle.
  *
  * Like the theme, this is a single attribute on <html>: the stylesheet hides
  * every `[data-advanced]` region unless the attribute is set, so no
@@ -72,14 +72,13 @@ export function applyAdvancedMode(on: boolean, doc: Document = document): void {
   if (toggle) {
     toggle.setAttribute('aria-pressed', String(on));
     toggle.title = on
-      ? 'Hide advanced settings'
+      ? 'Hide the extra settings'
       : 'Show model choice, language filter, speed and download options';
   }
-  const change = doc.getElementById('model-change-btn');
-  if (change) {
-    // Only meaningful in the simple view, where the model grid is hidden.
-    change.hidden = on;
-  }
+  // The toggle lives on the bottom bar and reads as an action, so its label
+  // flips with the mode: "More" when the extras are hidden, "Less" when shown.
+  const label = doc.getElementById('advanced-toggle-label');
+  if (label) label.textContent = on ? 'Less' : 'More';
 }
 
 /** Read the stored preference and apply it. Call once at startup. */
@@ -89,7 +88,7 @@ export function restoreAdvancedMode(doc: Document = document): boolean {
   return on;
 }
 
-/** Wire the header toggle and the "Change" shortcut in the model summary. */
+/** Wire the bottom-bar "More" toggle that reveals the advanced regions. */
 export function bindAdvancedToggle(doc: Document = document): void {
   const toggle = doc.getElementById('advanced-toggle');
   const flip = (): void => {
@@ -98,10 +97,6 @@ export function bindAdvancedToggle(doc: Document = document): void {
     applyAdvancedMode(next, doc);
   };
   toggle?.addEventListener('click', flip);
-  // "Change model" is the simple view's route into the grid: one click from
-  // the thing a first-time user actually wants instead of hunting for a
-  // settings toggle.
-  doc.getElementById('model-change-btn')?.addEventListener('click', flip);
   // Re-apply from storage rather than trusting whatever the attribute
   // happens to say: the inline <head> script sets it for the no-flash, but
   // this module has to stand on its own for any host that does not run it.

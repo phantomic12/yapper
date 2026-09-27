@@ -7,6 +7,7 @@ import {
 import { concatenateClips, type AudioClip } from '../audio-export';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
+import { voiceDisplayLabel } from '../voice-preview';
 
 // ─── Job list render ─────────────────────────────────────────────
 //
@@ -276,7 +277,10 @@ export function updateJobCardProgress(jobId: string, progress: JobProgress): voi
 
 function renderJobCardHeader(job: GenerationJob): string {
   const statusIcon = statusIconHtml(job.status);
-  const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
+  // Registries pack the traits into the name ("Heart (en-us, Female)");
+  // the picker renders that as "Heart · American, Female" and so must the
+  // queue, or the same voice wears two different names on one screen.
+  const voiceLabel = job.voiceName ? ` · ${escapeHtml(voiceDisplayLabel(job.voiceName))}` : '';
   const speedLabel = job.speed !== 1.0 ? ` · ${job.speed.toFixed(2)}x` : '';
   const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
   const cancellable = job.status === 'pending' || job.status === 'generating';

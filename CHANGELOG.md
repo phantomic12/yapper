@@ -6,14 +6,28 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **Quality presets (Low / Medium / High)**: the default view chooses a model
+  with one of three words instead of a wall of cards. Each preset is a *real*
+  model, so the control stays honest rather than a placebo slider — Low is
+  Kitten TTS Nano (~24MB, fastest), Medium is Kokoro-82M int8 (~88MB, where
+  the natural voices live), High is Kokoro-82M fp16 (~156MB, best fidelity,
+  auto-falling back to int8 on GPUs without `shader-f16`). The presets are a
+  view over model selection, not a second source of truth: pick an off-ladder
+  model (an MMS language model) in the advanced grid and no preset lights up
+  while the bar reads "Custom". (`src/quality-presets.ts`.)
+- **A bottom bar for the settings that don't belong on the short path**:
+  theme and the "More" toggle live on a fixed bar at the foot of the page,
+  which also carries a live readout of the selected model and quality preset.
+  "More" reveals every advanced region inline and flips to "Less" while they
+  are showing, so the dev controls are one unobtrusive tap away without
+  sitting in the header.
 - **A simple view, with the knobs one toggle away**: the app opens on the
-  short path — a one-line readout of the voice model in use, its voices, the
+  short path — quality presets, its voices, the
   text box and the two buttons — and the thirteen-card model grid, the
   language filter, the speed slider, the storage-budget line, the download /
-  clear controls and the GPU status row sit behind an "Advanced" switch in
-  the header. The short path also carries a "Change" button that flips
-  straight into the grid, so switching models is one click rather than a
-  hunt for a settings toggle. Like the theme, the whole thing is one
+  clear controls and the GPU status row sit behind the bottom bar's "More"
+  toggle. Switching models is one click on a preset (or the full grid one
+  tap away in "More"), so it is never a hunt for a settings toggle. Like the theme, the whole thing is one
   attribute on `<html>` (`src/advanced-mode.ts`) and the stylesheet hides
   every `[data-advanced]` region, so the CSS and the JS cannot disagree
   about what counts as advanced. The choice persists, and an inline `<head>`
