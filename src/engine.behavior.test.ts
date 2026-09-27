@@ -219,10 +219,11 @@ describe('TTSEngine — job queue', () => {
     expect(engine.getJobs().find(j => j.id === job.id)?.wordTimings).toBeUndefined();
   });
 
-  it('processes jobs in newest-first order (matches the UI: newest is at index 0)', async () => {
-    // The engine unshifts new jobs and find()s the first pending one, so
-    // newer jobs are dequeued first. This is the actual behavior the UI
-    // relies on: a freshly-added "interrupt" job preempts queued ones.
+  it('processes jobs in the order they were added (FIFO queue)', async () => {
+    // Jobs must generate in enqueue order so queued text is spoken in the
+    // order the user added it (and reader chunks are synthesized in reading
+    // order). The jobs array is newest-first for display, so the engine
+    // dequeues the oldest pending entry.
     mock.generateMs = 10;
     const order: string[] = [];
     const watch = new TTSEngine({
@@ -241,7 +242,7 @@ describe('TTSEngine — job queue', () => {
         }
       }, 5);
     });
-    expect(order).toEqual(['third', 'second', 'first']);
+    expect(order).toEqual(['first', 'second', 'third']);
   });
 
   it('newest job is at the top of the list (matches UI)', () => {
@@ -712,5 +713,81 @@ describe('TTSEngine — no silent states', () => {
     await engine.loadModel(findModel('kitten-nano')).catch(() => {});
     expect(errors.some(m => m.includes('Load failed'))).toBe(true);
     expect(engine.getEngineState()).toBe('error');
+  });
+});
+// ─── Voice previews ──────────────────────────────────────────────
+// An audition is not a job. If it ever became one it would land in the
+// queue, get persisted to IndexedDB with the user's history and count
+// against the storage budget — all for a two-second "is this the voice I
+// want" clip nobody asked to keep. TTSEngine.preview() is the path that
+// keeps it out of all three.
+
+describe('TTSEngine.preview()', () => {
+  let mock: MockEngine;
+
+  beforeEach(() => {
+    mock = mockKitten();
+    registerCustomEngine('KittenML/kitten-tts-nano-0.8-int8', mock);
+  });
+
+  afterEach(() => {
+    unregisterCustomEngine('KittenML/kitten-tts-nano-0.8-int8');
+  });
+
+  async function loadedEngine(): Promise<TTSEngine> {
+    const engine = new TTSEngine();
+    await engine.loadModel(findModel('kitten-nano'));
+    return engine;
+  }
+
+  it('returns audio for the requested voice without queueing a job', async () => {
+    const engine = await loadedEngine();
+    const blob = await engine.preview('hello', 'expr-voice-4-f', 1.25);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBeGreaterThan(0);
+    expect(mock.calls).toEqual([{ voiceId: 'expr-voice-4-f', text: 'hello', speed: 1.25 }]);
+    await flush();
+    expect(engine.getJobs()).toEqual([]);
+  });
+
+  it('encodes a WAV at the engine sample rate', async () => {
+    const engine = await loadedEngine();
+    const blob = await engine.preview('hello', 'expr-voice-2-m');
+    const head = new TextDecoder().decode(await blob.slice(0, 16).arrayBuffer());
+    expect(head.startsWith('RIFF')).toBe(true);
+    expect(head).toContain('WAVE');
+  });
+
+  it('refuses a second preview while one is synthesising', async () => {
+    const engine = await loadedEngine();
+    mock.block = new Promise<void>(() => {}); // never settles
+    const first = engine.preview('hello', 'expr-voice-2-m');
+    await expect(engine.preview('hello', 'expr-voice-3-f')).rejects.toThrow(/already playing/i);
+    mock.block = null;
+    void first.catch(() => {});
+  });
+
+  it('frees the slot after a failure so the next preview works', async () => {
+    const engine = await loadedEngine();
+    mock.failNext = new Error('onnx exploded');
+    await expect(engine.preview('hello', 'expr-voice-2-m')).rejects.toThrow('onnx exploded');
+    mock.generateMs = 0;
+    await expect(engine.preview('hello', 'expr-voice-2-m')).resolves.toBeInstanceOf(Blob);
+  });
+
+  it('refuses before a model is loaded', async () => {
+    const engine = new TTSEngine();
+    await expect(engine.preview('hello')).rejects.toThrow(/no model is loaded/i);
+  });
+
+  it('peak-limits the clip so the WAV encoder cannot distort it', async () => {
+    const engine = await loadedEngine();
+    mock.generate = async () => ({
+      audio: new Float32Array([0, 2.5, -3, 0.5]),
+      samplingRate: mock.sampleRate,
+    });
+    const blob = await engine.preview('hello', 'expr-voice-2-m');
+    // limitPeaks(…, 0.99) scales 3 -> 0.99, i.e. 0.99 * 32767 in int16.
+    expect(blob.size).toBe(44 + 4 * 2);
   });
 });

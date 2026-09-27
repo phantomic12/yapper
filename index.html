@@ -6,6 +6,30 @@
   <title>Yapper — Private Text-to-Speech</title>
   <meta name="description" content="Run text-to-speech directly in your browser. No data leaves your device. Powered by WebGPU." />
   <meta name="theme-color" content="#6366f1" />
+  <!-- Apply the stored theme before first paint. The app module is deferred,
+       so setting it from src/theme.ts would paint the default (dark) first and
+       then flip — a visible white flash for anyone who chose light. This has
+       to be inline and in <head> for that reason; the real logic, including
+       the toggle and "follow system", still lives in src/theme.ts. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('yapper.theme.v1');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* storage blocked: fall through to the system default */ }
+    })();
+  </script>
+  <!-- Same reason as the theme: without this, the model grid paints for a
+       frame and then vanishes for anyone who kept advanced mode on. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('yapper.advanced.v1') === '1') {
+          document.documentElement.setAttribute('data-advanced', 'on');
+        }
+      } catch (e) { /* storage blocked: the simple view is the default anyway */ }
+    })();
+  </script>
   <!-- Content Security Policy: restrict all resources to self + Hugging Face
        (model downloads). wasm-unsafe-eval is required for ONNX Runtime Web
        and Tesseract.js WASM. blob: is needed for Worker creation and audio
@@ -49,16 +73,5 @@
     <div id="app"></div>
   </main>
   <script type="module" src="./src/main.ts"></script>
-  <script>
-    // Register the service worker last so it never blocks the initial paint.
-    // The SW only handles the app shell, so a failure here is non-fatal.
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch((err) => {
-          console.warn('[yapper] service worker registration failed:', err);
-        });
-      });
-    }
-  </script>
 </body>
 </html>

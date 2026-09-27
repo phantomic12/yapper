@@ -14,23 +14,40 @@ export YAPPER_URL="$URL"
 export YAPPER_SHOTS="/tmp/yapper-shots-${LABEL}"
 cd "$(dirname "$0")/.."
 
-# Kill any leftover Chrome/vite that could steal our ports, then verify the
-# ports actually freed (a stale listener here poisons the whole run with
-# confusing '#app not mounted' / connection-refused failures).
+# Reap whatever is holding one of our two ports, and nothing else. A bare
+# `pkill -f "vite"` would also kill the developer's own `npm run dev` on any
+# port — collateral damage this script has no business causing, and exactly
+# what the Windows runner is careful to avoid. A stale listener on our own
+# port is still fatal, so report it and stop rather than guess.
+reap_port() {
+  local port="$1" pids
+  pids="$(ss -tlnp 2>/dev/null | grep -E ":${port} " \
+          | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)"
+  [ -n "$pids" ] && kill $pids 2>/dev/null
+  return 0
+}
+
+# A leftover debug Chrome from a previous interrupted run is unambiguously
+# ours (it carries our debug port), so it is safe to clear.
 pkill -f "remote-debugging-port=9222" 2>/dev/null || true
-pkill -f "vite" 2>/dev/null || true
+reap_port 5173
 sleep 1
 if ss -tln 2>/dev/null | grep -qE ':(5173|9222) '; then
-  echo "ports 5173/9222 still busy after cleanup:" >&2
+  echo "ports 5173/9222 still busy; freeing them is not this script's job." >&2
+  echo "5173 is Vite's default port — if your own dev server is there, stop it" >&2
+  echo "or pass a different URL: bash scripts/run_e2e.sh <label> <url>" >&2
   ss -tlnp 2>/dev/null | grep -E ':(5173|9222)' >&2
   exit 2
 fi
 
 cleanup() {
   kill "$CHROME_PID" "$DEV_PID" 2>/dev/null
-  # npm does not forward signals to the vite child it spawned, so reap
-  # the actual server process too or it lingers holding the port.
-  pkill -f "vite --port 5173" 2>/dev/null
+  # npm does not forward signals to the vite child it spawned, so reap the
+  # actual server process too or it lingers holding the port. Reaped by port
+  # rather than by name: the command line is `node …/vite.js --port 5173 …`,
+  # so the pattern "vite --port 5173" matches no process at all and the
+  # server survives the run.
+  reap_port 5173
   wait "$CHROME_PID" "$DEV_PID" 2>/dev/null
 }
 trap cleanup EXIT

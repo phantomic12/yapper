@@ -14,15 +14,19 @@
 ## Quick start
 
 1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally).
-2. Pick a model:
-   - **Kokoro-82M (q8f16)** — best quality, 28 selectable English voices (US + British, male + female), ~86 MB
-   - **Kokoro-82M (fp16)** — same voices, higher fidelity, ~163 MB
-   - **Kitten TTS Mini** — balanced quality, 8 voices, ~78 MB
-   - **Kitten TTS Nano** — fastest / smallest, 8 voices, ~24 MB
-   - **SpeechT5** — ~330 MB, multi-voice via xvector embeddings
-   - **MMS-TTS** — ~50 MB each, 9 languages (see Features)
-3. Click **Download & Load Model** (one-time per model; cached after).
-4. Type or paste text, adjust speed, hit **Add to queue** (or `Ctrl`/`Cmd`+Enter).
+2. Pick a **quality** — the default view asks for one word, not a model:
+   - **Low** — fastest and smallest, 8 voices
+   - **Medium** — the sweet spot: 28 selectable English voices (US + British, male + female)
+   - **High** — best fidelity, same 28 voices (falls back automatically on GPUs without `shader-f16`)
+
+   The model behind each preset starts downloading by itself, so there is no
+   load button to press. It is cached after the first run.
+3. Type or paste text and press **Speak** (or `Ctrl`/`Cmd`+Enter).
+4. Open **More** in the bottom bar for everything the short path leaves out:
+   the full model grid, the language filter, download sizes, speed, and the
+   per-model details behind each quality — Kokoro-82M in int8 (~88 MB) or fp16
+   (~156 MB), Kitten TTS Mini (~78 MB) and Nano (~24 MB), and MMS-TTS (~50 MB
+   each, 9 languages).
 5. Drop a PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, or Markdown file into the document reader to listen hands-free. For scanned PDFs, enable the OCR toggle (Tesseract or Florence-2 LLM).
 
 > A live demo (pick a model → load → queue a sample → audio plays):
@@ -40,6 +44,10 @@
 
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
+- **A short path, and a long one** — the default view asks for a quality and a
+  voice; the "More" toggle reveals the model grid, language filter, speeds and
+  download sizes for anyone who wants them. Both views show the same truth, in
+  different words
 - **Models**
   - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) — shared HF repo, different `modelFile` / dtype; 28 voices exposed in the picker
   - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, ONNX Runtime Web

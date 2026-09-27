@@ -23,6 +23,41 @@
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 }
 
+/* ─── Light theme ────────────────────────────────────────────────
+   Applied via <html data-theme="light">. The dark palette above is the
+   default, so an unset attribute (and "follow the system" in a light OS)
+   falls through to the prefers-color-scheme block at the bottom.
+   Values are the dark palette's roles, not inversions: surfaces get
+   lighter, text darker, and the accent darkens so it still clears
+   4.5:1 on white. */
+:root[data-theme='light'] {
+  --bg: #f6f6fb;
+  --bg-elevated: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-hover: #ececf6;
+  --border: #d8d8e6;
+  --border-focus: #4f46e5;
+  --text: #17171f;
+  --text-muted: #55556d;
+  /* Darker than the dark theme's --text-dim on purpose: that value is
+     #55556a, which only clears 4.5:1 against a near-black surface. On white
+     it needs to drop to ~5.2:1 to stay legible as small text. */
+  --text-dim: #6b6b82;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-glow: rgba(79, 70, 229, 0.12);
+  --success: #15803d;
+  --success-bg: rgba(21, 128, 61, 0.1);
+  --warning: #b45309;
+  --warning-bg: rgba(180, 83, 9, 0.1);
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.1);
+  /* White overlays read as "a touch lighter than the surface" on dark; on
+     light they have to become a touch *darker* or they disappear. */
+  --overlay-subtle: rgba(23, 23, 31, 0.05);
+  --overlay-border: rgba(23, 23, 31, 0.14);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html {
@@ -194,6 +229,31 @@ body {
   margin-top: 1px;
 }
 
+/* ─── Half-precision fallback notice ────────────────────────── */
+/* Shown when the adapter exists but lacks shader-f16, so fp16 model cards
+   silently resolve to their int8 build instead. Reuses the amber warning
+   idiom so the advisory banners read as one family of message. */
+.gpu-f16-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--warning);
+  font-size: 0.82rem;
+  font-weight: 500;
+  margin-bottom: 24px;
+}
+
+.gpu-f16-warning svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
 .gpu-status__label {
   font-family: var(--font-mono);
   font-size: 0.78rem;
@@ -330,18 +390,20 @@ body {
 .model-card__tag--premium { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
 
 /* ─── Load Button ─────────────────────────────────────────── */
+/* The download control is a status readout + retry, not a required step:
+   the model auto-loads on selection and on first Speak. So it is deliberately
+   a quiet secondary pill rather than the big primary CTA it used to be. */
 .load-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 100%;
-  padding: 14px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--accent-glow);
-  color: var(--accent);
-  font-size: 0.9rem;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -350,18 +412,18 @@ body {
 }
 
 .load-btn:hover:not(:disabled) {
-  background: var(--accent);
-  color: white;
+  border-color: var(--border-focus);
+  color: var(--text);
 }
 
 .load-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .load-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 /* ─── Progress Bar ────────────────────────────────────────── */
@@ -725,18 +787,43 @@ body {
 .voice-section {
   margin-bottom: 16px;
 }
+/* The grid is a stack of labelled groups rather than one grid of
+   everything. 28 voices in a single grid is a wall; the same 28 sorted
+   into "American Female / American Male / British Female / British Male"
+   is four scannable rows, which is the question people are answering. */
 .voice-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   margin-bottom: 8px;
 }
+.voice-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+}
+.voice-hint strong { color: var(--text); font-weight: 600; }
+.voice-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  gap: 8px;
+}
+.voice-group__label {
+  grid-column: 1 / -1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 .voice-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
-  text-align: left;
   cursor: pointer;
   transition: all 0.15s ease;
   color: var(--text);
@@ -750,15 +837,68 @@ body {
   background: var(--accent-glow);
   border-color: var(--accent);
 }
+.voice-card:focus { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.voice-card:focus:not(:focus-visible) { outline: none; }
+.voice-card__pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.voice-card__pick:focus { outline: none; }
 .voice-card__name {
   font-weight: 600;
   font-size: 0.9rem;
-  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .voice-card__desc {
   font-size: 0.75rem;
   color: var(--text-muted);
   line-height: 1.3;
+}
+/* "Hear it" is the point of the picker: a name like "Nova" means nothing
+   until you have heard it. A pill rather than a full-width button keeps
+   28 of them from turning the page into a wall of chrome. */
+.voice-card__play {
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: 62px;
+  padding: 4px 9px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.voice-card__play:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.voice-card__play:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.voice-card__play--active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  opacity: 1;
 }
 .custom-voice-input {
   margin-top: 8px;
@@ -814,6 +954,73 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.stream-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px solid var(--border-focus);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  transition: all 0.15s ease;
+}
+.stream-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.stream-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.stream-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.stream-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 20px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-focus);
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+}
+.stream-bar__status {
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.stream-bar__speaking {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 120px;
+}
+/* The word currently being spoken, in the same style as the reader overlay. */
+.stream-bar__word {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  font-style: normal;
+  font-weight: 600;
+  padding: 0 3px;
+  margin: 0 1px;
+}
+[hidden] {
+  display: none !important;
+}
+
 .queue-count {
   display: inline-flex;
   align-items: center;
@@ -954,6 +1161,19 @@ body {
 .model-card__size {
   font-size: 0.7rem;
   color: var(--text-dim);
+  font-family: ui-monospace, monospace;
+}
+/* Quantisation/build qualifier ("int8", "fp16"). Advanced view only — it
+   disambiguates the two Kokoro builds on the card, where the name no longer
+   carries it. */
+.model-card__variant {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
   font-family: ui-monospace, monospace;
 }
 .model-card__lang {
@@ -1198,6 +1418,15 @@ body {
   margin-top: 10px;
   font-size: 0.72rem;
   color: var(--text-dim);
+}
+.document-sample {
+  color: var(--text-dim);
+  text-align: center;
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+}
+.document-sample[hidden] {
+  display: none !important;
 }
 .document-need-model {
   margin-top: 14px;
@@ -1638,4 +1867,636 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Visual refresh — ambient depth, page navigation, reader page,
+   and classified-block presentation. Additive so existing component
+   styles keep working.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --radius-lg: 16px;
+  --accent-2: #a855f7;
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #a855f7 100%);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Ambient glow behind the whole app — soft depth instead of flat black. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(900px 420px at 18% -8%, rgba(99, 102, 241, 0.16), transparent 65%),
+    radial-gradient(760px 380px at 88% -12%, rgba(168, 85, 247, 0.12), transparent 60%);
+}
+
+.header {
+  position: relative;
+}
+
+/* ─── Page navigation ─────────────────────────────────────── */
+.page-nav {
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 5px;
+  background: rgba(26, 26, 38, 0.7);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+}
+
+.page-nav__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.page-nav__tab svg {
+  width: 16px;
+  height: 16px;
+}
+
+.page-nav__tab:hover {
+  color: var(--text);
+}
+
+.page-nav__tab--active {
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+}
+
+.page-nav__tab--active:hover {
+  color: #fff;
+}
+
+/* ─── Pages ───────────────────────────────────────────────── */
+.page {
+  animation: page-in 0.25s ease;
+}
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ─── Reader page ─────────────────────────────────────────── */
+.reader-page__hero {
+  text-align: center;
+  margin: 8px 0 24px;
+}
+
+.reader-page__title {
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.reader-page__subtitle {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 560px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-hover);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-btn:hover {
+  color: var(--text);
+}
+
+/* ─── Classified blocks ───────────────────────────────────── */
+.classify-panel {
+  margin: 18px 0 22px;
+}
+
+.classify-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.classify-chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.classify-chip--heading   { color: #a5b4fc; border-color: rgba(165, 180, 252, 0.35); background: rgba(99, 102, 241, 0.12); }
+.classify-chip--paragraph { color: var(--text-muted); }
+.classify-chip--list      { color: #86efac; border-color: rgba(134, 239, 172, 0.3); background: rgba(34, 197, 94, 0.1); }
+.classify-chip--quote     { color: #d8b4fe; border-color: rgba(216, 180, 254, 0.3); background: rgba(168, 85, 247, 0.1); }
+.classify-chip--code      { color: #fdba74; border-color: rgba(253, 186, 116, 0.3); background: rgba(249, 115, 22, 0.1); }
+.classify-chip--table     { color: #67e8f9; border-color: rgba(103, 232, 249, 0.3); background: rgba(6, 182, 212, 0.1); }
+
+.classify-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.classify-block {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 12px 14px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.classify-block:hover {
+  transform: translateX(2px);
+  border-color: var(--border-focus);
+}
+
+.classify-block--heading   { border-left-color: #818cf8; }
+.classify-block--list      { border-left-color: #4ade80; }
+.classify-block--quote     { border-left-color: #c084fc; }
+.classify-block--code      { border-left-color: #fb923c; }
+.classify-block--table     { border-left-color: #22d3ee; }
+
+.classify-block__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.classify-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.classify-badge--heading { color: #a5b4fc; background: rgba(99, 102, 241, 0.15); }
+.classify-badge--list    { color: #86efac; background: rgba(34, 197, 94, 0.13); }
+.classify-badge--quote   { color: #d8b4fe; background: rgba(168, 85, 247, 0.13); }
+.classify-badge--code    { color: #fdba74; background: rgba(249, 115, 22, 0.13); }
+.classify-badge--table   { color: #67e8f9; background: rgba(6, 182, 212, 0.13); }
+
+.classify-block__page {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.classify-block__speak {
+  margin-left: auto;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.classify-block__speak:hover {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.classify-block__text {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.classify-block--heading .classify-block__text {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.classify-block--quote .classify-block__text {
+  font-style: italic;
+}
+
+.classify-block--code .classify-block__text {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.classify-more {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-align: center;
+  margin-top: 6px;
+}
+
+/* ─── Component polish ────────────────────────────────────── */
+.generate-btn {
+  background: var(--accent-gradient);
+  border: none;
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.3);
+}
+
+.generate-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.4);
+}
+
+.model-card {
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.model-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.model-card--selected {
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 22px rgba(99, 102, 241, 0.22);
+}
+
+.job-card {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.job-card:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-sm);
+}
+
+.load-btn {
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+/* ─── Light-theme corrections for the visual refresh ───────────
+   The classified-block palette below is built from light pastels so
+   each kind reads as a distinct hue against a near-black surface. On
+   white those same pastels fall under 3:1, so the light theme swaps
+   in darker equivalents of the same hues — same encoding, legible.
+   Placed last so it wins on source order as well as specificity. */
+:root[data-theme='light'] {
+  --shadow-sm: 0 1px 2px rgba(23, 23, 31, 0.08);
+  --shadow-md: 0 8px 24px rgba(23, 23, 31, 0.12);
+  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 55%, #9333ea 100%);
+}
+
+:root[data-theme='light'] .classify-chip--heading,
+:root[data-theme='light'] .classify-badge--heading {
+  color: #4338ca;
+  border-color: rgba(79, 70, 229, 0.3);
+  background: rgba(79, 70, 229, 0.1);
+}
+
+:root[data-theme='light'] .classify-chip--list,
+:root[data-theme='light'] .classify-badge--list {
+  color: #15803d;
+  border-color: rgba(21, 128, 61, 0.28);
+  background: rgba(21, 128, 61, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--quote,
+:root[data-theme='light'] .classify-badge--quote {
+  color: #7e22ce;
+  border-color: rgba(126, 34, 206, 0.28);
+  background: rgba(168, 85, 247, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--code,
+:root[data-theme='light'] .classify-badge--code {
+  color: #c2410c;
+  border-color: rgba(194, 65, 12, 0.28);
+  background: rgba(249, 115, 22, 0.09);
+}
+
+:root[data-theme='light'] .classify-chip--table,
+:root[data-theme='light'] .classify-badge--table {
+  color: #0e7490;
+  border-color: rgba(14, 116, 144, 0.28);
+  background: rgba(6, 182, 212, 0.09);
+}
+
+:root[data-theme='light'] .classify-block--table { border-left-color: #0891b2; }
+
+/* The ambient glow is a light wash on dark; on light it would be an
+   invisible smudge, so it moves to a cool tint instead. */
+:root[data-theme='light'] body::before {
+  background:
+    radial-gradient(900px 420px at 18% -8%, rgba(99, 102, 241, 0.1), transparent 65%),
+    radial-gradient(700px 380px at 92% 4%, rgba(168, 85, 247, 0.08), transparent 60%);
+}
+
+/* Header control for the theme toggle, sized to sit beside the GPU
+   status pill without shouting. */
+.theme-toggle {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+
+/* What survives to the next visit. Quiet by design: it is informational,
+   and the "(N older dropped)" suffix is the part that must be readable. */
+.storage-usage {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ─── Structure-aware classified blocks ──────────────────────────
+   Tables, code and lists render as themselves rather than as a flat
+   run of escaped text, so the structure the classifier detected is
+   actually visible. */
+.classify-block__text > *:first-child { margin-top: 0; }
+.classify-block__text > *:last-child { margin-bottom: 0; }
+
+.classify-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin: 4px 0;
+}
+
+.classify-table th,
+.classify-table td {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.classify-table th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.classify-table td { color: var(--text-muted); }
+
+.classify-table-more {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+}
+
+.classify-code {
+  margin: 4px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  /* Extracted code keeps its own indentation; collapsing it would destroy
+     exactly the structure a reader is looking at. */
+  white-space: pre;
+}
+
+.classify-quote {
+  margin: 4px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.classify-list {
+  margin: 4px 0;
+  padding-left: 20px;
+  color: var(--text-muted);
+}
+
+.classify-list li { margin: 2px 0; }
+
+.classify-heading {
+  margin: 2px 0 4px;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.classify-paragraph {
+  margin: 4px 0;
+  color: var(--text-muted);
+}
+
+/* ── Simple vs advanced view ─────────────────────────────────────
+   Every region marked data-advanced in the markup is hidden until the
+   header toggle sets data-advanced="on" on <html>. One attribute drives
+   the whole thing, so the CSS and the JS cannot disagree about what
+   counts as advanced. See src/advanced-mode.ts. */
+:root:not([data-advanced='on']) [data-advanced] {
+  display: none !important;
+}
+/* The mirror rule, for copy that only makes sense on the short path: a
+   plain-language sentence that the advanced view replaces with a more
+   precise one. Without this both would render side by side and the
+   banner would say the same thing twice. Note the attribute form:
+   `:root(...)` is not a valid functional pseudo-class, and a browser
+   drops the whole rule without a word when you write it that way. */
+:root[data-advanced='on'] [data-simple] {
+  display: none !important;
+}
+.advanced-toggle {
+  color: var(--text-dim);
+  cursor: pointer;
+  background: 0 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: all 0.15s;
+  display: inline-flex;
+}
+.advanced-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-focus);
+}
+.advanced-toggle[aria-pressed='true'] {
+  color: var(--accent-hover);
+  background: var(--accent-glow);
+  border-color: var(--border-focus);
+}
+.advanced-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+/* ── Quality presets ────────────────────────────────────────
+   Three words replace a dozen model cards for someone who just wants to
+   hear their text. Each preset maps to a real model (src/quality-presets.ts),
+   so the control stays honest; the full grid lives in the advanced panel. */
+.quality-row {
+  margin-bottom: 24px;
+}
+.quality-label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.quality-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.quality-preset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.quality-preset:hover {
+  border-color: var(--border-focus);
+  color: var(--text);
+}
+.quality-preset--active {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  color: var(--text);
+}
+.quality-preset:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.quality-preset__label {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.quality-preset__blurb {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  text-align: center;
+}
+.quality-preset--active .quality-preset__blurb {
+  color: var(--text-muted);
+}
+/* Download size for the quality ladder. Advanced view only (data-advanced),
+   so the simple view reads "Fastest / Natural voices / Best fidelity" with
+   no engineering figures in the way. */
+.quality-preset__size {
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+  text-align: center;
+}
+
+/* ── Bottom bar ──────────────────────────────────────────────
+   Pinned to the viewport foot: a persistent home for the settings that do
+   not belong on the short path — theme, and the "More" toggle that reveals
+   every data-advanced region inline. The app reserves bottom padding so the
+   bar never covers the last row of content. */
+.bottom-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+.bottom-bar__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.bottom-bar__model {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bottom-bar__preset {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.bottom-bar__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Reserve room for the fixed bottom bar. */
+body {
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
 }

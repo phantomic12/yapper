@@ -1,6 +1,14 @@
-import type { GenerationJob, JobProgress } from '../engine';
+import { float32ToWav, type GenerationJob, type JobProgress } from '../engine';
+import {
+  selectJobsWithinBudget,
+  totalEstimatedBytes,
+  formatBytes,
+} from '../persistence';
+import { concatenateClips, type AudioClip } from '../audio-export';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
+import { voiceDisplayLabel } from '../voice-preview';
+import { ensureModelLoaded } from './model-panel';
 
 // ─── Job list render ─────────────────────────────────────────────
 //
@@ -85,14 +93,31 @@ export function renderJobList(state: AppState): void {
   const list = document.getElementById('job-list')!;
   const label = document.getElementById('queue-label')!;
   const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+  const downloadAllBtn = document.getElementById('download-all-btn') as HTMLButtonElement | null;
   const queueCount = document.getElementById('queue-count') as HTMLElement;
+  const usageEl = document.getElementById('storage-usage') as HTMLElement | null;
   const currentJobs = state.currentJobs;
+
+  // What will actually survive to the next visit, as opposed to what is in
+  // memory right now. Saying so is the difference between "my clips
+  // vanished" and "the oldest audio was dropped to stay in budget".
+  if (usageEl) {
+    const kept = selectJobsWithinBudget(currentJobs);
+    const clips = kept.filter(j => j.status === 'done').length;
+    const bytes = formatBytes(totalEstimatedBytes(kept));
+    const dropped = currentJobs.length - kept.length;
+    usageEl.textContent = dropped > 0
+      ? `${clips} clip${clips === 1 ? '' : 's'} kept · ${bytes} (${dropped} older dropped)`
+      : `${clips} clip${clips === 1 ? '' : 's'} kept · ${bytes}`;
+  }
 
   if (currentJobs.length === 0) {
     list.innerHTML = '';
     label.style.display = 'none';
     clearBtn.disabled = true;
+    if (downloadAllBtn) downloadAllBtn.disabled = true;
     if (queueCount) { queueCount.hidden = true; queueCount.textContent = ''; }
+    if (usageEl) usageEl.textContent = '';
     return;
   }
 
@@ -100,6 +125,9 @@ export function renderJobList(state: AppState): void {
   const finished = currentJobs.filter(j => j.status === 'done' || j.status === 'error' || j.status === 'cancelled');
   const active = currentJobs.filter(j => j.status === 'pending' || j.status === 'generating');
   clearBtn.disabled = finished.length === 0;
+  if (downloadAllBtn) {
+    downloadAllBtn.disabled = !currentJobs.some(j => j.status === 'done' && j.audio && j.sampleRate);
+  }
 
   // Show queue depth next to the generate button so users know how many
   // jobs are stacked up. Only show when there's at least one queued or
@@ -118,17 +146,15 @@ export function renderJobList(state: AppState): void {
   }
 
   // Diff against existing DOM.
-  // Queue positions for pending jobs: the engine dequeues newest-first
-  // (jobs[0] is the next to run), so a pending job's position is its index
-  // among pending jobs counting from the front of the array.
+  // Queue positions for pending jobs: the engine dequeues oldest-first
+  // (FIFO — jobs run in the order they were added), while the array is
+  // newest-first for display. So the next job to run is the LAST pending
+  // entry and positions count backwards from the end of the array.
+  const pendingInDisplayOrder = currentJobs.filter(j => j.status === 'pending');
   const pendingQueuePositions = new Map<string, number>();
-  let position = 0;
-  for (const job of currentJobs) {
-    if (job.status === 'pending') {
-      position++;
-      pendingQueuePositions.set(job.id, position);
-    }
-  }
+  pendingInDisplayOrder.forEach((job, i) => {
+    pendingQueuePositions.set(job.id, pendingInDisplayOrder.length - i);
+  });
   const seen = new Set<string>();
   for (const job of currentJobs) {
     seen.add(job.id);
@@ -252,7 +278,10 @@ export function updateJobCardProgress(jobId: string, progress: JobProgress): voi
 
 function renderJobCardHeader(job: GenerationJob): string {
   const statusIcon = statusIconHtml(job.status);
-  const voiceLabel = job.voiceName ? ` · ${escapeHtml(job.voiceName)}` : '';
+  // Registries pack the traits into the name ("Heart (en-us, Female)");
+  // the picker renders that as "Heart · American, Female" and so must the
+  // queue, or the same voice wears two different names on one screen.
+  const voiceLabel = job.voiceName ? ` · ${escapeHtml(voiceDisplayLabel(job.voiceName))}` : '';
   const speedLabel = job.speed !== 1.0 ? ` · ${job.speed.toFixed(2)}x` : '';
   const textPreview = job.text.length > 100 ? job.text.slice(0, 100) + '…' : job.text;
   const cancellable = job.status === 'pending' || job.status === 'generating';
@@ -358,6 +387,11 @@ export function bindJobQueueEvents(state: AppState): void {
       return;
     }
 
+    // No manual "Download & Load" step: if the model is not in memory yet,
+    // start loading it now. The job is queued immediately and the engine runs
+    // it the moment the model reaches 'ready', so pressing Speak works even
+    // while the download is still in flight.
+    void ensureModelLoaded(state);
     state.engine!.enqueue(text, {
       modelId: state.selectedModel.id,
       voiceId,
@@ -369,6 +403,25 @@ export function bindJobQueueEvents(state: AppState): void {
   // Clear finished
   document.getElementById('clear-btn')!.addEventListener('click', () => {
     state.engine!.clearFinished();
+  });
+
+  // Download all finished clips as one WAV (oldest first, short gaps).
+  document.getElementById('download-all-btn')?.addEventListener('click', () => {
+    // jobs[] is newest-first for display; export in generation order.
+    const clips: AudioClip[] = state.currentJobs
+      .filter(j => j.status === 'done' && j.audio && j.sampleRate)
+      .reverse()
+      .map(j => ({ audio: j.audio!, sampleRate: j.sampleRate! }));
+    if (clips.length === 0) return;
+    const merged = concatenateClips(clips, 0.35);
+    const blob = float32ToWav(merged.audio, merged.sampleRate);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `yapper-audiobook-${new Date().toISOString().slice(0, 10)}.wav`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    showStatus('success', `Exported ${clips.length} clip${clips.length === 1 ? '' : 's'} as one WAV.`);
   });
 
   // Speed slider

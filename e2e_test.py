@@ -5,7 +5,7 @@ Drives a real Chrome instance through the full TTS workflow:
   1. Load the page
   2. Confirm model grid renders
   3. Pick a small model (Kitten TTS Nano, ~24MB, fast on CPU)
-  4. Click "Download & Load Model" and wait for ready state
+  4. The selected model auto-downloads; wait for the ready state
   5. Type text and click Generate
   6. Verify a job card appears and produces an audio blob
   7. Upload a TXT document and verify extracted text renders as sentences
@@ -24,6 +24,8 @@ Usage:
 import json
 import time
 import base64
+import re
+import fnmatch
 import os
 import sys
 import traceback
@@ -38,6 +40,17 @@ URL = os.environ.get('YAPPER_URL', 'https://phantomic12.github.io/yapper/')
 SCREENSHOT_DIR = Path(os.environ.get('YAPPER_SHOTS', '/tmp/yapper-shots'))
 JUNIT_PATH = os.environ.get('YAPPER_JUNIT', '')
 SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+# The step markers below are ✓ / ✗ / ❌, and Windows consoles default to
+# cp1252, which cannot encode them. Without this, the *first* failing step
+# raises UnicodeEncodeError while printing its own error, so the run dies with
+# a traceback instead of a result — the harness becomes unusable for reporting
+# the very failures it exists to catch. reconfigure() is 3.7+.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, ValueError):  # pragma: no cover - exotic stdout
+    pass
 
 # Default to Kitten TTS Nano: smallest quantized model, runs on CPU WASM
 DEFAULT_MODEL = 'kitten-nano'
@@ -381,14 +394,22 @@ def step_attach_and_navigate(cdp_holder):
     nav_id = cdp.send('Page.navigate', {'url': URL}, session_id=sid)
     cdp.wait_for(nav_id, timeout=10)
     print(f'      Navigated to {URL}; waiting for app render…')
-    time.sleep(2)
 
 
 def step_verify_page_render(cdp_holder):
     target = cdp_holder['target']
     cdp = cdp_holder['cdp']
-    ready = cdp.eval(
-        """(function() {
+
+    # Poll for the app to actually mount. A fixed sleep raced a cold
+    # dev-server profile: the first page load pays for Vite's initial
+    # module transform, which can take far longer than any fixed wait, and
+    # every downstream step then cascaded off '#app not mounted'.
+    POLL_TIMEOUT = float(os.environ.get('YAPPER_RENDER_TIMEOUT', '60'))
+    start = time.time()
+    state: dict = {}
+    while time.time() - start < POLL_TIMEOUT:
+        ready = cdp.eval(
+            """(function() {
             return {
                 title: document.title,
                 hasApp: !!document.getElementById('app'),
@@ -397,10 +418,14 @@ def step_verify_page_render(cdp_holder):
                 loadBtnExists: !!document.getElementById('load-btn'),
                 gpuText: document.querySelector('.gpu-status__label')?.textContent?.trim(),
             };
-        })()""",
-        target['id'], timeout=10,
-    )
-    state = v(ready)
+            })()""",
+            target['id'], timeout=10,
+        )
+        state = v(ready)
+        if state.get('models', 0) >= 5:
+            break
+        time.sleep(1)
+
     print(f'      title:  {state.get("title")}')
     print(f'      models: {state.get("models")}')
     print(f'      GPU:    {state.get("gpuText", "")}')
@@ -411,6 +436,177 @@ def step_verify_page_render(cdp_holder):
     shot1 = SCREENSHOT_DIR / '01-initial-load.png'
     cdp.screenshot(target['id'], shot1)
     print(f'      → {shot1} ({shot1.stat().st_size // 1024} KB)')
+
+
+MODE_STATE_JS = """(function() {
+    const shown = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        return getComputedStyle(el).display !== 'none';
+    };
+    // Every scrap of copy a first-time visitor can actually read right now:
+    // walk the rendered tree, keep what is genuinely on screen, and report
+    // the memory figures. Unit tests assert the same rule against the markup
+    // (src/advanced-mode.test.ts); this one trusts the stylesheet instead,
+    // so a region marked data-advanced that the CSS failed to hide is caught
+    // here rather than by a user.
+    const visibleSizeFigures = (() => {
+        const SIZE = /\\d+(?:\\.\\d+)?\\s*(?:MB|MiB|KB|GB)\\b/i;
+        // One surface is allowed to quote a number: the upload cap, which is
+        // a limit the user has to respect before they pick a file, not a
+        // description of what the app is downloading. Selector-based on
+        // purpose — it cannot be defeated by a reword. The fp16-fallback
+        // warning is *not* exempt: it is always visible, so it carries a
+        // plain-language sentence in this view and puts its byte counts in a
+        // data-advanced span instead.
+        const ALLOWED = '#document-formats';
+        const hits = [];
+        const walk = (el) => {
+            if (el.nodeType !== 1) return;
+            const style = getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return;
+            const allowed = el.closest(ALLOWED) !== null;
+            let text = '';
+            for (const n of el.childNodes) {
+                if (n.nodeType === 3) text += n.textContent;
+            }
+            text = text.trim();
+            if (!allowed && (SIZE.test(text) || SIZE.test(el.title || ''))) {
+                hits.push(`${el.tagName.toLowerCase()}.${el.className || '-'}: ${text || el.title}`);
+            }
+            for (const child of el.children) walk(child);
+        };
+        walk(document.querySelector('#app') || document.body);
+        return hits;
+    })();
+    return {
+        advanced: document.documentElement.dataset.advanced === 'on',
+        stored: localStorage.getItem('yapper.advanced.v1'),
+        togglePressed: document.getElementById('advanced-toggle')
+            ?.getAttribute('aria-pressed') || null,
+        toggleLabel: document.getElementById('advanced-toggle-label')
+            ?.textContent || null,
+        modelGrid: shown('#model-grid'),
+        qualityPresets: shown('#quality-presets'),
+        activePreset: document.querySelector('.quality-preset--active')
+            ?.dataset.quality || null,
+        bottomBar: shown('#bottom-bar'),
+        bottomPreset: document.getElementById('bottom-bar-preset')?.textContent || null,
+        bottomModel: document.getElementById('bottom-bar-model')?.textContent || null,
+        languageFilter: shown('.language-select-wrapper'),
+        speedRow: shown('.speed-row'),
+        textInput: shown('#text-input'),
+        loadBtn: shown('#load-btn'),
+        presetBlurbs: [...document.querySelectorAll('.quality-preset__blurb')]
+            .map(el => el.textContent.trim()),
+        presetSizesShown: [...document.querySelectorAll('.quality-preset__size')]
+            .map(el => getComputedStyle(el).display !== 'none'),
+        // How many of the two fp16-fallback sentences are on screen. One per
+        // view, never two: the simple one is data-simple, the technical one
+        // is data-advanced, and the stylesheet keeps them apart.
+        f16Sentences: ['f16-copy', 'f16-copy-detail']
+            .filter(role => {
+                const el = document.querySelector(`[data-role="${role}"]`);
+                return !!el && getComputedStyle(el).display !== 'none' && !!el.textContent.trim();
+            }).length,
+        sizeFigures: visibleSizeFigures,
+    };
+})()"""
+
+
+def step_assert_simple_mode(cdp_holder):
+    """The default view hides the knobs and names the model in one line.
+
+    Computed style, not the attribute: a region can be marked advanced and
+    still be on screen if the stylesheet stopped honouring it, which is the
+    failure a first-time visitor would actually see.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    s = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+
+    if s.get('advanced'):
+        raise AssertionError(
+            'advanced mode is on by default — the simple view is the default')
+    hidden = [k for k in ('modelGrid', 'languageFilter', 'speedRow') if s.get(k) is not False]
+    if hidden:
+        raise AssertionError(f'advanced regions visible in the simple view: {hidden} ({s})')
+    if not s.get('qualityPresets'):
+        raise AssertionError(f'quality presets are hidden in the simple view: {s}')
+    if not s.get('activePreset'):
+        raise AssertionError(f'no quality preset is active in the simple view: {s}')
+    if not s.get('bottomBar') or not s.get('bottomPreset'):
+        raise AssertionError(f'bottom bar is missing its preset readout: {s}')
+    if s.get('toggleLabel') != 'More':
+        raise AssertionError(f'bottom-bar toggle should read "More" in the simple view: {s}')
+    if not s.get('textInput') or not s.get('loadBtn'):
+        raise AssertionError(f'the short path is not intact in the simple view: {s}')
+    # The point of the simple view: a download size is an engineering fact,
+    # and nobody reading their sentence back needs one on screen.
+    if s.get('sizeFigures'):
+        raise AssertionError(
+            f'memory figures are visible in the simple view: {s.get("sizeFigures")}')
+    if any(s.get('presetSizesShown') or []):
+        raise AssertionError(
+            f'quality-preset size chips are rendered in the simple view: {s}')
+    for blurb in s.get('presetBlurbs') or []:
+        if re.search(r'\d+\s*MB', blurb, re.I):
+            raise AssertionError(f'quality preset blurb leaks a size: {blurb!r}')
+    if s.get('bottomModel') and re.search(r'\d+\s*MB', s['bottomModel'], re.I):
+        raise AssertionError(f'bottom bar names a download size: {s["bottomModel"]!r}')
+    if s.get('f16Sentences', 0) > 1:
+        raise AssertionError(
+            f'the fp16 warning shows both registers at once: {s}')
+    print(f'      ✓ simple view: grid hidden, quality={s.get("activePreset")} '
+          f'({s.get("bottomModel")}), text box and load button present')
+    print(f'      ✓ no memory figures on screen (presets read '
+          f'{s.get("presetBlurbs")})')
+
+
+def step_enable_advanced_mode(cdp_holder):
+    """The header toggle reveals the full set of controls and persists.
+
+    Everything downstream (select_model, language filter, speed) drives
+    controls that only exist in this view, so this has to run before them.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    before = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+    if before.get('advanced'):
+        print('      (advanced mode already on)')
+        return
+
+    _click_trusted(cdp, target['id'], '#advanced-toggle')
+
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 10:
+        s = v(cdp.eval(MODE_STATE_JS, target['id'], timeout=10))
+        if s.get('advanced') and s.get('modelGrid') is True:
+            break
+        time.sleep(0.5)
+    if not s.get('advanced') or s.get('modelGrid') is not True:
+        raise AssertionError(f'the advanced toggle did not reveal the model grid: {s}')
+    if s.get('stored') != '1':
+        raise AssertionError(f'advanced mode was not persisted: stored={s.get("stored")!r}')
+    if s.get('togglePressed') != 'true':
+        raise AssertionError(f'toggle aria-pressed out of step: {s.get("togglePressed")!r}')
+    if s.get('toggleLabel') != 'Less':
+        raise AssertionError(f'bottom-bar toggle should read "Less" when revealed: {s.get("toggleLabel")!r}')
+    # The figures were relocated, not deleted — the whole point of hiding
+    # them is that they are one toggle away.
+    if not all(s.get('presetSizesShown') or []):
+        raise AssertionError(
+            f'quality-preset size chips are still hidden in advanced mode: {s}')
+    if len(s.get('presetSizesShown') or []) != 3:
+        raise AssertionError(f'expected a size chip on all three presets: {s}')
+    if s.get('f16Sentences', 0) > 1:
+        raise AssertionError(
+            f'the fp16 warning shows both registers at once: {s}')
+    print(f'      ✓ advanced view: grid visible, language filter and speed back '
+          f'(aria-pressed={s.get("togglePressed")}, stored={s.get("stored")})')
+    print(f'      ✓ download sizes back on screen where the numbers belong')
 
 
 def step_select_model(cdp_holder):
@@ -650,10 +846,12 @@ def _run_kokoro_generation(cdp_holder, text: str):
             const pickBtn = card.querySelector('[data-action="pick"]');
             if (!pickBtn) return { ok: false, msg: 'no pick button on kokoro card' };
             pickBtn.click();
+            // Since auto-load (selecting a model starts the download), the
+            // load control flips into its disabled status-pill form while the
+            // download runs. A manual click is only the fallback path.
             const loadBtn = document.getElementById('load-btn');
-            if (!loadBtn || loadBtn.disabled) return { ok: false, msg: 'load button unavailable' };
-            loadBtn.click();
-            return { ok: true };
+            if (loadBtn && !loadBtn.disabled) loadBtn.click();
+            return { ok: true, autoLoad: !!(loadBtn && loadBtn.disabled) };
         })()""",
         target['id'], timeout=15,
     )
@@ -802,6 +1000,20 @@ READER_STATE_JS = """(function() {
         readerStatus: document.getElementById('reader-status')?.textContent || '',
         overlayStatus: document.getElementById('reader-overlay-status')?.textContent || '',
         pauseLabel: (document.getElementById('pause-document-btn') || {}).textContent || null,
+        overlayPauseLabel: (document.getElementById('reader-overlay-pause') || {}).textContent || null,
+        ocrChecked: !!document.getElementById('ocr-toggle')?.checked,
+        classifyChips: Array.from(
+            document.querySelectorAll('#classify-chips .classify-chip')
+        ).map(c => c.textContent),
+        tableCount: document.querySelectorAll('#classify-list table').length,
+        sampleHidden: !!document.getElementById('document-sample')?.hidden,
+        layoutBlockCount: document.getElementById('layout-details')
+            && document.getElementById('layout-details').style.display !== 'none'
+            ? (() => {
+                try { return JSON.parse(document.getElementById('layout-pre').textContent).length; }
+                catch (e) { return -1; }
+            })()
+            : 0,
         readerError: document.querySelector('.reader-error')?.textContent
             || document.getElementById('reader-error')?.textContent || null,
         statusBanner: document.querySelector('.status-banner span')?.textContent || null,
@@ -824,6 +1036,135 @@ def _inject_file(cdp, target_id, path: Path, mime: str):
     if not r.get('ok'):
         raise AssertionError(f'file injection failed: {r}')
     print(f'      injected {path.name} ({path.stat().st_size} bytes)')
+
+
+PAGE_STATE_JS = """(function() {
+    const pages = { studio: null, reader: null };
+    for (const id of ['page-studio', 'page-reader']) {
+        const el = document.getElementById(id);
+        pages[id === 'page-studio' ? 'studio' : 'reader'] = el
+            ? !el.hidden && getComputedStyle(el).display !== 'none'
+            : false;
+    }
+    return {
+        pages,
+        hash: location.hash,
+        activeTab: document.querySelector('.page-nav__tab--active')?.dataset.pageTarget || null,
+    };
+})()"""
+
+
+def _click_trusted(cdp, target_id: str, selector: str) -> tuple[float, float]:
+    """Scroll a control into view, then click it with a trusted CDP mouse event.
+
+    DOM.getBoxModel reports layout coordinates, so a control below the fold
+    yields a y outside the viewport and the synthesised click lands on whatever
+    happens to be there instead — the step then times out waiting for a state
+    change that the click never caused. The Reader page is tall enough (hero,
+    drop zone, OCR options, preview) that 'Read aloud' sits below the fold
+    after a document is extracted, so this is the normal case, not an edge one.
+
+    Scrolling first and re-measuring also means the click lands on the button
+    as a user would experience it, which is the whole point of using a trusted
+    event over element.click() here (autoplay policy).
+    """
+    scrolled = cdp.eval(
+        "(function(){const el=document.querySelector(%s);if(!el)return {ok:false};"
+        "el.scrollIntoView({block:'center'});return {ok:true};})()" % json.dumps(selector),
+        target_id, timeout=10)
+    if not v(scrolled).get('ok'):
+        raise AssertionError(f'{selector} not found')
+    time.sleep(0.3)  # let the scroll settle before measuring
+
+    node = cdp.find_element(target_id, selector)
+    if not node:
+        raise AssertionError(f'{selector} not found')
+    box = cdp.get_box_model(target_id, node['objectId'])
+    if not box:
+        raise AssertionError(f'could not measure {selector} position')
+    x, y = box[0] + 6, box[1] + 6
+    cdp.click_at(target_id, x, y)
+    return x, y
+
+
+def _switch_page(cdp_holder, page: str):
+    """Activate a page tab and wait for its panel to actually be visible.
+
+    The app renders both pages into the DOM and toggles `hidden`, so a raw
+    querySelector still finds buttons inside the inactive page — but
+    DOM.getBoxModel returns nothing for a hidden node, so the trusted-click
+    steps downstream would fail with 'could not measure ... position'.
+    Switching through the real tab (not by poking the DOM) also exercises the
+    hash routing the UI actually ships.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    js = (
+        "(function(){"
+        f"const tab = document.querySelector('.page-nav__tab[data-page-target=\"{page}\"]');"
+        "if (!tab) return { ok: false, msg: 'no tab for page' };"
+        "tab.click();"
+        f"location.hash = '#{page}';"
+        "return { ok: true };"
+        "})()"
+    )
+    r = v(cdp.eval(js, target['id'], timeout=10))
+    if not r.get('ok'):
+        raise AssertionError(f'could not switch to the {page} page: {r}')
+
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 10:
+        s = v(cdp.eval(PAGE_STATE_JS, target['id'], timeout=10))
+        if s.get('pages', {}).get(page):
+            print(f'      ✓ {page} page active (hash={s.get("hash")!r})')
+            return
+        time.sleep(0.25)
+    raise AssertionError(
+        f'{page} page did not become visible within 10s: {json.dumps(s, default=str)}')
+
+
+def step_switch_to_reader(cdp_holder):
+    """The document flow lives on the Reader tab since the two-page revamp."""
+    _switch_page(cdp_holder, 'reader')
+
+
+def step_switch_to_studio(cdp_holder):
+    """Back to the Studio tab for the steps that drive the text box."""
+    _switch_page(cdp_holder, 'studio')
+
+
+def step_load_sample_document(cdp_holder):
+    """Load the built-in sample and confirm the structure renderer ran on it.
+
+    The sample is the Reader page's first impression: a button that has to
+    fill the whole panel — classified blocks, chips, a real table — or the
+    page looks as empty as it did before the sample existed.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    x, y = _click_trusted(cdp, target['id'], '#document-sample-btn')
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 20:
+        s = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if s.get('classifyChips') and s.get('sentenceCount', 0) > 0:
+            break
+        time.sleep(0.5)
+    if not s.get('classifyChips'):
+        raise AssertionError(
+            f'clicking "Read a sample" at ({x:.0f}, {y:.0f}) rendered no '
+            f'classified blocks: {json.dumps(s, default=str)[:400]}')
+    if not s.get('sampleHidden'):
+        raise AssertionError('the sample offer is still showing after a document loaded')
+    if s.get('tableCount', 0) < 1:
+        raise AssertionError(
+            f'sample classified blocks did not render a real table: '
+            f'chips={s.get("classifyChips")} tableCount={s.get("tableCount")}')
+    print(f'      ✓ sample loaded: chips={s.get("classifyChips")} '
+          f'sentences={s.get("sentenceCount")} tables={s.get("tableCount")}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '04b-sample-document.png')
 
 
 def step_upload_txt_document(cdp_holder):
@@ -860,11 +1201,7 @@ def step_queue_reader_read(cdp_holder):
     btn = cdp.find_element(target['id'], '#read-document-btn')
     if not btn:
         raise AssertionError('#read-document-btn not found')
-    box = cdp.get_box_model(target['id'], btn['objectId'])
-    if not box:
-        raise AssertionError('could not measure #read-document-btn position')
-    x, y = box[0] + 6, box[1] + 6
-    cdp.click_at(target['id'], x, y)
+    x, y = _click_trusted(cdp, target['id'], '#read-document-btn')
     print(f'      clicked Read aloud at ({x:.0f}, {y:.0f})')
 
     start_timeout = float(os.environ.get('YAPPER_READ_START_TIMEOUT', '90'))
@@ -925,6 +1262,137 @@ def step_assert_highlight_advances(cdp_holder):
         f'(first={first}, last={last}) state={json.dumps(s, default=str)}')
 
 
+def step_pause_resume_reader(cdp_holder):
+    """Pause the reader from the overlay, then resume it from the same button.
+
+    Both are user-facing controls whose failure mode is silent: if pause
+    never took effect the label would stay 'Pause' and the audio would keep
+    advancing, and if resume did nothing the session would sit stuck at one
+    part. The overlay's Pause/Resume label is the only signal the app gives
+    (the status line just counts parts), so assert on the label transition
+    *and* that the highlight is not moving while paused.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _click_trusted(cdp, target['id'], '#reader-overlay-pause')
+    paused: dict = {}
+    start = time.time()
+    while time.time() - start < 20:
+        paused = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if paused.get('overlayPauseLabel') in ('Resume', 'Click to play'):
+            break
+        time.sleep(0.5)
+    if paused.get('overlayPauseLabel') not in ('Resume', 'Click to play'):
+        raise AssertionError(
+            f'Pause did not take effect: label={paused.get("overlayPauseLabel")!r} '
+            f'status={paused.get("readerStatus")!r}')
+
+    # Frozen means frozen: sample the highlight twice and require it to sit
+    # still. Comparing a single reading would pass even if audio kept going.
+    first = (paused.get('activeSentenceIndex'), paused.get('activeWordIndex'))
+    time.sleep(2.5)
+    later = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+    second = (later.get('activeSentenceIndex'), later.get('activeWordIndex'))
+    if second != first:
+        raise AssertionError(
+            f'highlight kept moving while paused: {first} → {second}')
+    print(f'      ✓ paused (label={paused.get("overlayPauseLabel")!r}, '
+          f'highlight held at {first})')
+
+    _click_trusted(cdp, target['id'], '#reader-overlay-pause')
+    resumed: dict = {}
+    start = time.time()
+    while time.time() - start < 20:
+        resumed = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if resumed.get('overlayPauseLabel') == 'Pause':
+            print(f'      ✓ resumed (label="Pause", status='
+                  f'{resumed.get("readerStatus")!r})')
+            return
+        time.sleep(0.5)
+    raise AssertionError(
+        f'Resume did not take effect: label={resumed.get("overlayPauseLabel")!r} '
+        f'status={resumed.get("readerStatus")!r}')
+
+
+def step_upload_scanned_pdf_ocr(cdp_holder):
+    """Turn OCR on and read a PDF that has no text layer at all.
+
+    sample.pdf has a real text layer, so pdfjs extracts it and the OCR branch
+    never runs — which is why this regression sat undetected: the OCR path
+    read pages perfectly and then reported zero words, and the reader turned
+    that into a 0-character document with no error anywhere. The fixture is
+    an image-only page, so the only way to get text out of it is Tesseract.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    cap = v(cdp.eval(
+        "({ hasPromiseTry: typeof Promise.try === 'function' })",
+        target['id'], timeout=10,
+    ))
+    if not cap.get('hasPromiseTry'):
+        print('      (skip: browser lacks Promise.try — pdfjs 6 needs Chrome ≥~128; '
+              'CI uses Chrome stable)')
+        return
+
+    # The checkbox itself is visually hidden (0x0, opacity 0) inside its
+    # label, so click the label the way a user does.
+    x, y = _click_trusted(cdp, target['id'], 'label.switch')
+    start = time.time()
+    state: dict = {}
+    while time.time() - start < 10:
+        state = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if state.get('ocrChecked'):
+            break
+        time.sleep(0.5)
+    if not state.get('ocrChecked'):
+        raise AssertionError(
+            f'clicking the OCR toggle at ({x:.0f}, {y:.0f}) did not check it')
+    print('      ✓ OCR toggle enabled')
+
+    _inject_file(cdp, target['id'], FIXTURES_DIR / 'scanned.pdf', 'application/pdf')
+
+    # First OCR in a fresh profile also loads the self-hosted WASM core and
+    # eng.traineddata (~8MB), so this gets a much longer budget than the
+    # text-layer PDF step.
+    ocr_timeout = float(os.environ.get('YAPPER_OCR_TIMEOUT', '240'))
+    start = time.time()
+    s: dict = {}
+    saw_progress = False
+    while time.time() - start < ocr_timeout:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        if 'OCR page' in (s.get('progressText') or ''):
+            saw_progress = True
+        if s.get('readerError'):
+            raise AssertionError(f'reader panel surfaced an error: {s.get("readerError")!r}')
+        text = s.get('text', '')
+        if s.get('previewVisible') and 'Yapper scanned document' in text:
+            if 'recognition' not in text:
+                time.sleep(1)
+                continue
+            print(f'      ✓ OCR read the scanned page: {s.get("sentenceCount")} sentences, '
+                  f'{s.get("layoutBlockCount")} layout blocks, '
+                  f'progress="{s.get("progressText")[:60]}"')
+            if not saw_progress:
+                # Not fatal on its own (the page can finish between polls),
+                # but say so rather than implying we watched it work.
+                print('      (note: never sampled the "OCR page N: x%" progress line)')
+            if (s.get('layoutBlockCount') or 0) < 2:
+                raise AssertionError(
+                    f'OCR produced no per-line layout blocks: '
+                    f'layoutBlockCount={s.get("layoutBlockCount")} '
+                    f'text={text[:120]!r}')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '08-scanned-pdf-ocr.png')
+            return
+        time.sleep(1)
+    raise AssertionError(
+        f'scanned PDF produced no OCR text within {ocr_timeout}s: '
+        f'progress={s.get("progressText")!r} banner={s.get("statusBanner")!r} '
+        f'readerError={s.get("readerError")!r} text[:100]={s.get("text", "")[:100]!r}')
+
+
 def step_stop_reader(cdp_holder):
     """Stop playback via the overlay Stop button and confirm teardown."""
     target = cdp_holder['target']
@@ -932,10 +1400,7 @@ def step_stop_reader(cdp_holder):
     btn = cdp.find_element(target['id'], '#reader-overlay-stop')
     if not btn:
         raise AssertionError('#reader-overlay-stop not found')
-    box = cdp.get_box_model(target['id'], btn['objectId'])
-    if not box:
-        raise AssertionError('could not measure #reader-overlay-stop position')
-    cdp.click_at(target['id'], box[0] + 6, box[1] + 6)
+    _click_trusted(cdp, target['id'], '#reader-overlay-stop')
     time.sleep(1)
     resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
     s = v(resp)
@@ -1004,6 +1469,11 @@ def main():
         ('connect_to_cdp', lambda: step_connect_to_cdp(cdp_holder)),
         ('attach_and_navigate', lambda: step_attach_and_navigate(cdp_holder)),
         ('verify_page_render', lambda: step_verify_page_render(cdp_holder)),
+        # The app opens in its simple view: the model grid, language filter
+        # and speed slider are behind one toggle, so the model-selection
+        # steps below have to turn advanced mode on first.
+        ('assert_simple_mode', lambda: step_assert_simple_mode(cdp_holder)),
+        ('enable_advanced_mode', lambda: step_enable_advanced_mode(cdp_holder)),
         ('select_model', lambda: step_select_model(cdp_holder)),
         ('click_load', lambda: step_click_load(cdp_holder)),
         ('wait_for_model_ready', lambda: step_wait_for_model_ready(cdp_holder)),
@@ -1017,17 +1487,52 @@ def main():
         # MUST run before the Kokoro step: Kokoro on CPU/WASM occupies the
         # inference queue for minutes, which would starve the reader jobs
         # (single-worker queue) and flake highlight/PDF assertions.
+        ('switch_to_reader', lambda: step_switch_to_reader(cdp_holder)),
+        ('load_sample_document', lambda: step_load_sample_document(cdp_holder)),
         ('upload_txt_document', lambda: step_upload_txt_document(cdp_holder)),
         ('queue_reader_read', lambda: step_queue_reader_read(cdp_holder)),
         ('assert_highlight_advances', lambda: step_assert_highlight_advances(cdp_holder)),
+        ('pause_resume_reader', lambda: step_pause_resume_reader(cdp_holder)),
         ('stop_reader', lambda: step_stop_reader(cdp_holder)),
         ('upload_pdf_document', lambda: step_upload_pdf_document(cdp_holder)),
+        ('upload_scanned_pdf_ocr', lambda: step_upload_scanned_pdf_ocr(cdp_holder)),
         # Live progress on Kokoro's streaming path, LAST: load the bigger
         # model, generate a multi-sentence input, and confirm sentence-
         # segment markers appear in the card hint while it runs. Slow on
         # CPU/WASM, so nothing is queued behind it.
+        ('switch_to_studio', lambda: step_switch_to_studio(cdp_holder)),
         ('kokoro_segment_progress', lambda: step_kokoro_segment_progress(cdp_holder)),
     ]
+
+    # YAPPER_E2E_ONLY selects a subset of steps by shell-style pattern, in
+    # their original order. Most steps download a real model, so the full
+    # suite outlasts a short shell window; this makes a fast loop on one
+    # area possible without reordering or editing the list above. The first
+    # three steps always run: the suite cannot evaluate anything without a
+    # page.
+    #
+    # Patterns, not substrings, and the difference is not cosmetic: with a
+    # substring filter "mode" also matches "select_model", so a run meant to
+    # touch the simple/advanced steps silently dragged in model selection.
+    #   YAPPER_E2E_ONLY=assert_simple_mode   exact name
+    #   YAPPER_E2E_ONLY='*mode'              both mode steps, not select_model
+    #   YAPPER_E2E_ONLY='kokoro*,*reader'    a comma-separated list
+    only = os.environ.get('YAPPER_E2E_ONLY', '').strip()
+    if only:
+        patterns = [p.strip() for p in only.split(',') if p.strip()]
+        always = {'connect_to_cdp', 'attach_and_navigate', 'verify_page_render'}
+        picked = [(n, f) for (n, f) in steps
+                  if n in always or any(fnmatch.fnmatch(n, p) for p in patterns)]
+        # A pattern that matches nothing is a typo, and running just the
+        # three bootstrap steps would report a cheerful "3 STEPS PASSED"
+        # for a run that tested nothing at all. Say so and stop.
+        selected = [n for (n, _) in picked if n not in always]
+        if not selected:
+            print(f'  YAPPER_E2E_ONLY={only!r} matched no step.', file=sys.stderr)
+            print('  Known steps: ' + ', '.join(n for (n, _) in steps), file=sys.stderr)
+            sys.exit(2)
+        steps = picked
+        print(f'  (filtered: {patterns} → {selected})')
 
     for name, fn in steps:
         results.append(run_step(name, fn))

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { float32ToWav, changeSpeed, MODELS } from './engine';
-import { KOKORO_VOICES } from './engines/kokoro';
+import { float32ToWav, changeSpeed, limitPeaks, MODELS } from './engine';
+import { KOKORO_VOICES, chooseKokoroRuntime } from './engines/kokoro';
 
 describe('float32ToWav', () => {
   it('produces a RIFF/WAVE header for a mono 16-bit PCM blob', async () => {
@@ -65,6 +65,31 @@ describe('float32ToWav', () => {
     const blob = float32ToWav(new Float32Array(0), 16000);
     const buf = await blob.arrayBuffer();
     expect(buf.byteLength).toBe(44); // header only
+  });
+});
+
+describe('limitPeaks', () => {
+  it('returns in-range audio untouched', () => {
+    const a = new Float32Array([0.5, -0.9, 1.0, -1.0]);
+    expect(limitPeaks(a)).toBe(a);
+  });
+
+  it('scales down sustained over-modulation instead of letting the WAV encoder clip it', () => {
+    const a = new Float32Array([0, 1.5, -3, 1]);
+    const out = limitPeaks(a);
+    let peak = 0;
+    for (const v of out) peak = Math.max(peak, Math.abs(v));
+    expect(peak).toBeCloseTo(0.99, 5);
+    // Waveform shape survives the scale-down.
+    expect(out[1] / out[2]).toBeCloseTo(-0.5, 5);
+  });
+
+  it('clamps isolated spikes without whispering the rest of the clip', () => {
+    const a = new Float32Array(1000).fill(0.5);
+    a[0] = 20; // decoder edge click
+    const out = limitPeaks(a);
+    expect(out[0]).toBeCloseTo(0.99, 5);
+    expect(out[500]).toBe(0.5); // speech untouched
   });
 });
 
@@ -143,6 +168,29 @@ describe('MODELS registry', () => {
     }
   });
 
+  it('flags only the models measured to be slow on the CPU fallback', () => {
+    // This used to assert that Kokoro-82M and SpeechT5 were flagged as
+    // CPU-slow. It no longer applies: measured on an f16-less adapter,
+    // Kokoro's int8 graph produced a 44-character sentence in 4.8s on WASM
+    // and 5.4s on WebGPU, so the warning would have been untrue. The
+    // registry deliberately carries no slowness flags.
+    const flagged = MODELS.filter(m => 'cpuSlow' in m).map(m => m.id);
+    expect(flagged).toEqual([]);
+  });
+
+  it('describes the Kokoro entries with the files they actually download', () => {
+    // transformers.js maps dtype 'q8' to the _quantized suffix, so the
+    // int8 card downloads model_quantized.onnx — NOT model_q8f16.onnx, which
+    // is a different (f16-compute) file that this registry must not claim.
+    const int8 = MODELS.find(m => m.id === 'kokoro-82m')!;
+    expect(int8.dtype).toBe('q8');
+    expect(int8.modelFile).toBe('onnx/model_quantized.onnx');
+    expect(int8.sizeMB).toBe(88);
+    const fp16 = MODELS.find(m => m.id === 'kokoro-82m-fp16')!;
+    expect(fp16.dtype).toBe('fp16');
+    expect(fp16.modelFile).toBe('onnx/model_fp16.onnx');
+  });
+
   it('kokoro model entries expose the full KOKORO_VOICES list', () => {
     const kokoros = MODELS.filter(m => m.id.startsWith('kokoro'));
     expect(kokoros.length).toBeGreaterThanOrEqual(2);
@@ -151,5 +199,52 @@ describe('MODELS registry', () => {
       expect(m.voices?.length).toBe(28);
       expect(m.defaultVoiceId).toBe('af_heart');
     }
+  });
+});
+
+describe('chooseKokoroRuntime', () => {
+  it('forces WebGPU on an adapter with f16 support', () => {
+    // device:null is NOT "ORT decides" in the transformers 3.8.1 build
+    // kokoro-js pins — it resolves to ['wasm'], silently CPU-bound. With
+    // shader-f16 available the GPU is requested explicitly; load() retries
+    // on WASM if the session cannot be created.
+    expect(chooseKokoroRuntime('q8', true)).toEqual({
+      dtype: 'q8', device: 'webgpu', downgradedForF16: false,
+    });
+    expect(chooseKokoroRuntime('fp16', true)).toEqual({
+      dtype: 'fp16', device: 'webgpu', downgradedForF16: false,
+    });
+  });
+
+  it('keeps kokoro-js\'s WASM default when f16 is unavailable and the graph needs no f16', () => {
+    // The int8 graph (q8 → model_quantized.onnx) is fp32-compute, so it
+    // never asks for f16 kernels and is safe on the WASM EP. Requesting
+    // WebGPU without shader-f16 would fail f16 WGSL validation on kernels
+    // ORT does emit for other ops, so the conservative default stands.
+    const choice = chooseKokoroRuntime('q8', false);
+    expect(choice.dtype).toBe('q8');
+    expect(choice.device).toBeNull();
+    expect(choice.downgradedForF16).toBe(false);
+  });
+
+  it('downgrades the genuinely-f16 graphs to the int8 build', () => {
+    for (const f16 of ['fp16', 'q4f16']) {
+      const choice = chooseKokoroRuntime(f16, false);
+      expect(choice.dtype, f16).toBe('q8');
+      expect(choice.device, f16).toBeNull();
+      expect(choice.downgradedForF16, f16).toBe(true);
+    }
+  });
+
+  it('never pins WebGPU without shader-f16, and always pins it with', () => {
+    for (const dtype of ['q8', 'fp16', 'q4f16', 'fp32', undefined]) {
+      expect(chooseKokoroRuntime(dtype, false).device, `${dtype}/no-f16`).toBeNull();
+      expect(chooseKokoroRuntime(dtype, true).device, `${dtype}/f16`).toBe('webgpu');
+    }
+  });
+
+  it('defaults to the int8 build when no dtype is given', () => {
+    expect(chooseKokoroRuntime(undefined, true).dtype).toBe('q8');
+    expect(chooseKokoroRuntime(undefined, false).dtype).toBe('q8');
   });
 });

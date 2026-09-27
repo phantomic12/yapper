@@ -1,12 +1,22 @@
 import { pipeline, env } from '@huggingface/transformers';
 import { EventEmitter } from './events';
-import { detectCapability } from './capability';
+import { detectCapability, webgpuAdapterHasFeature } from './capability';
 import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
-import { REQUEST_TIMEOUTS, TimeoutError, formatGenerateTimeout } from './engines/timeouts';
+import { REQUEST_TIMEOUTS, TimeoutError, PreviewBusyError, formatGenerateTimeout } from './engines/timeouts';
 
 // ─── Model definitions ───────────────────────────────────────────
+
+/**
+ * The models the picker may offer: everything in MODELS except entries
+ * flagged `hidden` (see the SpeechT5 entry for why that flag exists).
+ * Every UI loop that renders or searches the model grid goes through this;
+ * raw MODELS is for lookups by id, where a hidden entry must still resolve.
+ */
+export function visibleModels(): TTSModel[] {
+  return MODELS.filter(m => !m.hidden);
+}
 
 /** Human-readable language code → ISO 639-1 code. */
 export const LANGUAGE_NAMES: Record<string, string> = {
@@ -29,7 +39,7 @@ export const LANGUAGE_NAMES: Record<string, string> = {
  */
 export function getSupportedLanguages(): string[] {
   const seen = new Set<string>();
-  for (const m of MODELS) {
+  for (const m of visibleModels()) {
     if (m.language && m.language !== 'multi') seen.add(m.language);
   }
   // Enforce order: en first, then alphabetical.
@@ -71,7 +81,14 @@ export interface TTSModel {
   custom?: boolean;
   /** ISO 639-1 language code (e.g. 'en', 'es', 'zh') or 'multi' for multilingual models. */
   language?: string;
-  /** Approximate download size in MB — shown on the model card. */
+  /**
+   * Quantisation/build qualifier shown as an advanced-only chip on the model
+   * card ("int8", "fp16"). It is deliberately *not* part of `name`: names
+   * reach the simple view (the bottom-bar readout, download progress, job
+   * cards) where "Kokoro-82M (int8)" is jargon nobody asked for.
+   */
+  variant?: string;
+  /** Approximate download size in MB — advanced view only. */
   sizeMB?: number;
   /**
    * Path within the HF repo to the model file. Required for custom
@@ -87,41 +104,63 @@ export interface TTSModel {
    * Custom worker-backed models (Kokoro, Kitten) leave this unset.
    */
   runsOnMainThread?: boolean;
+  /**
+   * True when the model must not be offered in the picker because it
+   * cannot produce working audio in this app. Hidden entries stay in the
+   * registry so persisted settings and stored job records that name them
+   * still resolve. The only hidden model today is SpeechT5, which needs a
+   * processor + HiFi-GAN vocoder this app does not ship (see its entry).
+   */
+  hidden?: boolean;
 }
 
 export const MODELS: TTSModel[] = [
   {
     id: 'kokoro-82m',
-    name: 'Kokoro-82M (q8f16)',
+    name: 'Kokoro-82M',
+    variant: 'int8',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    modelFile: 'onnx/model_q8f16.onnx',
-    description: 'High-quality 82M TTS. 28 built-in voices. q8f16 quantized (~86MB).',
+    modelFile: 'onnx/model_quantized.onnx',
+    description: 'High-quality 82M TTS. 28 built-in voices. int8 quantized (~88MB).',
     category: 'premium',
     sampleRate: 24000,
     dtype: 'q8',
     custom: true,
     language: 'en',
-    sizeMB: 86,
+    sizeMB: 88,
     voices: KOKORO_VOICES,
     defaultVoiceId: 'af_heart',
   },
   {
     id: 'kokoro-82m-fp16',
-    name: 'Kokoro-82M (fp16)',
+    name: 'Kokoro-82M',
+    variant: 'fp16',
     modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
     modelFile: 'onnx/model_fp16.onnx',
-    description: 'Kokoro-82M fp16 (~163MB). Higher quality than q8, larger download.',
+    description: 'Kokoro-82M fp16 (~156MB). Higher quality than int8, larger download. Needs a GPU with f16 support.',
     category: 'premium',
     sampleRate: 24000,
     dtype: 'fp16',
     custom: true,
     language: 'en',
-    sizeMB: 163,
+    sizeMB: 156,
     voices: KOKORO_VOICES,
     defaultVoiceId: 'af_heart',
   },
   {
+    // HIDDEN from the picker (hidden: true). SpeechT5 is a text→mel model:
+    // running it alone produces noise, and a usable card needs the full
+    // stack — the SpeechT5 processor plus a HiFi-GAN vocoder to turn the
+    // mel spectrogram into audio. Transformers.js's text-to-audio
+    // pipeline does not assemble that stack for this checkpoint, so the
+    // card looked functional but could only ever emit garbage (documented
+    // in docs/tts-model-landscape.md). The entry stays in the registry so
+    // the persisted-settings code and the historical job records that
+    // reference 'speecht5' keep resolving; UI loops skip hidden entries.
+    // Re-showing it means wiring processor + vocoder first, not flipping
+    // this flag.
     id: 'speecht5',
+    hidden: true,
     name: 'SpeechT5',
     modelId: 'Xenova/speecht5_tts',
     description: 'Microsoft transformer-based TTS. Multiple voices via speaker embeddings.',
@@ -149,7 +188,7 @@ export const MODELS: TTSModel[] = [
   },
   {
     id: 'kitten-mini',
-    name: 'Kitten TTS Mini (~78MB)',
+    name: 'Kitten TTS Mini',
     modelId: 'KittenML/kitten-tts-mini-0.8',
     modelFile: 'kitten_tts_mini_v0_8.onnx',
     description: 'Larger Kitten model, better quality. Same 8 voice IDs as Kitten Nano but with Mini-trained embeddings.',
@@ -168,7 +207,7 @@ export const MODELS: TTSModel[] = [
   },
   {
     id: 'kitten-nano',
-    name: 'Kitten TTS Nano (~24MB)',
+    name: 'Kitten TTS Nano',
     modelId: 'KittenML/kitten-tts-nano-0.8-int8',
     description: 'Tiny fast TTS. 8 voices via phoneme embeddings. ONNX runtime direct.',
     category: 'fast',
@@ -244,7 +283,7 @@ export interface GenerationJob {
    * Per-word start times in seconds, relative to the start of this job's
    * audio. Same length as the number of words in `text` after splitting
    * on whitespace. Populated by engines that expose phoneme durations
-   * (e.g. kokoro-js via `stream()`); engines that don't (kitten, MMS)
+   * (e.g. the Kokoro engine, sentence by sentence); engines that don't (kitten, MMS)
    * leave this undefined and the reader falls back to chunk-level
    * position-ratio highlighting.
    */
@@ -320,8 +359,8 @@ export interface EngineEvents {
 // receives the raw job and returns a Float32Array + sample rate.
 
 /**
- * Called by engines that generate in segments (e.g. kokoro-js's
- * `stream()` yields one sentence at a time) so progress can cross the
+ * Called by engines that generate in segments (e.g. Kokoro synthesizes
+ * one sentence at a time) so progress can cross the
  * worker boundary while generation is still running.
  */
 export type SegmentProgressCallback = (progress: {
@@ -329,7 +368,7 @@ export type SegmentProgressCallback = (progress: {
   segmentsDone: number;
   /**
    * Total expected segments when known up front; undefined for engines
-   * that discover segments lazily (kokoro-js streams sentence-by-sentence
+   * that discover segments lazily (Kokoro streams sentence-by-sentence
    * without a total).
    */
   segmentsTotal?: number;
@@ -382,6 +421,12 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
   private jobs: GenerationJob[] = [];
   private processing = false;
   private nextJobId = 1;
+  /**
+   * True while a voice audition is synthesising. Only one inference call may
+   * run at a time, so a second request is rejected with PreviewBusyError
+   * rather than queued — see src/voice-preview.ts for the UI that drives it.
+   */
+  private previewInFlight = false;
   /**
    * Heartbeat interval handle for the currently generating job. Ticks
    * every ~500ms emitting `jobProgress` so live UI (ticking timer) can
@@ -651,8 +696,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           loaded?: number;
           total?: number;
         }
+        // Pin WASM on adapters without `shader-f16` (see capability.ts):
+        // transformers.js's ORT build would otherwise compile f16 kernels
+        // that fail WebGPU validation on such adapters.
+        const useF16 = await webgpuAdapterHasFeature('shader-f16');
         const newPipe = await pipeline('text-to-speech', model.modelId, {
           dtype: model.dtype ?? 'q8',
+          ...(useF16 ? {} : { device: 'wasm' as const }),
           progress_callback: (progress: LoadProgress) => {
             if (progress.status === 'progress') {
               this.touchLoadActivity();
@@ -714,6 +764,70 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     return job;
   }
 
+  /**
+   * One-shot generation for the voice picker, bypassing the job queue.
+   *
+   * A preview must not become a job: it would show up in the queue, get
+   * persisted to IndexedDB with the user's history, and count against the
+   * storage budget — all for a two-second "is this the voice I want" clip
+   * nobody asked to keep. So this calls the loaded custom engine directly
+   * and returns a WAV blob the caller can play and drop.
+   *
+   * Only custom (worker-backed) engines are previewable, and those are
+   * exactly the models with more than one voice. The transformers.js
+   * pipeline models (SpeechT5, MMS) have a single fixed voice each, so
+   * there is nothing to choose between and no preview button is shown.
+   *
+   * One preview at a time: the worker holds a single inference slot, and
+   * hammering it with a click per voice would queue them all behind each
+   * other anyway.
+   */
+  async preview(text: string, voiceId?: string, speed = 1): Promise<Blob> {
+    if (this.previewInFlight) {
+      throw new PreviewBusyError();
+    }
+    const model = this.currentModel;
+    if (!model) throw new Error('No model is loaded.');
+    if (!model.custom) {
+      throw new Error(`${model.name} has a single fixed voice, so there is nothing to preview.`);
+    }
+    if (this.getEngineState() !== 'ready') {
+      throw new Error('The model is still loading.');
+    }
+    const custom = customEngines.get(model.modelId);
+    if (!custom) throw new Error(`Custom engine for ${model.modelId} not registered`);
+
+    this.previewInFlight = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const startedAt = Date.now();
+      // Custom engines already bound each request internally, so this race
+      // is a belt-and-braces guard against a wedged worker; it also gives
+      // the caller a typed TimeoutError with the canonical wording. The
+      // timer is cleared on every exit path — auditioning twenty voices
+      // would otherwise leave twenty 3-minute timers pending.
+      const watchdog = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const elapsedMs = Date.now() - startedAt;
+          reject(new TimeoutError(
+            formatGenerateTimeout(elapsedMs),
+            { elapsedMs, engineKind: 'custom', requestType: 'generate' },
+          ));
+        }, REQUEST_TIMEOUTS.generate);
+      });
+      const result = await Promise.race([
+        custom.generate(model, voiceId, text, { speed }),
+        watchdog,
+      ]);
+      // Same peak-limiting the queue path applies: TTS output can exceed ±1
+      // and the WAV encoder would hard-clamp that into audible distortion.
+      return float32ToWav(limitPeaks(result.audio), result.samplingRate);
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.previewInFlight = false;
+    }
+  }
+
   cancel(jobId: string): void {
     const job = this.jobs.find(j => j.id === jobId);
     if (!job) return;
@@ -746,6 +860,25 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     }
   }
 
+  /**
+   * Re-attach previously-persisted jobs (see persistence.ts) at boot.
+   * Jobs keep their saved ids and chronological order; `pending` jobs
+   * resume FIFO once their model is loaded again. Restored `done` jobs
+   * get a fresh blob URL. Call once, with jobs oldest-first.
+   */
+  restoreJobs(restored: GenerationJob[]): void {
+    for (const job of [...restored].reverse()) {
+      if (this.jobs.some(j => j.id === job.id)) continue;
+      const n = Number(job.id.replace(/^job-/, ''));
+      if (Number.isFinite(n) && n >= this.nextJobId) this.nextJobId = n + 1;
+      if (job.status === 'done' && job.blob && !job.url) {
+        job.url = URL.createObjectURL(job.blob);
+      }
+      this.jobs.unshift(job); // newest at top, like enqueue()
+    }
+    this.notifyJobs();
+  }
+
   clearFinished(): void {
     // Revoke blob URLs of finished jobs so we don't leak memory. The user
     // keeps the active ones (pending/generating) so playback continues.
@@ -766,7 +899,11 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
     if (this.engineState !== 'ready') return;
 
     while (true) {
-      const next = this.jobs.find(j => j.status === 'pending');
+      // FIFO: dequeue the OLDEST pending job so queued text is spoken in
+      // the order it was added (and reader chunks synthesize in reading
+      // order). The jobs array is newest-first for display, so the oldest
+      // pending entry is the last one.
+      const next = this.jobs.filter(j => j.status === 'pending').pop();
       if (!next) break;
       if (this.currentModel?.id !== next.modelId) break; // need to load the right model first
       if (!this.pipe && !this.currentModel.custom) break;
@@ -831,8 +968,8 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           }));
           audio = result.audio;
           samplingRate = result.samplingRate;
-          // Engines that expose per-word start times (e.g. kokoro-js via
-          // `stream()`) populate this so the document reader can highlight
+          // Engines that expose per-word start times (e.g. Kokoro)
+          // populate this so the document reader can highlight
           // accurately across chunk boundaries.
           if (result.wordTimings) {
             next.wordTimings = result.wordTimings;
@@ -873,6 +1010,10 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
           continue;
         }
 
+        // TTS output can exceed ±1 (quantized vocoders, corrupt kernels);
+        // the WAV encoder hard-clamps those samples to the int16 ceiling,
+        // flattening peaks into audible distortion. Scale down instead.
+        audio = limitPeaks(audio);
         next.audio = audio;
         next.sampleRate = samplingRate;
         next.blob = float32ToWav(audio, samplingRate);
@@ -974,6 +1115,35 @@ function writeString(view: DataView, offset: number, str: string) {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));
   }
+}
+
+// ─── Peak limiting ───────────────────────────────────────────────
+// Some TTS models emit samples above ±1. float32ToWav hard-clamps those
+// to the int16 ceiling. For sustained over-modulation, scale the whole
+// clip to a 0.99 peak. For isolated transients (decoder edge clicks),
+// clamp just those samples — scaling a whole clip for a three-sample
+// spike would turn the rest of the speech into a whisper. In-range audio
+// is returned untouched.
+export function limitPeaks(audio: Float32Array, ceiling = 0.99): Float32Array {
+  let peak = 0;
+  let over = 0;
+  for (let i = 0; i < audio.length; i++) {
+    const a = Math.abs(audio[i]);
+    if (a > peak) peak = a;
+    if (a > ceiling) over++;
+  }
+  if (peak <= 1.0) return audio;
+  const out = new Float32Array(audio.length);
+  if (over / audio.length < 0.01) {
+    for (let i = 0; i < audio.length; i++) {
+      const v = audio[i];
+      out[i] = v > ceiling ? ceiling : v < -ceiling ? -ceiling : v;
+    }
+    return out;
+  }
+  const scale = ceiling / peak;
+  for (let i = 0; i < audio.length; i++) out[i] = audio[i] * scale;
+  return out;
 }
 
 // ─── Speed change via resampling ────────────────────────────────

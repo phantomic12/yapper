@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { KITTEN_VOICES, parseNpy, parseNpz } from './kitten';
+import { KITTEN_VOICES, parseNpy, parseNpz, trimDecoderArtifact } from './kitten';
 import { MODELS } from '../engine';
 
 // ─── .npy file builder (v1 format, the one Kitten uses) ──────────────
@@ -263,5 +263,51 @@ describe('Kitten URL construction', () => {
     const src = await fs.readFile('src/engines/kitten.ts', 'utf8');
     // No more 'huggingface.co/KittenML/' literal in the source
     expect(src).not.toMatch(/huggingface\.co\/KittenML\//);
+  });
+});
+
+describe('trimDecoderArtifact', () => {
+  const ramp = (n: number): Float32Array =>
+    Float32Array.from({ length: n }, (_, i) => i / n);
+
+  it('trims the full 5000 samples from a sentence-length clip', () => {
+    // 24000 samples (1s at 24kHz) loses exactly the artifact estimate.
+    expect(trimDecoderArtifact(ramp(24_000)).length).toBe(19_000);
+  });
+
+  it('never empties a short utterance', () => {
+    // The regression: a fixed 5000-sample cut turned "One." (~4000 samples)
+    // into a 44-byte silent WAV. At most a quarter of the clip is removed.
+    const short = ramp(4_000);
+    const out = trimDecoderArtifact(short);
+    expect(out.length).toBe(3_000);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('keeps a very short clip almost entirely', () => {
+    expect(trimDecoderArtifact(ramp(1_000)).length).toBe(750);
+    expect(trimDecoderArtifact(ramp(8)).length).toBe(6);
+  });
+
+  it('returns short clips untouched when the trim would round to zero', () => {
+    const tiny = ramp(3);
+    expect(trimDecoderArtifact(tiny).length).toBe(3);
+  });
+
+  it('handles an empty clip without throwing', () => {
+    expect(trimDecoderArtifact(new Float32Array(0)).length).toBe(0);
+  });
+
+  it('always leaves at least three quarters of the clip', () => {
+    for (const n of [1, 2, 3, 7, 100, 999, 4_999, 5_000, 5_001, 12_345, 24_000, 96_000]) {
+      expect(trimDecoderArtifact(ramp(n)).length, `n=${n}`)
+        .toBeGreaterThanOrEqual(Math.floor(n * 0.75));
+    }
+  });
+
+  it('preserves the surviving samples exactly', () => {
+    const input = ramp(4_000);
+    const out = trimDecoderArtifact(input);
+    for (let i = 0; i < out.length; i++) expect(out[i]).toBe(input[i]);
   });
 });

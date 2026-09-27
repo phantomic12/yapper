@@ -4,13 +4,16 @@
  * tell the difference between a slow download and a dead URL until minutes
  * in — so we catch this at build/test time.
  *
- * Skipped automatically when the test environment has no network (CI sandboxes,
- * offline devs). To force a run even offline, set YAPPER_LINK_CHECK=1.
+ * This half of the file needs the network, so it is opt-in: the default
+ * `npm test` run skips it (a DNS hiccup or a rate-limited CI runner must not
+ * turn a routine test run red) and `npm run test:links` turns it on. CI does
+ * exactly that as its own step, so the check still gates every push.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { MODELS, getSupportedLanguages, LANGUAGE_NAMES } from './engine';
 
+const LINK_CHECK = process.env.YAPPER_LINK_CHECK === '1';
 const NETWORK_TIMEOUT_MS = 15_000;
 
 interface Probe { ok: boolean; status: number; reason: string; url: string; }
@@ -31,12 +34,11 @@ async function probe(url: string): Promise<Probe> {
   }
 }
 
-describe('MODELS registry link health', () => {
+describe.skipIf(!LINK_CHECK)('MODELS registry link health', () => {
   let networkAvailable = true;
   let skipReason = '';
 
   beforeAll(async () => {
-    if (process.env.YAPPER_LINK_CHECK === '1') return;
     // Probe HuggingFace once — if this fails we mark the suite as skipped.
     try {
       const res = await fetch('https://huggingface.co/api/models/Xenova/mms-tts-eng', {

@@ -1,11 +1,22 @@
 import { defineConfig, type Plugin } from 'vite';
-import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
+import { syncPdfWorker } from './scripts/copy-pdf-worker.mjs';
 
 /**
  * Vite plugin: copies pdfjs-dist's worker into `public/` so the document
  * reader can find it at runtime without needing a Vite-specific import.
  * Runs on `build` so a fresh clone works out of the box.
+ *
+ * The work is done by scripts/copy-pdf-worker.mjs — the same function the
+ * postinstall hook runs — because the copy is not a plain copyFileSync: it
+ * prepends the engine shim the worker needs (see that file). This plugin
+ * used to do its own bare copy, which quietly overwrote the shimmed worker
+ * with one that dies on Chrome 128–139.
+ *
+ * buildStart, not closeBundle: the files land in public/, and Vite copies
+ * publicDir into dist/ after this hook — writing at closeBundle meant a
+ * fresh checkout shipped a dist with no worker at all.
  *
  * The worker is gitignored — see .gitignore — because it's a binary
  * vendored artifact, not source.
@@ -14,26 +25,11 @@ function copyPdfWorkerPlugin(): Plugin {
   return {
     name: 'copy-pdf-worker',
     apply: 'build',
-    closeBundle() {
+    buildStart() {
       // Vite sets config.root to the project directory at config-time. Use
       // it instead of import.meta.url, which resolves to dist/ after the
       // build runs.
-      const projectRoot = process.cwd();
-      const src = resolve(projectRoot, 'node_modules/pdfjs-dist/build/pdf.worker.mjs');
-      const destDir = resolve(projectRoot, 'public');
-      const dest = resolve(destDir, 'pdf.worker.mjs');
-      if (!existsSync(src)) {
-        // During `npm run build` on a fresh checkout the worker should be
-        // there from `npm install`. If it isn't, fail loud rather than
-        // ship a broken dist.
-        throw new Error(
-          `pdfjs-dist worker not found at ${src}. ` +
-          `Run \`npm install\` or check that pdfjs-dist is in dependencies.`,
-        );
-      }
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(src, dest);
-      console.log(`[copy-pdf-worker] copied ${src} → ${dest}`);
+      syncPdfWorker({ projectRoot: process.cwd(), required: true });
     },
   };
 }
@@ -96,6 +92,21 @@ function swCacheBustPlugin(): Plugin {
  * The output directory is gitignored (see `.gitignore`) — every
  * build regenerates these from `node_modules/onnxruntime-web/dist/*`.
  */
+/**
+ * Locate the onnxruntime-web dist directory whose build transformers.js
+ * actually loads. transformers may pin its own nested copy, in which case
+ * the hoisted top-level install is a different (or absent) version — so
+ * prefer the nested one and fall back.
+ */
+function resolveOrtDist(projectRoot: string): string {
+  const nested = resolve(
+    projectRoot, 'node_modules', '@huggingface', 'transformers',
+    'node_modules', 'onnxruntime-web', 'dist',
+  );
+  const topLevel = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
+  return existsSync(nested) ? nested : topLevel;
+}
+
 function copyOrtWasmPlugin(): Plugin {
   return {
     name: 'copy-ort-wasm',
@@ -104,12 +115,7 @@ function copyOrtWasmPlugin(): Plugin {
       const projectRoot = process.cwd();
       // Prefer the ORT version transformers.js actually pins (nested dep);
       // fall back to the top-level install when hoisted.
-      const hfOrtDist = resolve(
-        projectRoot, 'node_modules', '@huggingface', 'transformers',
-        'node_modules', 'onnxruntime-web', 'dist',
-      );
-      const topLevelDist = resolve(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
-      const ortDist = existsSync(hfOrtDist) ? hfOrtDist : topLevelDist;
+      const ortDist = resolveOrtDist(projectRoot);
       const destDir = resolve(projectRoot, 'public', 'ort-wasm');
       mkdirSync(destDir, { recursive: true });
       // Runtime loaders (.mjs) + binaries (.wasm): engine.ts sets
@@ -141,9 +147,61 @@ function copyOrtWasmPlugin(): Plugin {
   };
 }
 
+/**
+ * Vite plugin: serve the ORT runtime files from `/ort-wasm/` during `vite dev`.
+ *
+ * ORT loads its WASM runtime with a dynamic `import()` of
+ * `ort-wasm-simd-threaded.jsep.mjs`. That file lives in `public/ort-wasm/`
+ * (copied there by copy-ort-wasm on build, and by npm postinstall for dev),
+ * and as of Vite 8 the dev server refuses to serve anything under `public/`
+ * as a module:
+ *
+ *   "This file is in /public and will be copied as-is during build without
+ *    going through the plugin transforms, and therefore should not be
+ *    imported from source code. It can only be referenced via HTML tags."
+ *
+ * The dynamic import therefore 500s in dev, ORT reports "no available backend
+ * found", and every model that needs the WASM runtime fails to load — Kokoro
+ * included, since its engine points wasmPaths at the same directory. Production
+ * is unaffected: there the file is emitted into dist/ and imported as a normal
+ * module, which is what the copy-ort-wasm plugin is for.
+ *
+ * So in dev we bypass the transform middleware entirely and stream the file
+ * straight off disk. Registered as a pre-middleware (no returned function) so
+ * it runs before Vite's own transform handling.
+ */
+function serveOrtWasmInDevPlugin(): Plugin {
+  return {
+    name: 'serve-ort-wasm-dev',
+    apply: 'serve',
+    configureServer(server) {
+      const ortDist = resolveOrtDist(process.cwd());
+      const prefix = '/ort-wasm/';
+      server.middlewares.use((req, res, next) => {
+        const rawUrl = (req.url ?? '').split('?')[0];
+        if (!rawUrl.startsWith(prefix)) return next();
+        const file = resolve(ortDist, '.' + rawUrl.slice(prefix.length - 1));
+        // Contain the path inside the ORT dist dir — never let a crafted
+        // request escape it with ../.
+        if (!file.startsWith(ortDist) || !existsSync(file)) return next();
+        res.setHeader(
+          'Content-Type',
+          file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript',
+        );
+        res.setHeader('Cache-Control', 'no-cache');
+        createReadStream(file).pipe(res);
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [copyPdfWorkerPlugin(), copyOrtWasmPlugin(), swCacheBustPlugin()],
-  base: './',
+  plugins: [
+    serveOrtWasmInDevPlugin(),
+    copyPdfWorkerPlugin(),
+    copyOrtWasmPlugin(),
+    swCacheBustPlugin(),
+  ],
   build: {
     outDir: 'dist',
     target: 'es2022',
@@ -164,6 +222,19 @@ export default defineConfig({
       },
     },
   },
+  base: './',
+  // NOTE: cross-origin isolation (COOP same-origin + COEP require-corp) is the
+  // standard way to let ORT use its thread pool, and it is deliberately NOT
+  // enabled here. Measured on this machine with both headers set:
+  // `crossOriginIsolated` became true, but the inference worker's ORT init then
+  // failed outright ("Load failed", no message) and the main-thread path
+  // stalled past two minutes, versus a 2s load and 4.8s generation without
+  // them. `navigator.hardwareConcurrency` is 24 here, so ORT's thread pool
+  // oversubscribes badly on this box.
+  //
+  // Enabling it is a deployment decision, not a default: it also needs host
+  // support (GitHub Pages cannot set response headers at all) and it puts
+  // every cross-origin subresource behind CORP. See docs/threaded-wasm.md.
   optimizeDeps: {
     // @huggingface/transformers and pdfjs-dist pull in WASM + worker assets
     // at runtime; pre-bundling breaks the dynamic import / ?url resolution

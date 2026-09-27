@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   detectCapability,
+  detectAcceleration,
+  resetFeatureProbeCache,
   CAPABILITY_INFO,
   type CapabilityClass,
 } from './capability';
@@ -9,6 +11,15 @@ import {
 type GpuStub = {
   requestAdapter: (options?: { forceSoftware?: boolean }) => Promise<unknown>;
 };
+
+/** Adapter stub with an explicit `shader-f16` support answer. */
+function installAdapter(features: string[]): void {
+  installGpu({
+    requestAdapter: () => Promise.resolve({
+      features: { has: (f: string) => features.includes(f) },
+    }),
+  });
+}
 
 function installGpu(stub: GpuStub): void {
   (navigator as Navigator & { gpu?: GpuStub }).gpu = stub;
@@ -94,5 +105,72 @@ describe('detectCapability', () => {
     const info = await pending;
     expect(info.capability).toBe('partial');
     expect(info.label).toBe(CAPABILITY_INFO.partial.label);
+  });
+});
+
+describe('detectAcceleration', () => {
+  beforeEach(() => {
+    removeGpu();
+    // The f16 probe is cached per feature for the life of the page, which is
+    // right in production and wrong here: each test installs a new adapter.
+    resetFeatureProbeCache();
+  });
+  afterEach(() => {
+    removeGpu();
+    resetFeatureProbeCache();
+  });
+
+  it('reports GPU only when the adapter also has shader-f16', async () => {
+    installAdapter(['shader-f16']);
+    const info = await detectAcceleration();
+    expect(info.capability).toBe('full');
+    expect(info.acceleration).toBe('gpu');
+    expect(info.reason).toBe('f16-supported');
+    expect(info.degradedGpu).toBe(false);
+  });
+
+  it('reports CPU + degradedGpu for an adapter without shader-f16', async () => {
+    // The regression this exists for: the banner says "GPU-accelerated"
+    // while Kokoro-82M actually runs on the CPU at ~74s per short sentence.
+    installAdapter(['timestamp-query']);
+    const info = await detectAcceleration();
+    expect(info.capability).toBe('full');
+    expect(info.acceleration).toBe('cpu');
+    expect(info.reason).toBe('no-f16-support');
+    expect(info.degradedGpu).toBe(true);
+  });
+
+  it('reports plain CPU with no WebGPU at all', async () => {
+    const info = await detectAcceleration();
+    expect(info.acceleration).toBe('cpu');
+    expect(info.reason).toBe('no-webgpu');
+    expect(info.degradedGpu).toBe(false);
+  });
+
+  it('reports plain CPU when the adapter is unusable', async () => {
+    installGpu({ requestAdapter: () => Promise.resolve(null) });
+    const info = await detectAcceleration();
+    expect(info.capability).toBe('partial');
+    expect(info.acceleration).toBe('cpu');
+    expect(info.reason).toBe('adapter-unusable');
+    expect(info.degradedGpu).toBe(false);
+  });
+
+  it('probes each adapter feature only once per page', async () => {
+    let calls = 0;
+    installGpu({
+      requestAdapter: () => {
+        calls += 1;
+        return Promise.resolve({ features: { has: () => true } });
+      },
+    });
+    await detectAcceleration();
+    const afterFirst = calls;
+    await detectAcceleration();
+    // The second detection re-runs requestAdapter for the capability check,
+    // but the feature probe is served from cache — so at most two adapter
+    // requests total, not three.
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(calls - afterFirst).toBeLessThanOrEqual(1);
   });
 });

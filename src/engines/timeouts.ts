@@ -61,6 +61,22 @@ export class TimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown when a voice preview is requested while one is already generating.
+ *
+ * Synthesis is not instant (Kokoro takes seconds even for one short line), so
+ * a user auditioning voices will keep clicking. Inference cannot be safely run
+ * twice at once, so the engine refuses the second request and the UI disables
+ * its audition buttons until the first settles, rather than silently queueing
+ * work the user never asked for.
+ */
+export class PreviewBusyError extends Error {
+  constructor() {
+    super('A voice preview is already playing. Wait for it to finish.');
+    this.name = 'PreviewBusyError';
+  }
+}
+
 /** Internal sentinel: a load was aborted because the user asked for a retry. */
 export class LoadAbortedError extends Error {
   constructor() {

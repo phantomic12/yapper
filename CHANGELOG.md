@@ -5,7 +5,237 @@ All notable changes to Yapper are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+- **Kokoro no longer hangs — the "worker slowdown" is fixed at the root.**
+  The engine used to call the `kokoro-js` package, which pins its own nested
+  `@huggingface/transformers` 3.8.1 + onnxruntime-web 1.22.0-dev, and that
+  stack's forward pass never returned in this app: main thread or worker,
+  WebGPU or WASM, every generation stalled until the 180s watchdog killed the
+  job. Every piece was verified healthy in isolation (ORT session create,
+  tokenizer, phonemizer, voice fetch) — only kokoro-js's model call hung.
+  `src/engines/kokoro.ts` now builds the same tiny pipeline directly on the
+  app's own `@huggingface/transformers` 4.3.0 (the ORT build Kitten already
+  uses in the worker): phonemize sentence → tokenize → style-vector row for
+  the token count → StyleTextToSpeech2 → 24 kHz waveform, with per-sentence
+  progress and word timings preserved. Measured on the machine that saw the
+  stalls: a sentence loads in ~1.4s and generates 2.6s of audio in ~4.3s,
+  end to end through the inference worker. `kokoro-js` is dropped from
+  dependencies (`phonemizer` is now declared directly).
+- **Kokoro device selection no longer assumes `device: null` means WebGPU.**
+  In transformers 3.8.1 (and 4.3.0), `device: null` resolves to the WASM
+  execution provider — the previous "null lets ORT prefer WebGPU" comment was
+  wrong, and the previous never-pin-WebGPU choice silently CPU-bound every
+  session. When the adapter has `shader-f16` the GPU is now requested
+  explicitly, with an automatic WASM retry if session creation fails; without
+  `shader-f16` WASM stays pinned (`chooseKokoroRuntime`).
+- **SpeechT5 removed from the model picker.** The card looked functional but
+  could only produce noise: SpeechT5 is a text→mel model, and a usable card
+  needs the processor plus a HiFi-GAN vocoder that transformers.js does not
+  assemble for this checkpoint (documented in `docs/tts-model-landscape.md`).
+  Models can now carry a `hidden` flag, exposed to the picker via
+  `visibleModels()`; hidden entries still resolve by id so persisted settings
+  and historical job records keep working.
+- **The OCR mode choice persists across reloads — and its radio buttons now
+  show it.** `yapper.settings.v1` gained an `ocrMode` field (validated on
+  read), and the mode selector's radios are synced from restored state at
+  bind time; previously a saved "LLM" choice rendered visually as tesseract
+  while state still held `llm`.
+- **The headless e2e suite is safe to run on the developer's own Windows
+  machine and passes end to end (all 23 steps).** The old runner was
+  Linux-only and its cleanup would have killed the user's desktop Chrome;
+  `scripts/run_e2e_windows.sh` launches its own isolated headless Chrome
+  (temp profile, debug port 9223, dedicated dev port 5179) and kills only
+  the browser it started — discovered via the real Windows PID of the debug
+  socket, because Git Bash's `$!` is a bash job PID and killing that orphaned
+  Chrome (which then poisoned later runs through a stale CDP port). It also
+  refuses to run against an already-occupied CDP port instead of testing a
+  ghost. `e2e_test.py` got two robustness fixes: the render step polls for
+  the app to mount instead of a fixed 2s sleep (a cold profile can pay
+  seconds of Vite transforms), and the Kokoro step no longer demands a
+  click on the load button that auto-load turned into a status pill.
+  `scripts/cleanup-e2e-profiles.ps1` recovers locked temp profiles from runs
+  interrupted before their EXIT trap fired. Three bugs in that runner surfaced
+  while extending the suite, all of which made a run fail as a blank page
+  rather than as an error: it exported `YAPPER_URL` *before* the
+  `[ -z "$YAPPER_URL" ]` test that decides whether to boot a dev server, so
+  that branch was dead code and Chrome was pointed at a dead port; it probed
+  `127.0.0.1` while Vite's default `localhost` binds the IPv6 loopback only on
+  this machine, so the readiness check timed out against a healthy server (now
+  pinned with `--host 127.0.0.1`); and it reaped the leftover Vite child with
+  `pkill -f`, which Git Bash on Windows does not have, so every run left the
+  port occupied and the next one refused to start. Vite is now reaped by the
+  PID holding the port, the same way Chrome already was.
+
+### Fixed
+- **The unit suite no longer depends on jsdom's object-URL internals**, which
+  unblocks the jsdom 30.1 bump (Renovate PR #60). jsdom's
+  `URL.createObjectURL` goes through Vitest's `makeCompatBlob`, which locates
+  jsdom's internal blob impl by reading the *first own symbol* off a `Blob`.
+  jsdom 30.1 moved that impl out of a symbol and into a private `#impl` class
+  field, so a Blob has no own symbols, the lookup is `undefined`, and every
+  call throws `Cannot read properties of undefined (reading '_buffer')`. The
+  throw lands in the job loop immediately after a clip is synthesised — at
+  `URL.createObjectURL(next.blob)` — so a perfectly good generation became a
+  job error and 14 tests failed. Upstream as vitest-dev/vitest#11336; the
+  suite now hands out deterministic `blob:` URLs from `src/test-setup.ts`
+  instead, which is all the app ever promised (a finished job carries a usable
+  URL). Verified green on both jsdom 30.0.1 and 30.1.1.
+
+### Changed
+- **The simple view no longer shows download sizes.** Somebody who opened a
+  text-to-speech site to hear a sentence read back does not need to know that
+  the "High" preset is a 156MB download, and every place a figure leaked into
+  the short path is now behind the More toggle: the quality presets read
+  "Fastest / Natural voices / Best fidelity" with the size in a
+  `data-advanced` chip, model names are just names ("Kokoro-82M" rather than
+  "Kokoro-82M (int8)" and "Kitten TTS Nano" rather than "Kitten TTS Nano
+  (~24MB)"), and the live download line shows a percentage to everyone and
+  megabytes to the advanced view. Nothing was deleted — the size ladder is one
+  toggle away, and the preset tooltips were cleaned of it too, since a hover
+  is still the simple view.
+- **A new `data-simple` mark, the mirror of `data-advanced`.** Some copy
+  belongs only to the short path, and it needed a way to say so that the
+  stylesheet can act on. The fp16-fallback warning is the case in point: it
+  stays visible in both views — it is true regardless of mode — but the
+  simple view is told the consequence in the preset row's own words ("High
+  quality runs the standard one instead") while the mechanism, model names and
+  byte counts wait one click away. Both marks are attributes in the markup,
+  so flipping the toggle is a repaint and never a re-render.
+- **A regression guard for the rule, in two places.** The unit suite walks
+  the mounted markup and fails if any size figure appears outside a
+  `data-advanced` subtree; the e2e suite does the same against live computed
+  styles, so a region the stylesheet failed to hide is caught there too. The
+  one deliberate exception is the 25MB document upload cap, pinned by its own
+  test: that is a limit to respect before choosing a file, not a description
+  of what the app is downloading.
+- **`e2e_test.py` accepts `YAPPER_E2E_ONLY`** to run just the matching steps
+  (the three bootstrap steps always run), so a single area can be re-checked
+  without sitting through the real model downloads. It matches shell-style
+  patterns rather than substrings — with a substring filter, `mode` also
+  matched `select_model` — and a pattern that matches nothing is reported as
+  a typo instead of cheerfully "passing" the three bootstrap steps.
+- **`scripts/run_e2e.sh` no longer kills the developer's own dev server.** Its
+  startup `pkill -f "vite"` matched any Vite on any port; it now reaps only
+  the process holding the run's own port and refuses to continue if something
+  else is squatting on 5173, which is the same contract the Windows runner
+  already had. Its cleanup reaped Vite with `pkill -f "vite --port 5173"`, a
+  string that appears in no real command line (it is `node …/vite.js --port
+  5173 …`), so the server survived every run and the next one refused to
+  start.
+- **`splitSentences` is now covered directly** (10 tests in
+  `src/engines/kokoro.test.ts`). It decides where a sentence ends, which is
+  what the per-segment progress and word timings in the job card are built
+  on, so a regression there would not throw — it would quietly shatter
+  "3.14" into two segments. Decimals, closing quotes/brackets, newlines,
+  ellipses, an unterminated trailing fragment, and the deliberately
+  not-abbreviation-aware behaviour are all now pinned.
+
 ### Added
+- **No more "Download & Load Model" step — Speak just works**: picking  a quality preset, a model, or a voice now pulls the model down automatically
+  in the background, and the text box, Speak and Play are usable from the
+  first paint. Type and press Speak while the model is still downloading and
+  the job queues and runs the moment the bytes land (the engine drains its
+  queue on ready). The old full-width download button is now a quiet
+  status/retry pill ("Downloading…" → "✓ ready" → "Retry download"); it still
+  works as a manual reload but is never required. Play streams the same way —
+  press it early and it loads, then starts.
+- **Quality presets (Low / Medium / High)**: the default view chooses a model
+  with one of three words instead of a wall of cards. Each preset is a *real*
+  model, so the control stays honest rather than a placebo slider — Low is
+  Kitten TTS Nano (fastest), Medium is Kokoro-82M int8 (where the natural
+  voices live), High is Kokoro-82M fp16 (best fidelity, auto-falling back to
+  int8 on GPUs without `shader-f16`). Their download sizes are shown in the
+  advanced view, not here. The presets are a
+  view over model selection, not a second source of truth: pick an off-ladder
+  model (an MMS language model) in the advanced grid and no preset lights up
+  while the bar reads "Custom". (`src/quality-presets.ts`.)
+- **A bottom bar for the settings that don't belong on the short path**:
+  theme and the "More" toggle live on a fixed bar at the foot of the page,
+  which also carries a live readout of the selected model and quality preset.
+  "More" reveals every advanced region inline and flips to "Less" while they
+  are showing, so the dev controls are one unobtrusive tap away without
+  sitting in the header.
+- **A simple view, with the knobs one toggle away**: the app opens on the
+  short path — quality presets, its voices, the
+  text box and the two buttons — and the thirteen-card model grid, the
+  language filter, the speed slider, the storage-budget line, the download /
+  clear controls and the GPU status row sit behind the bottom bar's "More"
+  toggle. Switching models is one click on a preset (or the full grid one
+  tap away in "More"), so it is never a hunt for a settings toggle. Like the theme, the whole thing is one
+  attribute on `<html>` (`src/advanced-mode.ts`) and the stylesheet hides
+  every `[data-advanced]` region, so the CSS and the JS cannot disagree
+  about what counts as advanced. The choice persists, and an inline `<head>`
+  script applies it before first paint so the grid does not flash into view.
+  Warnings are deliberately *not* behind the toggle: if the selected model
+  runs on the main thread, or an fp16 model quietly resolved to int8, that
+  is true in either view, and hiding it would trade a cluttered screen for a
+  surprised one.
+- **Light and dark themes**: a header control cycles Auto (follow the OS) →
+  the opposite of the current appearance → the other explicit theme, and the
+  choice persists across reloads. The palette was already entirely custom
+  properties, so the switch is one attribute on `<html>`; a small inline
+  script in `<head>` applies the stored theme before first paint so nobody
+  gets a white flash on a dark page (or vice versa). The classified-block
+  colours get darker equivalents in light mode — the pastel set was tuned for
+  a near-black surface and falls under 3:1 on white.
+- **Honest half-precision notice**: when the WebGPU adapter exists but lacks
+  the `shader-f16` feature, the model panel now says so and explains that fp16
+  cards (Kokoro-82M fp16) quietly resolve to the 88MB int8 build instead of the
+  156MB fp16 one. `detectAcceleration()` in `src/capability.ts` collapses the
+  capability class and the f16 probe into the one question the UI needs, and
+  reports the "adapter works but can't run our kernels" case that the
+  three-class banner cannot express.
+- **Streaming playback**: a Play button and stream bar that start reading
+  the text box out loud, sentence by sentence, while synthesis is still
+  running. Audio is scheduled in overlapping parts (`src/ui/stream-player.ts`)
+  with a two-part lookahead, so speech starts after the first chunk instead of
+  waiting for the whole document. Pause/Stop and a "speaking sentence" readout
+  are available throughout.
+- **Karaoke word highlighting in the stream bar**: the "now speaking" line
+  marks the individual word being read instead of reprinting the whole sentence
+  every timeupdate. `splitAtWord` (`src/karaoke.ts`) cuts the sentence into
+  before/active/after parts that always rejoin to the original text, so only
+  the emphasis changes; a word that cannot be located falls back to the plain
+  sentence rather than a blank line. Measured in the browser with Kitten Nano:
+  17 repaints for 17 words, versus ~865 before the change — the reader session
+  reports the active word on every audio `timeupdate`, so the repaint is gated
+  on the word actually changing.
+- **Persistence across reloads**: model, voice, speed, draft text, and language
+  filter are saved to `localStorage`, and the generation history (with playable
+  audio) is stored in IndexedDB under `yapper` / `jobs`
+  (`src/persistence.ts`). Jobs that were mid-generation when the tab closed come
+  back as pending rather than stuck. Writes are debounced and flushed on
+  `pagehide`.
+- **Download all as one file**: every finished clip is concatenated oldest-first
+  into a single WAV audiobook (`src/audio-export.ts`, 0.35s gaps, resampled to
+  the highest clip rate so mixed-rate histories don't sound pitch-shifted).
+- **Two-page UI with a Document Reader**: the app is now split into Studio
+  (models, voice, text, queue) and Reader (upload, OCR, extraction), with
+  hash-routed pill tabs (`src/ui/page-nav.ts`). Includes a visual refresh —
+  ambient gradient background, gradient hero text, page-transition animation,
+  and hover lift on primary actions.
+- **Structure-aware rendering for classified blocks**: the Reader page was
+  rendering every classified block as one flat run of escaped text, which threw
+  away the structure the classifier had just worked out. Tables now render as
+  real tables (parsed from either markdown pipes or the column-aligned spacing
+  extraction produces), code as a whitespace-preserving `<pre>` with its fence
+  stripped, lists as `<li>` items without doubled bullet glyphs, quotes as
+  `<blockquote>`, headings as headings. Rows, columns and text length are all
+  capped, and the caps say how much was hidden — a one-column "table" falls back
+  to a paragraph rather than rendering a pointless grid.
+- **A sample document on the Reader page**: "No document handy? Read a sample"
+  under the drop zone loads a built-in passage (`src/sample-document.ts`)
+  through the real extraction, classification and reader pipeline, so a
+  first-time visitor can see what the Reader does without going to find a
+  PDF. The sample is deliberately shaped to exercise every block kind the
+  classifier knows — heading, paragraph, list, quote, table — and a test
+  fails if one of them stops being recognised.
+- **Document structure classification**: extracted text is split into blocks and
+  labelled heading / paragraph / list / quote / code / table, using both text
+  heuristics and PDF layout geometry (`src/document-classify.ts`). The Reader
+  page shows a count chip per kind and a card per block, each with its own
+  Speak button. PDF heading detection uses the block's width and position
+  relative to the widest block on the page.
 - **Live generation progress** on job cards. A `jobProgress` heartbeat
   (~500ms) from `TTSEngine.processQueue` drives a ticking seconds counter,
   an indeterminate progress bar, and — for Kokoro's streaming path — a
@@ -17,9 +247,133 @@ All notable changes to Yapper are recorded here. Versions follow
   and on engine dispose.
 - **E2E coverage**: `assert_progress_ticks` (card text changes ≥2x in 3s
   during kitten-nano generation) and `kokoro_segment_progress`
-  (multi-sentence input shows segment markers) steps in `e2e_test.py`.
+  (multi-sentence input shows segment markers) steps in `e2e_test.py`, plus
+  three reader steps: `load_sample_document` (the sample fills the panel with
+  classified blocks and a real table), `pause_resume_reader` (Pause holds the
+  highlight still and Resume brings it back — the label transition is the only
+  signal the app gives, and a single reading would pass even with audio still
+  playing), and `upload_scanned_pdf_ocr` (OCR toggle on, an image-only PDF
+  fixture, and per-line layout blocks — the path that was silently returning
+  nothing). The scanned fixture is generated by
+  `e2e/fixtures/make_scanned_pdf.py`. All 21 steps pass.
 
 ### Fixed
+- **No PDF would load on Chrome 128–139**: pdfjs-dist 6.3 calls several ES2025
+  built-ins without a feature check — `Uint8Array.prototype.toHex` in the
+  document-fingerprint path, `Map/Set.prototype.getOrInsertComputed` in its
+  message tables — all of which postdate the engine floor this app advertises.
+  On those versions every PDF import died with `hashOriginal.toHex is not a
+  function`, an error that names nothing the user can act on, so the reader's
+  headline format was simply unavailable. `src/pdfjs-engine-shim.js` defines
+  them when missing (and only then, so current engines keep the native
+  implementations); it is imported by the main thread and prepended to the
+  pdfjs worker bundle, which has its own global scope and cannot inherit a
+  main-thread patch.  `Promise.try` is deliberately *not* shimmed — that one is the
+  documented engine gate. Verified on Chrome 130, where the same import
+  previously threw.
+- **The build shipped a pdfjs worker without the engine shim** (and, on a
+  checkout that skipped `postinstall`, no worker at all): `vite.config.ts` and
+  `scripts/copy-pdf-worker.mjs` were two copies of the same plain
+  `copyFileSync`, and the build ran last. Both now call one exported
+  `syncPdfWorker()`, and the Vite half moved from `closeBundle` to
+  `buildStart` so the files land in `public/` before Vite copies it to `dist/`.
+- **OCR returned zero characters for every scanned PDF**: tesseract.js returns
+  its geometry as blocks → paragraphs → lines → words, and `data.words` — the
+  flat array `src/ocr.ts` read — does not exist in this version (nor in the
+  library's own typings). Recognition worked perfectly and the reader then
+  grouped no words into no lines, producing a 0-character document with no
+  error anywhere: the OCR toggle appeared to do nothing. The hierarchy is now
+  walked, and text-without-words raises a named error instead of returning an
+  empty result. The unit test had mocked the v4 shape, which is how this
+  survived; it now mocks the real one.
+- **Pause then Resume left the reader stuck**: `resumeAfterGesture()` only
+  resumed when autoplay had been blocked, so pressing Pause and then Resume
+  did nothing at all — the button said Resume, the click was inert, and Stop
+  was the only way out. Being inside a user gesture is a property of the
+  *caller*, not a precondition on the state, so it now resumes from any
+  paused state and stays a no-op only while already playing.
+- **Quoted blocks showed their ">" markers**: the block renderer strips the
+  bullet from list items (which otherwise showed a doubled glyph) but passed a
+  blockquote's `>` straight through, so a quotation in a real document rendered
+  as a line of angle brackets. Every line's marker is now dropped, the same way
+  the list branch does it.
+- **Kokoro could not load at all**: kokoro-js bundles its own copy of
+  `@huggingface/transformers` (3.8.1) and its own `onnxruntime-web` instance, so
+  the `wasmPaths` that `src/engine.ts` configures for the app's top-level
+  transformers never reached the environment that Kokoro sessions are actually
+  created in. Unconfigured, transformers falls back to the jsdelivr CDN, which
+  the app's CSP (`script-src 'self'`) blocks, so every Kokoro load failed with
+  "no available backend found" — verified on a fresh page through the real UI.
+  `src/engines/kokoro.ts` now sets `env.wasmPaths` (a live accessor onto that
+  nested ORT env) to the same locally-copied runtime the rest of the app uses.
+  Kokoro now loads in ~2s and generates normally.
+- **ORT's WASM runtime was unresolvable in `npm run dev`**: as of Vite 8, the dev
+  server refuses to serve anything under `public/` as an ES module ("This file
+  is in /public ... should not be imported from source code"), so ORT's dynamic
+  `import()` of `/ort-wasm/ort-wasm-simd-threaded.jsep.mjs` returned a 500 and
+  every model that needs the WASM runtime failed locally. Production is
+  unaffected — the file is emitted into `dist/` and imported normally. A dev-only
+  middleware now streams those files straight off disk, matching the build
+  output exactly.
+- **Kokoro was demoted to the CPU for no reason**: the engine assumed the
+  `q8` Kokoro card downloads `model_q8f16.onnx` and pinned the WASM execution
+  provider on adapters without `shader-f16`. It does not — transformers.js maps
+  `q8` to the `_quantized` suffix, i.e. `model_quantized.onnx`, which is int8
+  weights with **fp32** compute and no f16 anywhere. The card was therefore GPU
+  capable and being sent to the CPU regardless. The WASM pin is gone (ORT picks
+  its own provider now), only the genuinely f16 graphs (`fp16`, `q4f16`) get
+  substituted with the int8 build, and those substitutions stay on the GPU.
+  Measured on an f16-less adapter, a 44-character sentence takes 4.8s on WASM
+  and 5.4s on WebGPU — normal for this model, and the reason no "your CPU is too
+  slow" warning ships: the slowness it would have warned about was not real.
+- **The model registry described files it never downloaded**: the Kokoro cards
+  claimed `model_q8f16.onnx` and a 156/163MB fp16 download. Corrected to the
+  files transformers.js actually resolves (`model_quantized.onnx` at 88MB,
+  `model_fp16.onnx` at 156MB), with a test that pins both.
+- **The service worker is no longer registered in development**: its
+  cache-first app-shell strategy kept serving the module graph it saw first, so
+  edited source could look unchanged in the browser for minutes — which read as
+  a broken build and sent this investigation down the wrong path twice.
+  Registration moved from an inline script in `index.html` to `src/main.ts`
+  behind `import.meta.env.PROD`.
+
+- **Kitten output was garbled**: the bundled `voices.npz` style bank is indexed
+  by *token count*, not by voice, and the engine was always reading row 0 —
+  producing a ~1.35s burst of noise with a peak near 20 instead of speech. The
+  row is now selected by the clip's token count, per-voice `speed_priors` are
+  read from the model's `config.json` and multiplied into the user's speed
+  setting, and 5000 samples of trailing decoder artifact are trimmed. Typical
+  sentence now renders in ~3s at peak 0.77 with natural prosody.
+- **Queue ran newest-first**: `processQueue` picked the first *pending* job in
+  insertion order, which meant the most recently added item jumped the queue.
+  Scheduling is now FIFO, and the "Nth in queue" labels were recounted to match
+  (the list is rendered newest-first, so positions were being counted backwards).
+- **Clipped/over-modulated audio**: a `limitPeaks` stage now scales a clip only
+  when it is genuinely over-modulated, clamping isolated spikes (under 1% over)
+  instead of attenuating the whole waveform.
+- **Console storm and wrong audio on f16-less GPUs**: ORT's WebGPU kernels for
+  these models are generated with WGSL `f16` storage. Adapters without the
+  `shader-f16` feature failed WGSL validation on every kernel and produced bad
+  audio. The execution provider is now pinned to WASM when the adapter lacks
+  `shader-f16` (`webgpuAdapterHasFeature` in `src/capability.ts`).
+- **Short utterances were silenced entirely**: Kitten trimmed a fixed 5000
+  samples of trailing decoder artifact, which both reference implementations
+  also do — but they assume the decoder always emits at least that much speech
+  first. It doesn't for the fragments people actually type: "One." decodes to
+  ~4800 samples, so `length - 5000` floored at zero and the clip was a 44-byte
+  WAV header with no audio in it. The trim is now capped at a quarter of the
+  clip, so sentences still lose the artifact while short ones survive. Found by
+  noticing that the new storage footer reported 88 B for two finished clips.
+- **Persisted audio grew without bound**: every clip was written to IndexedDB
+  forever, so a long-running session would eventually hit the origin quota —
+  and the writes that fail first are the newest ones, i.e. exactly the clip
+  the user just generated. The store is now trimmed to a budget (24 clips /
+  64MB) keeping the newest audio, a `QuotaExceededError` retries once with a
+  halved budget, and the queue footer says how much is actually kept so drops
+  are never silent.
+- **A 26px phantom sliver** rendered under the queue whenever the queue count was
+  zero, because the stylesheet's `display: flex` beat the `hidden` attribute.
+  `hidden` is now forced globally.
 - **Silent PDF extraction failures**: on engines without `Promise.try`
   (Chrome < ~128), pdfjs 6's worker protocol hangs instead of rejecting —
   every extraction died as an unhandled rejection while the document panel
@@ -42,6 +396,59 @@ All notable changes to Yapper are recorded here. Versions follow
   workers now climb one level (`<deploy-root>/assets/` → deploy root) and
   dev-server modules two, independent of deploy depth; full e2e re-run
   green against dist served under a `/yapper/` subpath.
+
+
+### Changed
+- **The network link check only ran when you asked for it**: `npm test` probed
+  every HuggingFace model URL on each run, so a DNS hiccup or a rate-limited
+  runner could fail the suite for a reason that has nothing to do with the
+  change under test — and it cost 1.3s of every run. The network half of
+  `src/links.test.ts` is now opt-in via `YAPPER_LINK_CHECK`, which
+  `npm run test:links` sets through a dedicated `vitest.links.config.ts`
+  instead of the `YAPPER_LINK_CHECK=1 vitest ...` shell prefix (POSIX syntax
+  that cmd.exe reads as a program name, so the command never worked on
+  Windows). CI already runs the check as its own step, so it still gates every
+  push; the default run drops from 1.3s to 2ms and can no longer go red on a
+  network blip.
+- **The e2e suite could not get through the two-page layout**: the document
+  flow moved to the Reader tab, but the harness went straight for
+  `#read-document-btn` while that page was still `hidden`. `DOM.getBoxModel`
+  returns nothing for a hidden node, so the step died on "could not measure
+  ... position". Added `switch_to_reader` / `switch_to_studio` steps that
+  activate the real tab (exercising the hash routing the app ships) and wait
+  for the panel to become visible.
+- **Trusted clicks could miss controls below the fold**: the harness measures a
+  button and clicks those coordinates without scrolling, so on the tall Reader
+  page the click landed elsewhere and the step timed out waiting for a state
+  change the click never caused. Clicks now go through a shared
+  `_click_trusted` helper that scrolls the control into view, re-measures, then
+  clicks. This was masking the reader flow as broken when it works.
+- **The e2e harness could not report failures on Windows**: step markers are
+  ✓ / ✗ / ❌, and a cp1252 console raises `UnicodeEncodeError` while printing
+  the *first* failure — so the run died with a traceback instead of a result.
+  stdout/stderr are now reconfigured to UTF-8 on startup.
+
+### Documentation
+- **`docs/tts-model-landscape.md`**: which TTS models can run in a browser at
+  all, and why. transformers.js's supported-architecture list is a hard
+  ceiling — Dia, F5-TTS, Fish Speech, Qwen3-TTS and friends are not reachable
+  here without hand-writing an ONNX pipeline per model — so Kokoro is
+  effectively the quality ceiling for a browser TTS app today. The note also
+  records the two candidates that looked viable and were not:
+  Kokoro-82M-v1.1-zh (adds Mandarin, but kokoro-js has no Chinese G2P, so it
+  would load and produce garbage) and Supertonic-TTS-2 (5 languages, but no
+  quantized build at all — 262MB of fp32 for a browser download). Nothing was
+  added to the registry; the one real gap is Chatterbox's zero-shot voice
+  cloning, which is supported and has ONNX exports.
+- **`docs/threaded-wasm.md`**: why cross-origin isolation is not enabled by
+  default. COOP + COEP is the standard lever for ORT's thread pool, but
+  measured here it made things worse — the inference worker's ORT init failed
+  outright and the main thread stalled past two minutes, against a 2s load and
+  4.8s generation without the headers (`hardwareConcurrency` is 24 on the test
+  machine, so the default thread pool oversubscribes). The doc records the
+  measurements, how to cap `numThreads` before trying it, the host requirements
+  (GitHub Pages cannot set response headers at all), and what else to re-check
+  under `require-corp`.
 
 ## [0.2.0] - 2026-08-24
 
