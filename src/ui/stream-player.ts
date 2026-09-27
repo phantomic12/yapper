@@ -2,6 +2,7 @@ import { DocumentReaderSession, type ReaderState } from '../reader';
 import type { AppState } from '../app-state';
 import { showStatus } from '../dom-utils';
 import { splitAtWord, type SplitSentence } from '../karaoke';
+import { ensureModelLoaded } from './model-panel';
 
 // ─── Streaming playback ──────────────────────────────────────────
 // "Play" speaks the textarea content while it is still generating: the
@@ -78,7 +79,7 @@ export function bindStreamPlayer(state: AppState): void {
     pauseBtn.disabled = false;
   };
 
-  playBtn.addEventListener('click', () => {
+  playBtn.addEventListener('click', async () => {
     // A paused autoplay-blocked session resumes from the same button.
     if (session && session.getState().needsUserGesture) {
       session.resumeAfterGesture();
@@ -90,9 +91,14 @@ export function bindStreamPlayer(state: AppState): void {
     }
     const text = textInput.value.trim();
     if (!text) return;
-    if (!state.engine || state.engine.getEngineState() !== 'ready') {
-      showStatus('error', 'Load a model first, then press Play.');
-      return;
+    if (!state.engine) return;
+    // No manual "Download & Load" step: if the model is not in memory yet,
+    // load it and start playing the moment it lands.
+    if (state.engine.getEngineState() !== 'ready') {
+      showStatus('success', 'Loading the model — playback starts when it is ready.');
+      await ensureModelLoaded(state);
+      // A failed load leaves a Retry banner; don't try to play past it.
+      if (state.engine.getEngineState() !== 'ready') return;
     }
     session?.stop();
     session = new DocumentReaderSession(state.engine, text, {
@@ -134,9 +140,11 @@ export function bindStreamPlayer(state: AppState): void {
 
   stopBtn.addEventListener('click', stop);
 
-  // The Play button mirrors the generate button's readiness gating.
+  // Play is never gated on readiness — clicking it while the model loads just
+  // waits and starts (see the handler above). But if the model goes away
+  // mid-playback, stop cleanly rather than playing against a dead session.
   state.engine?.on('engineStateChange', (engineState) => {
-    playBtn.disabled = engineState !== 'ready';
+    playBtn.disabled = false;
     if (engineState !== 'ready' && session) stop();
   });
 }

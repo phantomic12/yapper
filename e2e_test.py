@@ -5,7 +5,7 @@ Drives a real Chrome instance through the full TTS workflow:
   1. Load the page
   2. Confirm model grid renders
   3. Pick a small model (Kitten TTS Nano, ~24MB, fast on CPU)
-  4. Click "Download & Load Model" and wait for ready state
+  4. The selected model auto-downloads; wait for the ready state
   5. Type text and click Generate
   6. Verify a job card appears and produces an audio blob
   7. Upload a TXT document and verify extracted text renders as sentences

@@ -8,6 +8,7 @@ import { concatenateClips, type AudioClip } from '../audio-export';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
 import { voiceDisplayLabel } from '../voice-preview';
+import { ensureModelLoaded } from './model-panel';
 
 // ─── Job list render ─────────────────────────────────────────────
 //
@@ -386,6 +387,11 @@ export function bindJobQueueEvents(state: AppState): void {
       return;
     }
 
+    // No manual "Download & Load" step: if the model is not in memory yet,
+    // start loading it now. The job is queued immediately and the engine runs
+    // it the moment the model reaches 'ready', so pressing Speak works even
+    // while the download is still in flight.
+    void ensureModelLoaded(state);
     state.engine!.enqueue(text, {
       modelId: state.selectedModel.id,
       voiceId,

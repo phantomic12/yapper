@@ -390,18 +390,20 @@ body {
 .model-card__tag--premium { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
 
 /* ─── Load Button ─────────────────────────────────────────── */
+/* The download control is a status readout + retry, not a required step:
+   the model auto-loads on selection and on first Speak. So it is deliberately
+   a quiet secondary pill rather than the big primary CTA it used to be. */
 .load-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 100%;
-  padding: 14px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--accent-glow);
-  color: var(--accent);
-  font-size: 0.9rem;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -410,18 +412,18 @@ body {
 }
 
 .load-btn:hover:not(:disabled) {
-  background: var(--accent);
-  color: white;
+  border-color: var(--border-focus);
+  color: var(--text);
 }
 
 .load-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .load-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 /* ─── Progress Bar ────────────────────────────────────────── */
@@ -2150,12 +2152,7 @@ body::before {
 }
 
 .load-btn {
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-.load-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
 /* ─── Light-theme corrections for the visual refresh ───────────

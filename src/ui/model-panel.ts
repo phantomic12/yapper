@@ -288,6 +288,8 @@ function bindVoiceCardEvents(state: AppState, grid: HTMLElement): void {
       }
       state.selectedVoiceId = card.dataset.voiceId;
       syncVoiceSelection(state);
+      // Picking a voice also pulls the model down if it is not already there.
+      void ensureModelLoaded(state);
     });
     card.addEventListener('keydown', (e) => {
       const target = e.target as HTMLElement;
@@ -308,6 +310,7 @@ function bindVoiceCardEvents(state: AppState, grid: HTMLElement): void {
         e.preventDefault();
         state.selectedVoiceId = card.dataset.voiceId;
         syncVoiceSelection(state);
+        void ensureModelLoaded(state);
       }
     });
   });
@@ -317,6 +320,8 @@ export function bindModelPanelEvents(
   state: AppState,
   opts: { onModelLoaded?: () => void } = {},
 ): void {
+  modelLoadedHook = opts.onModelLoaded ?? null;
+
   // Bind model card clicks and keyboard nav. The card is a div with
   // role="radio" (you can't put a <button> inside a <button> — the
   // browser's HTML parser auto-closes the outer button and hoists the
@@ -375,29 +380,11 @@ export function bindModelPanelEvents(
     state.customEmbeddingUrl = customUrlInput.value.trim();
   });
 
-  // Load model
-  document.getElementById('load-btn')!.addEventListener('click', async () => {
-    const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
-    const loadBtnLabel = document.getElementById('load-btn-label')!;
-    // Bring focus back if keyboard activated
-    loadBtn.focus();
-    loadBtn.disabled = true;
-    loadBtnLabel.textContent = 'Loading…';
-    try {
-      await state.engine!.loadModel(state.selectedModel);
-      opts.onModelLoaded?.();
-    } catch (err) {
-      // Retry affordance: a failed HF download must not be a dead end —
-      // the button re-runs loadModel for the same model (acceptance #1).
-      showStatus(
-        'error',
-        `Load failed: ${err instanceof Error ? err.message : String(err)}`,
-        true,
-        { label: 'Retry', onClick: () => retryLoadSelectedModel(state) },
-      );
-    } finally {
-      loadBtn.disabled = false;
-    }
+  // The download control is now a status + retry, not a required step: the
+  // model auto-loads on selection and on first Speak. Clicking it re-runs the
+  // load (handy as a manual "reload" or after a failure).
+  document.getElementById('load-btn')!.addEventListener('click', () => {
+    void ensureModelLoaded(state);
   });
 
   // Language filter
@@ -433,6 +420,48 @@ function selectModel(state: AppState, newModel: TTSModel): void {
   renderModelCardStatuses(state);
   updateMainThreadWarning(state);
   updatePrecisionWarning(state);
+  // Pick a model and it starts downloading — no separate "Download & Load"
+  // step. By the time the user types and presses Speak it is ready or nearly.
+  void ensureModelLoaded(state);
+}
+
+/** Wired by bindModelPanelEvents; runs after a model finishes loading. */
+let modelLoadedHook: (() => void) | null = null;
+
+/**
+ * Make sure the selected model is loaded, loading it in the background if not.
+ *
+ * This is the whole point of "Speak just works": there is no manual download
+ * step. Picking a preset/model/voice calls this, and so does a first
+ * Speak/Play, so the model is downloading before you ever need it. The engine
+ * drains its queue once a load reaches 'ready' (see TTSEngine.runLoadLoop),
+ * so a job can be enqueued while the model is still downloading and it simply
+ * runs when the bytes land.
+ *
+ * Safe to call freely: `loadModel` is latest-wins and shares a single
+ * in-flight promise, so rapid preset switching settles on the last pick
+ * without a thundering herd. A failed download surfaces a one-click Retry
+ * rather than leaving a dead end.
+ */
+export async function ensureModelLoaded(state: AppState): Promise<void> {
+  const engine = state.engine;
+  if (!engine) return;
+  const model = state.selectedModel;
+  // Already the loaded model — nothing to do.
+  if (engine.getEngineState() === 'ready' && engine.getCurrentModel()?.id === model.id) {
+    return;
+  }
+  try {
+    await engine.loadModel(model);
+    modelLoadedHook?.();
+  } catch (err) {
+    showStatus(
+      'error',
+      `Load failed: ${err instanceof Error ? err.message : String(err)}`,
+      true,
+      { label: 'Retry', onClick: () => { void ensureModelLoaded(state); } },
+    );
+  }
 }
 
 /**
@@ -523,44 +552,33 @@ function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1): void {
   next?.focus();
 }
 
-/**
- * Re-run the load for the currently selected model (Retry button target).
- * Reuses the load button's handler path so all the same disabled/label
- * bookkeeping applies; returns silently when no engine is wired yet.
- */
-async function retryLoadSelectedModel(state: AppState): Promise<void> {
-  if (!state.engine) return;
-  const loadBtn = document.getElementById('load-btn') as HTMLButtonElement | null;
-  if (loadBtn && !loadBtn.disabled) loadBtn.click();
-}
-
 export function handleEngineStateChange(
   state: AppState,
   engineState: EngineState,
   opts: { onReadyChange?: () => void } = {},
 ): void {
-  // Auditioning needs a loaded model, so the voice buttons track engine state
-  // exactly as the Speak button does.
+  // Auditioning needs a loaded model, so the voice buttons track engine state.
   updateVoicePreviewAvailability(state);
   const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
-  const generateBtn = document.getElementById('generate-btn') as HTMLButtonElement;
-  const textInput = document.getElementById('text-input') as HTMLTextAreaElement;
   const loadBtnLabel = document.getElementById('load-btn-label')!;
   const progressBar = document.getElementById('progress-bar')!;
   const progressText = document.getElementById('progress-text')!;
   const engine = state.engine!;
 
+  // The text box and the Speak button are deliberately NOT gated on the model
+  // being ready: you can type and press Speak while it is still downloading —
+  // the job queues and runs the moment the bytes land. That is what "Speak
+  // just works" means. The download control below is just a status readout.
   switch (engineState) {
     case 'idle':
       loadBtn.disabled = false;
-      generateBtn.disabled = true;
-      textInput.disabled = true;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
-      loadBtnLabel.textContent = 'Download & Load Model';
+      loadBtnLabel.textContent = 'Download model';
       break;
 
     case 'loading':
+      // Purely a progress readout while auto-loading; a click here is a no-op.
       loadBtn.disabled = true;
       loadBtnLabel.textContent = 'Loading…';
       progressBar.classList.add('progress-bar--visible');
@@ -570,9 +588,7 @@ export function handleEngineStateChange(
     case 'ready': {
       const current = engine.getCurrentModel();
       loadBtn.disabled = false;
-      loadBtnLabel.textContent = `✓ ${current?.name ?? 'Model'} loaded`;
-      generateBtn.disabled = false;
-      textInput.disabled = false;
+      loadBtnLabel.textContent = `✓ ${current?.name ?? 'Model'} ready`;
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
       showStatus('success', `${current?.name} is ready. Type something and hit Add to queue (or press Ctrl/Cmd+Enter).`);
@@ -581,9 +597,7 @@ export function handleEngineStateChange(
 
     case 'error':
       loadBtn.disabled = false;
-      loadBtnLabel.textContent = 'Download & Load Model';
-      generateBtn.disabled = true;
-      textInput.disabled = true;
+      loadBtnLabel.textContent = 'Retry download';
       progressBar.classList.remove('progress-bar--visible');
       progressText.classList.remove('progress-text--visible');
       break;

@@ -6,6 +6,15 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Added
+- **No more "Download & Load Model" step — Speak just works**: picking a
+  quality preset, a model, or a voice now pulls the model down automatically
+  in the background, and the text box, Speak and Play are usable from the
+  first paint. Type and press Speak while the model is still downloading and
+  the job queues and runs the moment the bytes land (the engine drains its
+  queue on ready). The old full-width download button is now a quiet
+  status/retry pill ("Downloading…" → "✓ ready" → "Retry download"); it still
+  works as a manual reload but is never required. Play streams the same way —
+  press it early and it loads, then starts.
 - **Quality presets (Low / Medium / High)**: the default view chooses a model
   with one of three words instead of a wall of cards. Each preset is a *real*
   model, so the control stays honest rather than a placebo slider — Low is
