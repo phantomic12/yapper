@@ -66,6 +66,21 @@ All notable changes to Yapper are recorded here. Versions follow
   port occupied and the next one refused to start. Vite is now reaped by the
   PID holding the port, the same way Chrome already was.
 
+### Fixed
+- **The unit suite no longer depends on jsdom's object-URL internals**, which
+  unblocks the jsdom 30.1 bump (Renovate PR #60). jsdom's
+  `URL.createObjectURL` goes through Vitest's `makeCompatBlob`, which locates
+  jsdom's internal blob impl by reading the *first own symbol* off a `Blob`.
+  jsdom 30.1 moved that impl out of a symbol and into a private `#impl` class
+  field, so a Blob has no own symbols, the lookup is `undefined`, and every
+  call throws `Cannot read properties of undefined (reading '_buffer')`. The
+  throw lands in the job loop immediately after a clip is synthesised — at
+  `URL.createObjectURL(next.blob)` — so a perfectly good generation became a
+  job error and 14 tests failed. Upstream as vitest-dev/vitest#11336; the
+  suite now hands out deterministic `blob:` URLs from `src/test-setup.ts`
+  instead, which is all the app ever promised (a finished job carries a usable
+  URL). Verified green on both jsdom 30.0.1 and 30.1.1.
+
 ### Changed
 - **The simple view no longer shows download sizes.** Somebody who opened a
   text-to-speech site to hear a sentence read back does not need to know that
