@@ -21,6 +21,11 @@
       "description": "Group dev dependencies together",
       "matchPackagePatterns": ["typescript", "vite", "eslint"],
       "groupName": "dev dependencies"
+    },
+    {
+      "description": "Hold TypeScript above 6.0.x: typescript-eslint cannot load against it",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "6.0.x"
     }
   ],
   "prConcurrentLimit": 5

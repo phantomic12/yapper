@@ -66,7 +66,6 @@ All notable changes to Yapper are recorded here. Versions follow
   port occupied and the next one refused to start. Vite is now reaped by the
   PID holding the port, the same way Chrome already was.
 
-### Fixed
 - **The unit suite no longer depends on jsdom's object-URL internals**, which
   unblocks the jsdom 30.1 bump (Renovate PR #60). jsdom's
   `URL.createObjectURL` goes through Vitest's `makeCompatBlob`, which locates
@@ -82,6 +81,18 @@ All notable changes to Yapper are recorded here. Versions follow
   URL). Verified green on both jsdom 30.0.1 and 30.1.1.
 
 ### Changed
+- **Vitest 5 and jsdom 30.1.1 are in; TypeScript 7 is deliberately not.**
+  Renovate's grouped major bump could not land as written: its artifact step
+  had failed, so the PR carried a `package.json` with no matching lockfile
+  and `npm ci` refused to install — the red run was never a test failure.
+  With the lockfile actually regenerated, the three majors split cleanly.
+  Vitest 5.0.2 and `@vitest/ui` 5.0.2 pass the suite unchanged (459 tests, no
+  test or config edits). TypeScript 7.0.2 typechecks the whole project clean
+  on its own, but `typescript-eslint` refuses to load against it — its peer
+  range is `>=4.8.4 <6.1.0`, so no version of the linter accepts it and this
+  is not a config problem. Held at `^6.0.0`, and `renovate.json` now pins
+  TypeScript to `6.0.x` so the bot stops proposing a bump that cannot pass.
+  Revisit when the linter catches up.
 - **The simple view no longer shows download sizes.** Somebody who opened a
   text-to-speech site to hear a sentence read back does not need to know that
   the "High" preset is a 156MB download, and every place a figure leaked into
