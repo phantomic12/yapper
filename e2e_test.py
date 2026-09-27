@@ -813,6 +813,20 @@ READER_STATE_JS = """(function() {
         readerStatus: document.getElementById('reader-status')?.textContent || '',
         overlayStatus: document.getElementById('reader-overlay-status')?.textContent || '',
         pauseLabel: (document.getElementById('pause-document-btn') || {}).textContent || null,
+        overlayPauseLabel: (document.getElementById('reader-overlay-pause') || {}).textContent || null,
+        ocrChecked: !!document.getElementById('ocr-toggle')?.checked,
+        classifyChips: Array.from(
+            document.querySelectorAll('#classify-chips .classify-chip')
+        ).map(c => c.textContent),
+        tableCount: document.querySelectorAll('#classify-list table').length,
+        sampleHidden: !!document.getElementById('document-sample')?.hidden,
+        layoutBlockCount: document.getElementById('layout-details')
+            && document.getElementById('layout-details').style.display !== 'none'
+            ? (() => {
+                try { return JSON.parse(document.getElementById('layout-pre').textContent).length; }
+                catch (e) { return -1; }
+            })()
+            : 0,
         readerError: document.querySelector('.reader-error')?.textContent
             || document.getElementById('reader-error')?.textContent || null,
         statusBanner: document.querySelector('.status-banner span')?.textContent || null,
@@ -933,6 +947,39 @@ def step_switch_to_studio(cdp_holder):
     _switch_page(cdp_holder, 'studio')
 
 
+def step_load_sample_document(cdp_holder):
+    """Load the built-in sample and confirm the structure renderer ran on it.
+
+    The sample is the Reader page's first impression: a button that has to
+    fill the whole panel — classified blocks, chips, a real table — or the
+    page looks as empty as it did before the sample existed.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    x, y = _click_trusted(cdp, target['id'], '#document-sample-btn')
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < 20:
+        s = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if s.get('classifyChips') and s.get('sentenceCount', 0) > 0:
+            break
+        time.sleep(0.5)
+    if not s.get('classifyChips'):
+        raise AssertionError(
+            f'clicking "Read a sample" at ({x:.0f}, {y:.0f}) rendered no '
+            f'classified blocks: {json.dumps(s, default=str)[:400]}')
+    if not s.get('sampleHidden'):
+        raise AssertionError('the sample offer is still showing after a document loaded')
+    if s.get('tableCount', 0) < 1:
+        raise AssertionError(
+            f'sample classified blocks did not render a real table: '
+            f'chips={s.get("classifyChips")} tableCount={s.get("tableCount")}')
+    print(f'      ✓ sample loaded: chips={s.get("classifyChips")} '
+          f'sentences={s.get("sentenceCount")} tables={s.get("tableCount")}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '04b-sample-document.png')
+
+
 def step_upload_txt_document(cdp_holder):
     """Drop the TXT fixture and assert the reader view renders its sentences."""
     target = cdp_holder['target']
@@ -1028,6 +1075,137 @@ def step_assert_highlight_advances(cdp_holder):
         f'(first={first}, last={last}) state={json.dumps(s, default=str)}')
 
 
+def step_pause_resume_reader(cdp_holder):
+    """Pause the reader from the overlay, then resume it from the same button.
+
+    Both are user-facing controls whose failure mode is silent: if pause
+    never took effect the label would stay 'Pause' and the audio would keep
+    advancing, and if resume did nothing the session would sit stuck at one
+    part. The overlay's Pause/Resume label is the only signal the app gives
+    (the status line just counts parts), so assert on the label transition
+    *and* that the highlight is not moving while paused.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _click_trusted(cdp, target['id'], '#reader-overlay-pause')
+    paused: dict = {}
+    start = time.time()
+    while time.time() - start < 20:
+        paused = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if paused.get('overlayPauseLabel') in ('Resume', 'Click to play'):
+            break
+        time.sleep(0.5)
+    if paused.get('overlayPauseLabel') not in ('Resume', 'Click to play'):
+        raise AssertionError(
+            f'Pause did not take effect: label={paused.get("overlayPauseLabel")!r} '
+            f'status={paused.get("readerStatus")!r}')
+
+    # Frozen means frozen: sample the highlight twice and require it to sit
+    # still. Comparing a single reading would pass even if audio kept going.
+    first = (paused.get('activeSentenceIndex'), paused.get('activeWordIndex'))
+    time.sleep(2.5)
+    later = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+    second = (later.get('activeSentenceIndex'), later.get('activeWordIndex'))
+    if second != first:
+        raise AssertionError(
+            f'highlight kept moving while paused: {first} → {second}')
+    print(f'      ✓ paused (label={paused.get("overlayPauseLabel")!r}, '
+          f'highlight held at {first})')
+
+    _click_trusted(cdp, target['id'], '#reader-overlay-pause')
+    resumed: dict = {}
+    start = time.time()
+    while time.time() - start < 20:
+        resumed = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if resumed.get('overlayPauseLabel') == 'Pause':
+            print(f'      ✓ resumed (label="Pause", status='
+                  f'{resumed.get("readerStatus")!r})')
+            return
+        time.sleep(0.5)
+    raise AssertionError(
+        f'Resume did not take effect: label={resumed.get("overlayPauseLabel")!r} '
+        f'status={resumed.get("readerStatus")!r}')
+
+
+def step_upload_scanned_pdf_ocr(cdp_holder):
+    """Turn OCR on and read a PDF that has no text layer at all.
+
+    sample.pdf has a real text layer, so pdfjs extracts it and the OCR branch
+    never runs — which is why this regression sat undetected: the OCR path
+    read pages perfectly and then reported zero words, and the reader turned
+    that into a 0-character document with no error anywhere. The fixture is
+    an image-only page, so the only way to get text out of it is Tesseract.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    cap = v(cdp.eval(
+        "({ hasPromiseTry: typeof Promise.try === 'function' })",
+        target['id'], timeout=10,
+    ))
+    if not cap.get('hasPromiseTry'):
+        print('      (skip: browser lacks Promise.try — pdfjs 6 needs Chrome ≥~128; '
+              'CI uses Chrome stable)')
+        return
+
+    # The checkbox itself is visually hidden (0x0, opacity 0) inside its
+    # label, so click the label the way a user does.
+    x, y = _click_trusted(cdp, target['id'], 'label.switch')
+    start = time.time()
+    state: dict = {}
+    while time.time() - start < 10:
+        state = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if state.get('ocrChecked'):
+            break
+        time.sleep(0.5)
+    if not state.get('ocrChecked'):
+        raise AssertionError(
+            f'clicking the OCR toggle at ({x:.0f}, {y:.0f}) did not check it')
+    print('      ✓ OCR toggle enabled')
+
+    _inject_file(cdp, target['id'], FIXTURES_DIR / 'scanned.pdf', 'application/pdf')
+
+    # First OCR in a fresh profile also loads the self-hosted WASM core and
+    # eng.traineddata (~8MB), so this gets a much longer budget than the
+    # text-layer PDF step.
+    ocr_timeout = float(os.environ.get('YAPPER_OCR_TIMEOUT', '240'))
+    start = time.time()
+    s: dict = {}
+    saw_progress = False
+    while time.time() - start < ocr_timeout:
+        resp = cdp.eval(READER_STATE_JS, target['id'], timeout=10)
+        s = v(resp)
+        if 'OCR page' in (s.get('progressText') or ''):
+            saw_progress = True
+        if s.get('readerError'):
+            raise AssertionError(f'reader panel surfaced an error: {s.get("readerError")!r}')
+        text = s.get('text', '')
+        if s.get('previewVisible') and 'Yapper scanned document' in text:
+            if 'recognition' not in text:
+                time.sleep(1)
+                continue
+            print(f'      ✓ OCR read the scanned page: {s.get("sentenceCount")} sentences, '
+                  f'{s.get("layoutBlockCount")} layout blocks, '
+                  f'progress="{s.get("progressText")[:60]}"')
+            if not saw_progress:
+                # Not fatal on its own (the page can finish between polls),
+                # but say so rather than implying we watched it work.
+                print('      (note: never sampled the "OCR page N: x%" progress line)')
+            if (s.get('layoutBlockCount') or 0) < 2:
+                raise AssertionError(
+                    f'OCR produced no per-line layout blocks: '
+                    f'layoutBlockCount={s.get("layoutBlockCount")} '
+                    f'text={text[:120]!r}')
+            cdp.screenshot(target['id'], SCREENSHOT_DIR / '08-scanned-pdf-ocr.png')
+            return
+        time.sleep(1)
+    raise AssertionError(
+        f'scanned PDF produced no OCR text within {ocr_timeout}s: '
+        f'progress={s.get("progressText")!r} banner={s.get("statusBanner")!r} '
+        f'readerError={s.get("readerError")!r} text[:100]={s.get("text", "")[:100]!r}')
+
+
 def step_stop_reader(cdp_holder):
     """Stop playback via the overlay Stop button and confirm teardown."""
     target = cdp_holder['target']
@@ -1118,11 +1296,14 @@ def main():
         # inference queue for minutes, which would starve the reader jobs
         # (single-worker queue) and flake highlight/PDF assertions.
         ('switch_to_reader', lambda: step_switch_to_reader(cdp_holder)),
+        ('load_sample_document', lambda: step_load_sample_document(cdp_holder)),
         ('upload_txt_document', lambda: step_upload_txt_document(cdp_holder)),
         ('queue_reader_read', lambda: step_queue_reader_read(cdp_holder)),
         ('assert_highlight_advances', lambda: step_assert_highlight_advances(cdp_holder)),
+        ('pause_resume_reader', lambda: step_pause_resume_reader(cdp_holder)),
         ('stop_reader', lambda: step_stop_reader(cdp_holder)),
         ('upload_pdf_document', lambda: step_upload_pdf_document(cdp_holder)),
+        ('upload_scanned_pdf_ocr', lambda: step_upload_scanned_pdf_ocr(cdp_holder)),
         # Live progress on Kokoro's streaming path, LAST: load the bigger
         # model, generate a multi-sentence input, and confirm sentence-
         # segment markers appear in the card hint while it runs. Slow on
