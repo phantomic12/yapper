@@ -1,6 +1,7 @@
 import { DocumentReaderSession, type ReaderState } from '../reader';
 import type { AppState } from '../app-state';
 import { showStatus } from '../dom-utils';
+import { splitAtWord, type SplitSentence } from '../karaoke';
 
 // ─── Streaming playback ──────────────────────────────────────────
 // "Play" speaks the textarea content while it is still generating: the
@@ -10,6 +11,26 @@ import { showStatus } from '../dom-utils';
 // of the whole text.
 
 const STREAM_CHUNK_CHARS = 160;
+
+/**
+ * Repaint the "now speaking" line so the word being read is marked.
+ *
+ * The parts always rejoin to the sentence text, so the visible words never
+ * change — only the emphasis does. When the word cannot be located the
+ * whole sentence is shown unmarked rather than leaving the line blank.
+ */
+export function paintSpeakingLine(el: HTMLElement, parts: SplitSentence | null): void {
+  el.replaceChildren();
+  if (!parts || (!parts.before && !parts.active && !parts.after)) return;
+  el.append(document.createTextNode(`“${parts.before}`));
+  if (parts.active) {
+    const mark = document.createElement('mark');
+    mark.className = 'stream-bar__word';
+    mark.textContent = parts.active;
+    el.append(mark);
+  }
+  el.append(document.createTextNode(`${parts.after}”`));
+}
 
 export function bindStreamPlayer(state: AppState): void {
   const playBtn = document.getElementById('stream-btn') as HTMLButtonElement;
@@ -21,12 +42,23 @@ export function bindStreamPlayer(state: AppState): void {
   const textInput = document.getElementById('text-input') as HTMLTextAreaElement;
 
   let session: DocumentReaderSession | null = null;
+  // onHighlight fires on every audio timeupdate, so the same word is
+  // reported dozens of times a second. Repainting only on a real change
+  // keeps this from thrashing the DOM all the way through a document.
+  let lastHighlight: { sentence: number; word: number } | null = null;
+
+  // The "now speaking" line marks the word being read, so the bar reads
+  // along with the voice instead of flashing a whole sentence per word.
+  const clearSpeaking = (): void => {
+    lastHighlight = null;
+    paintSpeakingLine(speakingEl, null);
+  };
 
   const renderState = (s: ReaderState): void => {
     if (s.status === 'finished') {
       statusEl.textContent = 'Finished';
       pauseBtn.disabled = true;
-      speakingEl.textContent = '';
+      clearSpeaking();
       return;
     }
     const label = s.status === 'paused'
@@ -42,7 +74,7 @@ export function bindStreamPlayer(state: AppState): void {
     session?.stop();
     session = null;
     bar.hidden = true;
-    speakingEl.textContent = '';
+    clearSpeaking();
     pauseBtn.disabled = false;
   };
 
@@ -69,8 +101,17 @@ export function bindStreamPlayer(state: AppState): void {
       speed: state.currentSpeed,
       onStateChange: renderState,
       onHighlight: (info) => {
+        if (
+          lastHighlight &&
+          lastHighlight.sentence === info.sentenceIndex &&
+          lastHighlight.word === info.wordIndex
+        ) {
+          return;
+        }
         const sentence = session?.getSentences()[info.sentenceIndex];
-        if (sentence) speakingEl.textContent = `“${sentence.text}”`;
+        if (!sentence) return;
+        lastHighlight = { sentence: info.sentenceIndex, word: info.wordIndex };
+        paintSpeakingLine(speakingEl, splitAtWord(sentence, info.wordIndex));
       },
     });
     bar.hidden = false;

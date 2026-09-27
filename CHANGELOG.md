@@ -27,6 +27,15 @@ All notable changes to Yapper are recorded here. Versions follow
   with a two-part lookahead, so speech starts after the first chunk instead of
   waiting for the whole document. Pause/Stop and a "speaking sentence" readout
   are available throughout.
+- **Karaoke word highlighting in the stream bar**: the "now speaking" line
+  marks the individual word being read instead of reprinting the whole sentence
+  every timeupdate. `splitAtWord` (`src/karaoke.ts`) cuts the sentence into
+  before/active/after parts that always rejoin to the original text, so only
+  the emphasis changes; a word that cannot be located falls back to the plain
+  sentence rather than a blank line. Measured in the browser with Kitten Nano:
+  17 repaints for 17 words, versus ~865 before the change — the reader session
+  reports the active word on every audio `timeupdate`, so the repaint is gated
+  on the word actually changing.
 - **Persistence across reloads**: model, voice, speed, draft text, and language
   filter are saved to `localStorage`, and the generation history (with playable
   audio) is stored in IndexedDB under `yapper` / `jobs`

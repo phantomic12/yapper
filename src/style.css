@@ -927,6 +927,16 @@ body {
   flex: 1;
   min-width: 120px;
 }
+/* The word currently being spoken, in the same style as the reader overlay. */
+.stream-bar__word {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  font-style: normal;
+  font-weight: 600;
+  padding: 0 3px;
+  margin: 0 1px;
+}
 [hidden] {
   display: none !important;
 }
