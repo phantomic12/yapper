@@ -10,6 +10,7 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindPageNav } from './ui/page-nav';
 import { buildAppMarkup } from './ui/layout';
 import {
   bindModelPanelEvents,
@@ -141,6 +142,7 @@ async function render(): Promise<void> {
   bindModelPanelEvents(state, {
     onModelLoaded: () => updateDocumentSectionVisibility(state),
   });
+  bindPageNav();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
   bindStreamPlayer(state);

@@ -1,4 +1,4 @@
-import { extractDocument } from '../document-reader';
+import { extractDocument, type ExtractedDocument } from '../document-reader';
 import {
   DocumentReaderSession,
   prepareReaderData,
@@ -6,8 +6,53 @@ import {
   type HighlightInfo,
   type ReaderSentence,
 } from '../reader';
+import {
+  classifyText,
+  classifyLayoutBlocks,
+  countKinds,
+  kindLabel,
+  type ClassifiedBlock,
+  type BlockKind,
+} from '../document-classify';
 import type { AppState } from '../app-state';
-import { showStatus } from '../dom-utils';
+import { escapeHtml, showStatus } from '../dom-utils';
+
+const MAX_RENDERED_BLOCKS = 60;
+
+/**
+ * Render the classified document structure (kind chips + per-block list
+ * with a "Speak" action) into the Reader page's classify panel.
+ */
+function renderClassification(doc: ExtractedDocument): ClassifiedBlock[] {
+  const panel = document.getElementById('classify-panel') as HTMLElement;
+  const chips = document.getElementById('classify-chips') as HTMLElement;
+  const list = document.getElementById('classify-list') as HTMLElement;
+  const blocks = doc.layoutBlocks && doc.layoutBlocks.length > 0
+    ? classifyLayoutBlocks(doc.layoutBlocks)
+    : classifyText(doc.text);
+
+  const counts = countKinds(blocks);
+  chips.innerHTML = (Object.entries(counts) as [BlockKind, number][])
+    .filter(([, n]) => n > 0)
+    .map(([kind, n]) => `<span class="classify-chip classify-chip--${kind}">${kindLabel(kind)} · ${n}</span>`)
+    .join('');
+
+  list.innerHTML = blocks.slice(0, MAX_RENDERED_BLOCKS).map((b, i) => `
+    <div class="classify-block classify-block--${b.kind}">
+      <div class="classify-block__head">
+        <span class="classify-badge classify-badge--${b.kind}">${kindLabel(b.kind)}</span>
+        ${b.page ? `<span class="classify-block__page">page ${b.page}</span>` : ''}
+        <button class="classify-block__speak" data-action="speak-block" data-block-index="${i}" type="button" title="Add this block to the queue">Speak</button>
+      </div>
+      <div class="classify-block__text">${escapeHtml(b.text.length > 240 ? b.text.slice(0, 240) + '…' : b.text)}</div>
+    </div>`).join('')
+    + (blocks.length > MAX_RENDERED_BLOCKS
+      ? `<p class="classify-more">…and ${blocks.length - MAX_RENDERED_BLOCKS} more blocks</p>`
+      : '');
+
+  panel.hidden = false;
+  return blocks;
+}
 
 export function updateDocumentSectionVisibility(state: AppState): void {
   const needModel = document.getElementById('document-need-model') as HTMLElement;
@@ -129,6 +174,8 @@ export function bindDocumentEvents(state: AppState): void {
     return readerOverlayContent.querySelector(`[data-sentence-index="${globalIndex}"]`) as HTMLElement | null;
   }
 
+  let classifiedBlocks: ClassifiedBlock[] = [];
+
   function handleFile(file: File) {
     if (file.size > 25 * 1024 * 1024) {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
@@ -141,6 +188,7 @@ export function bindDocumentEvents(state: AppState): void {
       .then(doc => {
         state.extractedDocument = doc;
         renderReaderView(doc.text);
+        classifiedBlocks = renderClassification(doc);
         preview.style.display = '';
         options.style.display = '';
         layoutDetails.style.display = doc.layoutBlocks && doc.layoutBlocks.length ? '' : 'none';
@@ -171,6 +219,24 @@ export function bindDocumentEvents(state: AppState): void {
     readerError.hidden = true;
     readerError.textContent = '';
   }
+
+  // "Speak" on a classified block: queue just that block's text.
+  document.getElementById('classify-list')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="speak-block"]');
+    if (!btn) return;
+    const block = classifiedBlocks[Number(btn.dataset.blockIndex)];
+    if (!block) return;
+    if (!state.engine || state.engine.getEngineState() !== 'ready') {
+      showStatus('error', 'Load a model on the Studio page first.');
+      return;
+    }
+    state.engine.enqueue(block.text, {
+      modelId: state.selectedModel.id,
+      voiceId: state.selectedVoiceId,
+      speed: state.currentSpeed,
+    });
+    showStatus('success', `Queued ${kindLabel(block.kind).toLowerCase()} for speech.`);
+  });
 
   drop.addEventListener('click', () => input.click());
   drop.addEventListener('keydown', (e) => {

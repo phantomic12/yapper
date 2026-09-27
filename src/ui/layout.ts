@@ -7,7 +7,7 @@ export interface LayoutOptions {
   selectedModelId: string;
 }
 
-/** Build the full app markup (shell + panels). Behavior-preserving extract from main. */
+/** Build the full app markup (shell + pages). Behavior-preserving extract from main. */
 export function buildAppMarkup(opts: LayoutOptions): string {
   const { capability, selectedModelId } = opts;
   const capInfo = CAPABILITY_INFO[capability];
@@ -44,6 +44,16 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           100% private — no data leaves your device
         </div>
+        <nav class="page-nav" role="tablist" aria-label="Pages">
+          <button class="page-nav__tab page-nav__tab--active" type="button" role="tab" data-page-target="studio" aria-selected="true" aria-controls="page-studio">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Studio
+          </button>
+          <button class="page-nav__tab" type="button" role="tab" data-page-target="reader" aria-selected="false" aria-controls="page-reader">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            Document Reader
+          </button>
+        </nav>
       </header>
 
       <!-- GPU Status -->
@@ -51,6 +61,9 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <div class="gpu-status__dot ${capability === 'full' ? 'gpu-status__dot--on' : capability === 'partial' ? 'gpu-status__dot--partial' : 'gpu-status__dot--off'}"></div>
         <span class="gpu-status__label">${capInfo.label}</span>
       </div>
+
+      <!-- ══════════ Studio page ══════════ -->
+      <div class="page" id="page-studio" role="tabpanel" aria-label="Studio">
 
       <!-- Main-thread warning: honest about UI freezes during synthesis (AC2).
            Hidden by default; re-shown/hidden when the selection changes. -->
@@ -127,73 +140,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span class="char-count" id="char-count" aria-live="polite">0 / 2000</span>
       </div>
 
-      <!-- Document upload -->
-      <section class="document-section" id="document-section" aria-labelledby="document-heading">
-        <h2 class="section-label" id="document-heading">Read a document</h2>
-        <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
-          <input
-            type="file"
-            id="document-upload"
-            class="visually-hidden"
-            accept=".pdf,.docx,.doc,.odt,.rtf,.epub,.xlsx,.pptx,.csv,.html,.htm,.txt,.md,.markdown"
-            aria-describedby="document-formats"
-          />
-          <label for="document-upload" class="document-drop__label">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>Drop a document here or click to upload</span>
-          </label>
-          <p class="document-formats" id="document-formats">PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD. Max 25 MB.</p>
-        </div>
-
-        <div class="document-need-model" id="document-need-model">
-          <p>📄 Upload a document to preview the extracted text. Load a model above to have Yapper read it aloud.</p>
-        </div>
-
-        <div class="document-options" id="document-options" style="display:none">
-          <label class="switch">
-            <input type="checkbox" id="ocr-toggle" />
-            <span class="switch__track"></span>
-            <span class="switch__label">Use OCR for PDFs (experimental, slower)</span>
-          </label>
-          <div class="ocr-mode-selector" id="ocr-mode-selector" style="display:none">
-            <span class="ocr-mode-label">OCR engine:</span>
-            <label class="ocr-mode-option">
-              <input type="radio" name="ocr-mode" value="tesseract" checked />
-              <span>Tesseract (fast, ~4MB)</span>
-            </label>
-            <label class="ocr-mode-option">
-              <input type="radio" name="ocr-mode" value="llm" />
-              <span>Florence-2 LLM (smart, ~200MB download)${capability !== 'full' ? ' — slow on CPU' : ''}</span>
-            </label>
-          </div>
-          <div class="document-progress-row" id="document-progress-row" hidden>
-            <div class="document-progress-bar"><div class="document-progress-bar__fill" id="document-progress-fill"></div></div>
-            <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
-          </div>
-        </div>
-
-        <div class="document-preview" id="document-preview" style="display:none">
-          <div class="document-actions">
-            <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-              <span>Read aloud</span>
-            </button>
-            <button class="document-btn" id="pause-document-btn" type="button" style="display:none">Pause</button>
-            <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
-            <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
-          </div>
-          <div class="reader-error" id="reader-error" role="alert" hidden></div>
-          <label class="section-label" for="document-reader-view">Extracted text</label>
-          <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
-          <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
-        </div>
-
-        <details class="layout-details" id="layout-details" style="display:none">
-          <summary>OCR layout blocks</summary>
-          <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
-        </details>
-      </section>
-
       <div class="generate-row">
         <button class="generate-btn" id="generate-btn" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
@@ -233,6 +179,92 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Job list -->
       <div class="section-label" id="queue-label" style="display:none">Queue</div>
       <div class="job-list" id="job-list"></div>
+
+      </div>
+
+      <!-- ══════════ Document Reader page ══════════ -->
+      <div class="page" id="page-reader" role="tabpanel" aria-label="Document Reader">
+        <section class="reader-page" aria-labelledby="reader-page-heading">
+          <div class="reader-page__hero">
+            <h2 class="reader-page__title" id="reader-page-heading">Document Reader</h2>
+            <p class="reader-page__subtitle">
+              Drop in a document — Yapper extracts the text, scans it with OCR when needed,
+              classifies every block, and reads it aloud. Everything happens on your device.
+            </p>
+          </div>
+
+          <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
+            <input
+              type="file"
+              id="document-upload"
+              class="visually-hidden"
+              accept=".pdf,.docx,.doc,.odt,.rtf,.epub,.xlsx,.pptx,.csv,.html,.htm,.txt,.md,.markdown"
+              aria-describedby="document-formats"
+            />
+            <label for="document-upload" class="document-drop__label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Drop a document here or click to upload</span>
+            </label>
+            <p class="document-formats" id="document-formats">PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD. Max 25 MB.</p>
+          </div>
+
+          <div class="document-need-model" id="document-need-model">
+            <p>📄 Upload a document to see its structure and extracted text. To hear it read aloud, <button type="button" class="link-btn" data-page-jump="studio">load a model on the Studio page</button> first.</p>
+          </div>
+
+          <div class="document-options" id="document-options" style="display:none">
+            <label class="switch">
+              <input type="checkbox" id="ocr-toggle" />
+              <span class="switch__track"></span>
+              <span class="switch__label">Use OCR for scanned PDFs (experimental, slower)</span>
+            </label>
+            <div class="ocr-mode-selector" id="ocr-mode-selector" style="display:none">
+              <span class="ocr-mode-label">OCR engine:</span>
+              <label class="ocr-mode-option">
+                <input type="radio" name="ocr-mode" value="tesseract" checked />
+                <span>Tesseract (fast, ~4MB)</span>
+              </label>
+              <label class="ocr-mode-option">
+                <input type="radio" name="ocr-mode" value="llm" />
+                <span>Florence-2 LLM (smart, ~200MB download)${capability !== 'full' ? ' — slow on CPU' : ''}</span>
+              </label>
+            </div>
+            <div class="document-progress-row" id="document-progress-row" hidden>
+              <div class="document-progress-bar"><div class="document-progress-bar__fill" id="document-progress-fill"></div></div>
+              <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="document-preview" id="document-preview" style="display:none">
+            <div class="document-actions">
+              <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                <span>Read aloud</span>
+              </button>
+              <button class="document-btn" id="pause-document-btn" type="button" style="display:none">Pause</button>
+              <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
+              <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="reader-error" id="reader-error" role="alert" hidden></div>
+
+            <!-- Classified document structure -->
+            <div class="classify-panel" id="classify-panel" hidden>
+              <div class="section-label">Document structure</div>
+              <div class="classify-chips" id="classify-chips"></div>
+              <div class="classify-list" id="classify-list"></div>
+            </div>
+
+            <label class="section-label" for="document-reader-view">Extracted text</label>
+            <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
+            <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+          </div>
+
+          <details class="layout-details" id="layout-details" style="display:none">
+            <summary>Raw OCR layout blocks</summary>
+            <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
+          </details>
+        </section>
+      </div>
 
       <footer class="footer">
         <p class="footer__text">
