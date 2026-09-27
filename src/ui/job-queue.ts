@@ -1,4 +1,9 @@
 import { float32ToWav, type GenerationJob, type JobProgress } from '../engine';
+import {
+  selectJobsWithinBudget,
+  totalEstimatedBytes,
+  formatBytes,
+} from '../persistence';
 import { concatenateClips, type AudioClip } from '../audio-export';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
@@ -88,7 +93,21 @@ export function renderJobList(state: AppState): void {
   const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
   const downloadAllBtn = document.getElementById('download-all-btn') as HTMLButtonElement | null;
   const queueCount = document.getElementById('queue-count') as HTMLElement;
+  const usageEl = document.getElementById('storage-usage') as HTMLElement | null;
   const currentJobs = state.currentJobs;
+
+  // What will actually survive to the next visit, as opposed to what is in
+  // memory right now. Saying so is the difference between "my clips
+  // vanished" and "the oldest audio was dropped to stay in budget".
+  if (usageEl) {
+    const kept = selectJobsWithinBudget(currentJobs);
+    const clips = kept.filter(j => j.status === 'done').length;
+    const bytes = formatBytes(totalEstimatedBytes(kept));
+    const dropped = currentJobs.length - kept.length;
+    usageEl.textContent = dropped > 0
+      ? `${clips} clip${clips === 1 ? '' : 's'} kept · ${bytes} (${dropped} older dropped)`
+      : `${clips} clip${clips === 1 ? '' : 's'} kept · ${bytes}`;
+  }
 
   if (currentJobs.length === 0) {
     list.innerHTML = '';
@@ -96,6 +115,7 @@ export function renderJobList(state: AppState): void {
     clearBtn.disabled = true;
     if (downloadAllBtn) downloadAllBtn.disabled = true;
     if (queueCount) { queueCount.hidden = true; queueCount.textContent = ''; }
+    if (usageEl) usageEl.textContent = '';
     return;
   }
 

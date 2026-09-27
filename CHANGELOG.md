@@ -120,6 +120,21 @@ All notable changes to Yapper are recorded here. Versions follow
   `shader-f16` feature failed WGSL validation on every kernel and produced bad
   audio. The execution provider is now pinned to WASM when the adapter lacks
   `shader-f16` (`webgpuAdapterHasFeature` in `src/capability.ts`).
+- **Short utterances were silenced entirely**: Kitten trimmed a fixed 5000
+  samples of trailing decoder artifact, which both reference implementations
+  also do — but they assume the decoder always emits at least that much speech
+  first. It doesn't for the fragments people actually type: "One." decodes to
+  ~4800 samples, so `length - 5000` floored at zero and the clip was a 44-byte
+  WAV header with no audio in it. The trim is now capped at a quarter of the
+  clip, so sentences still lose the artifact while short ones survive. Found by
+  noticing that the new storage footer reported 88 B for two finished clips.
+- **Persisted audio grew without bound**: every clip was written to IndexedDB
+  forever, so a long-running session would eventually hit the origin quota —
+  and the writes that fail first are the newest ones, i.e. exactly the clip
+  the user just generated. The store is now trimmed to a budget (24 clips /
+  64MB) keeping the newest audio, a `QuotaExceededError` retries once with a
+  halved budget, and the queue footer says how much is actually kept so drops
+  are never silent.
 - **A 26px phantom sliver** rendered under the queue whenever the queue count was
   zero, because the stylesheet's `display: flex` beat the `hidden` attribute.
   `hidden` is now forced globally.

@@ -168,6 +168,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span class="queue-count" id="queue-count" hidden></span>
         <button class="clear-btn" id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
         <button class="clear-btn" id="clear-btn" disabled>Clear finished</button>
+        <span class="storage-usage" id="storage-usage" title="Clips kept for you between visits. The oldest audio is dropped once the budget is reached."></span>
       </div>
 
       <!-- Streaming playback controller: visible while a Play session runs. -->

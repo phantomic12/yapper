@@ -2138,3 +2138,13 @@ body::before {
   border-color: var(--accent);
   background: var(--accent-glow);
 }
+
+/* What survives to the next visit. Quiet by design: it is informational,
+   and the "(N older dropped)" suffix is the part that must be readable. */
+.storage-usage {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}

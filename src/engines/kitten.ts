@@ -286,6 +286,40 @@ async function getOrt() {
   return ortModule;
 }
 
+/**
+ * Trailing decoder artifact the model appends after the speech (~0.21s at
+ * 24kHz). Both reference implementations trim this unconditionally.
+ */
+const DECODER_ARTIFACT_SAMPLES = 5000;
+
+/**
+ * Never trim more than this fraction of the clip, however short it is.
+ *
+ * The fixed 5000-sample cut assumes the decoder always emits at least that
+ * much speech first, which is true for sentences and false for the short
+ * fragments people actually type: "One." decodes to roughly 4000 samples, so
+ * `length - 5000` floors at zero and the utterance comes out as pure
+ * silence — a 44-byte WAV header with no audio in it. Capping the trim at a
+ * quarter of the clip keeps the artifact fix for real sentences while leaving
+ * short ones intact.
+ */
+const MAX_TRIM_RATIO = 0.25;
+
+/**
+ * Remove the trailing decoder artifact without ever emptying the clip.
+ * Exported for tests: this is the difference between speech and a
+ * 44-byte silent WAV.
+ */
+export function trimDecoderArtifact(samples: Float32Array): Float32Array {
+  if (samples.length === 0) return samples;
+  const trim = Math.min(
+    DECODER_ARTIFACT_SAMPLES,
+    Math.floor(samples.length * MAX_TRIM_RATIO),
+  );
+  if (trim <= 0) return samples;
+  return samples.slice(0, samples.length - trim);
+}
+
 export class KittenCustomEngine implements CustomEngine {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private session: any = null;
@@ -408,10 +442,7 @@ export class KittenCustomEngine implements CustomEngine {
       for (let i = 0; i < cleaned.length; i++) cleaned[i] *= scale;
     }
 
-    // The model appends ~5000 samples of decoder artifact after the speech;
-    // both reference impls trim the last 5000 samples unconditionally.
-    const usable = Math.max(0, cleaned.length - 5000);
-    return { audio: cleaned.slice(0, usable), samplingRate: this.sampleRate };
+    return { audio: trimDecoderArtifact(cleaned), samplingRate: this.sampleRate };
   }
 
   dispose(): void {
