@@ -193,6 +193,17 @@ All notable changes to Yapper are recorded here. Versions follow
 
 
 ### Changed
+- **The network link check only ran when you asked for it**: `npm test` probed
+  every HuggingFace model URL on each run, so a DNS hiccup or a rate-limited
+  runner could fail the suite for a reason that has nothing to do with the
+  change under test — and it cost 1.3s of every run. The network half of
+  `src/links.test.ts` is now opt-in via `YAPPER_LINK_CHECK`, which
+  `npm run test:links` sets through a dedicated `vitest.links.config.ts`
+  instead of the `YAPPER_LINK_CHECK=1 vitest ...` shell prefix (POSIX syntax
+  that cmd.exe reads as a program name, so the command never worked on
+  Windows). CI already runs the check as its own step, so it still gates every
+  push; the default run drops from 1.3s to 2ms and can no longer go red on a
+  network blip.
 - **The e2e suite could not get through the two-page layout**: the document
   flow moved to the Reader tab, but the harness went straight for
   `#read-document-btn` while that page was still `hidden`. `DOM.getBoxModel`
