@@ -1,14 +1,30 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const terminate = vi.fn(async () => undefined);
+// Mirrors the shape tesseract.js actually returns: blocks → paragraphs →
+// lines → words, with no flat `words`/`lines` array on the page. Mocking the
+// v4 shape here is what let the OCR path return zero characters for every
+// scanned PDF without a single test noticing.
 const recognize = vi.fn(async () => ({
   data: {
     text: 'hello from tesseract',
-    words: [
+    blocks: [
       {
-        text: 'hello',
-        bbox: { x0: 1, y0: 2, x1: 3, y1: 4 },
-        confidence: 90,
+        paragraphs: [
+          {
+            lines: [
+              {
+                words: [
+                  {
+                    text: 'hello',
+                    bbox: { x0: 1, y0: 2, x1: 3, y1: 4 },
+                    confidence: 90,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       },
     ],
   },
@@ -75,6 +91,80 @@ describe('OcrEngine', () => {
     expect(result.words).toHaveLength(1);
     expect(result.words![0].text).toBe('hello');
     expect(result.words![0].bbox).toEqual({ x0: 1, y0: 2, x1: 3, y1: 4 });
+    expect(result.words![0].confidence).toBe(90);
+  });
+
+  it('flattens words across every block, paragraph and line', async () => {
+    recognize.mockResolvedValueOnce({
+      data: {
+        text: 'one two three',
+        blocks: [
+          {
+            paragraphs: [
+              { lines: [{ words: [{ text: 'one', bbox: { x0: 0, y0: 0, x1: 1, y1: 1 } }, { text: 'two', bbox: { x0: 2, y0: 0, x1: 3, y1: 1 } }] }] },
+              { lines: [{ words: [{ text: 'three', bbox: { x0: 0, y0: 2, x1: 1, y1: 3 } }] }] },
+            ],
+          },
+          {
+            paragraphs: [
+              { lines: [{ words: [{ text: 'four', bbox: { x0: 0, y0: 4, x1: 1, y1: 5 } }] }] },
+            ],
+          },
+        ],
+      },
+    });
+    const { getOcrEngine } = await import('./ocr');
+    const result = await getOcrEngine('eng').recognize(new Blob(['x']), { includeWords: true });
+    expect(result.words!.map(w => w.text)).toEqual(['one', 'two', 'three', 'four']);
+  });
+
+  it('skips blank tokens and words without a box', async () => {
+    recognize.mockResolvedValueOnce({
+      data: {
+        text: 'kept',
+        blocks: [{
+          paragraphs: [{
+            lines: [{
+              words: [
+                { text: '   ', bbox: { x0: 0, y0: 0, x1: 1, y1: 1 } },
+                { text: 'no-box' },
+                { text: 'kept', bbox: { x0: 2, y0: 0, x1: 3, y1: 1 } },
+              ],
+            }],
+          }],
+        }],
+      },
+    });
+    const { getOcrEngine } = await import('./ocr');
+    const result = await getOcrEngine('eng').recognize(new Blob(['x']), { includeWords: true });
+    expect(result.words!.map(w => w.text)).toEqual(['kept']);
+  });
+
+  it('tolerates a missing or null blocks array on a blank page', async () => {
+    for (const blocks of [null, undefined, 'nonsense']) {
+      recognize.mockResolvedValueOnce({ data: { text: '   ', blocks } });
+      const { getOcrEngine } = await import('./ocr');
+      const result = await getOcrEngine('eng').recognize(new Blob(['x']), { includeWords: true });
+      expect(result.words).toEqual([]);
+    }
+  });
+
+  it('throws instead of returning text with no words', async () => {
+    // The failure this guards: OCR reads the page fine, the word list comes
+    // back empty, and the reader's line grouping turns the document into
+    // zero characters with no error anywhere.
+    recognize.mockResolvedValueOnce({ data: { text: 'readable text', blocks: [] } });
+    const { getOcrEngine } = await import('./ocr');
+    await expect(
+      getOcrEngine('eng').recognize(new Blob(['x']), { includeWords: true }),
+    ).rejects.toThrow(/no word boxes/);
+  });
+
+  it('does not throw when the page really is blank', async () => {
+    recognize.mockResolvedValueOnce({ data: { text: '', blocks: [] } });
+    const { getOcrEngine } = await import('./ocr');
+    const result = await getOcrEngine('eng').recognize(new Blob(['x']), { includeWords: true });
+    expect(result.words).toEqual([]);
   });
 
   it('getOcrEngine reuses one instance per language', async () => {

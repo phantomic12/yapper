@@ -411,10 +411,9 @@ export function bindDocumentEvents(state: AppState): void {
 
   pauseBtn.addEventListener('click', () => {
     if (!state.readerSession) return;
-    // resumeAfterGesture is a no-op if not in needsUserGesture state, so
-    // it's safe to call from any click. This avoids a class of bugs where
-    // resume() from a click that wasn't user-initiated (e.g. programmatic
-    // .click() from another handler) silently fails again.
+    // resumeAfterGesture() resumes from any paused state — including an
+    // ordinary Pause, not just an autoplay block — and being in a real
+    // click is what makes the play() permitted.
     if (state.readerSession.getState().status === 'playing') {
       state.readerSession.pause();
     } else {

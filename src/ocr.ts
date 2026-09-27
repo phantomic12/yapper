@@ -35,6 +35,35 @@ export interface OcrResult {
   words?: OcrWord[];
 }
 
+/**
+ * tesseract.js returns its geometry as a hierarchy — blocks → paragraphs →
+ * lines → words — and `Page` in its own typings has no flat `words` array
+ * (that was the v4 shape). Structural mirrors of the parts we walk; the
+ * reader only needs each word's text and box.
+ */
+interface TesseractWord { text?: string; bbox?: OcrWord['bbox']; confidence?: number }
+interface TesseractLine { words?: TesseractWord[] }
+interface TesseractParagraph { lines?: TesseractLine[] }
+interface TesseractBlock { paragraphs?: TesseractParagraph[] }
+
+/** Flatten blocks → paragraphs → lines → words into the flat list the
+ * reader's line grouping expects. Skips empty tokens. */
+function flattenWords(blocks: unknown): OcrWord[] {
+  if (!Array.isArray(blocks)) return [];
+  const words: OcrWord[] = [];
+  for (const block of blocks as TesseractBlock[]) {
+    for (const paragraph of block?.paragraphs ?? []) {
+      for (const line of paragraph?.lines ?? []) {
+        for (const word of line?.words ?? []) {
+          if (!word?.text?.trim() || !word.bbox) continue;
+          words.push({ text: word.text, bbox: word.bbox, confidence: word.confidence });
+        }
+      }
+    }
+  }
+  return words;
+}
+
 export interface OcrOptions {
   language?: string; // default 'eng'
   /** Receives progress updates during recognition. */
@@ -87,11 +116,18 @@ export class OcrEngine {
     try {
       const { data } = await this.worker.recognize(image);
       options.onProgress?.({ status: 'done', progress: 1 });
-      // tesseract.js v7's Page type declares `blocks` but the runtime object
-      // also includes a flat `words` array (not in the .d.ts). Cast to access it.
-      const words = options.includeWords
-        ? (data as unknown as { words?: OcrWord[] }).words
-        : undefined;
+      if (!options.includeWords) return { text: data.text };
+      const words = flattenWords(data.blocks);
+      if (words.length === 0 && data.text?.trim()) {
+        // Reading a page perfectly while reporting no words is a contract
+        // break, not an empty page — and the reader's line grouping turns it
+        // into a document with zero characters and no error at all. Fail
+        // loudly instead of shipping a blank result.
+        throw new Error(
+          'OCR produced text but no word boxes: the tesseract result shape ' +
+          'has changed (expected blocks[].paragraphs[].lines[].words[]).',
+        );
+      }
       return { text: data.text, words };
     } catch (err) {
       options.onProgress?.({ status: 'error', progress: 0 });

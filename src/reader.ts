@@ -151,14 +151,19 @@ export class DocumentReaderSession {
   }
 
   /**
-   * Resume playback when the browser blocked autoplay. Call this from a
-   * real user-gesture handler (click, keypress) so the resulting
-   * `audio.play()` is permitted. No-op if already playing.
+   * Resume from a real user-gesture handler (click, keypress).
+   *
+   * The name is about the *use*, not a precondition: being inside a user
+   * gesture only means the resulting `audio.play()` is allowed, so this
+   * resumes whether or not autoplay was ever blocked. Gating on
+   * `needsUserGesture` (as this used to) made the Resume button dead after
+   * an ordinary Pause — the label said Resume, the click did nothing, and
+   * Stop was the only way out. If autoplay *is* blocked again, the play()
+   * rejection path sets needsUserGesture and the buttons relabel.
    */
   resumeAfterGesture() {
-    if (this.state.needsUserGesture) {
-      this.resume();
-    }
+    if (this.state.status === 'playing') return;
+    this.resume();
   }
 
   /** Stop and tear everything down. */

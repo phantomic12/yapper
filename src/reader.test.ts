@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { prepareReaderData, pickHighlightedWord } from './reader';
+import { describe, it, expect, vi } from 'vitest';
+import { prepareReaderData, pickHighlightedWord, DocumentReaderSession } from './reader';
+import type { TTSEngine } from './engine';
 
 describe('prepareReaderData — sentence segmentation', () => {
   it('splits on plain terminal punctuation', () => {
@@ -143,5 +144,65 @@ describe('pickHighlightedWord', () => {
     // ratio fallback is safer than indexing past the end.
     const timings = [0, 1];  // only 2 timings, 10 words
     expect(pickHighlightedWord(10, 5, 10, timings)).toBe(5); // ratio wins
+  });
+});
+// ─── Session pause/resume ─────────────────────────────────────────
+
+/** A session whose chunk jobs are never "done": tryPlayNext() returns
+ * before touching <audio>, which jsdom does not implement. */
+function idleSession(): DocumentReaderSession {
+  const engine = {
+    enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending', url: undefined })),
+    cancel: vi.fn(),
+    on: vi.fn(() => () => {}),
+    getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+  } as unknown as TTSEngine;
+  return new DocumentReaderSession(engine, 'One sentence. Another sentence.', { chunkSize: 200 });
+}
+
+describe('DocumentReaderSession — pause and resume', () => {
+  it('resumeAfterGesture() resumes from an ordinary Pause', () => {
+    // Regression: resumeAfterGesture() used to do nothing unless autoplay
+    // had been blocked, so pressing Pause then Resume left the button
+    // labelled Resume, the click inert, and Stop the only way out.
+    const session = idleSession();
+    session.pause();
+    expect(session.getState().status).toBe('paused');
+
+    session.resumeAfterGesture();
+    expect(session.getState().status).toBe('playing');
+    expect(session.getState().isPlaying).toBe(true);
+  });
+
+  it('resumeAfterGesture() is a no-op while already playing', () => {
+    const changes: string[] = [];
+    const session = new DocumentReaderSession(
+      {
+        enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending', url: undefined })),
+        cancel: vi.fn(),
+        on: vi.fn(() => () => {}),
+        getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+      } as unknown as TTSEngine,
+      'One sentence. Another sentence.',
+      { chunkSize: 200, onStateChange: (s) => changes.push(s.status) },
+    );
+
+    session.pause();
+    session.resumeAfterGesture();
+    expect(session.getState().status).toBe('playing');
+    const seen = changes.length;
+
+    session.resumeAfterGesture();
+    expect(session.getState().status).toBe('playing');
+    expect(changes.length).toBe(seen);
+  });
+
+  it('clears a stale needsUserGesture when it resumes', () => {
+    // Once playback is under way the "Click to play" hint must not linger
+    // and keep the buttons labelled Resume.
+    const session = idleSession();
+    session.pause();
+    session.resumeAfterGesture();
+    expect(session.getState().needsUserGesture).toBeUndefined();
   });
 });
