@@ -8,7 +8,13 @@ import {
   groupVoices,
   previewButtonLabel,
   supportsVoicePreview,
+  voiceDisplayLabel,
 } from '../voice-preview';
+import {
+  fetchVoiceSample,
+  hasVoiceSample,
+  isAliasedSample,
+} from '../voice-samples';
 import {
   modelIdForPreset,
   presetDef,
@@ -18,6 +24,36 @@ import {
 
 const SAMPLE_TEXT =
   'The quick brown fox jumps over the lazy dog. Yapper runs entirely in your browser, with no data sent to any server.';
+
+/**
+ * Escape hatch: `?live-previews=1` forces every audition to synthesise.
+ *
+ * It exists for scripts/generate_voice_samples.py. Without it, re-running the
+ * generator would click "Hear it", receive the very MP3 it is supposed to be
+ * replacing, and cheerfully re-encode them onto themselves — a self-
+ * referential loop that looks like a successful run and leaves the recordings
+ * frozen forever. It also makes it possible to A/B a recording against live
+ * synthesis in a browser by hand.
+ */
+const FORCE_LIVE_PREVIEWS =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).has('live-previews');
+
+/**
+ * Can this voice be heard right now?
+ *
+ * Two ways to say yes, and the first one is the point of the whole feature:
+ * a recorded clip needs no model at all. Before the samples existed the only
+ * condition was "the model is loaded", which meant the single most human
+ * decision in the app — which voice do I like? — was the one decision that
+ * could not be made before paying for a download.
+ */
+function canAudition(state: AppState, voiceId: string): boolean {
+  if (!FORCE_LIVE_PREVIEWS && hasVoiceSample(state.selectedModel.id, voiceId)) {
+    return true;
+  }
+  return state.engine?.getEngineState() === 'ready';
+}
 
 /**
  * One audition player for the whole page. A single <audio> element is
@@ -98,7 +134,8 @@ function renderVoiceCard(
   traits: string,
   selectedId: string | undefined,
   previewable: boolean,
-  previewReady: boolean,
+  canHear: boolean,
+  aliasNote: string,
 ): string {
   const selected = voiceId === selectedId;
   // Traits belong in the accessible name even when the group heading already
@@ -111,10 +148,11 @@ function renderVoiceCard(
         <span class="voice-card__name">${escapeHtml(name)}</span>
         ${detail ? `<span class="voice-card__desc">${escapeHtml(detail)}</span>` : ''}
       </button>
+      ${aliasNote ? `<span class="voice-card__source" data-advanced>${escapeHtml(aliasNote)}</span>` : ''}
       ${previewable
         ? `<button class="voice-card__play" type="button" data-action="preview" data-label="Hear ${escapeHtml(name)}"
              aria-label="Hear ${escapeHtml(name)}"
-             ${previewReady ? '' : 'data-blocked="1" title="Load the model first to hear these voices"'}
+             ${canHear ? '' : 'data-blocked="1" title="Load the model first to hear this voice"'}
              >${previewButtonLabel(false)}</button>`
         : ''}
     </div>
@@ -151,7 +189,6 @@ export function renderVoiceSection(state: AppState): void {
 
   section.style.display = '';
   const previewable = supportsVoicePreview(state.selectedModel);
-  const previewReady = previewable && state.engine?.getEngineState() === 'ready';
 
   const groups = groupVoices(state.selectedModel.voices);
   grid.innerHTML = groups.map((group, gi) => `
@@ -167,7 +204,13 @@ export function renderVoiceSection(state: AppState): void {
         [item.accent, item.gender].filter(Boolean).join(', '),
         state.selectedVoiceId,
         previewable,
-        previewReady,
+        canAudition(state, item.voice.id),
+        // A recording borrowed from another model is disclosed rather than
+        // passed off as this model's own audio. Advanced-only: in the simple
+        // view the voice is simply audible, which is what was asked for.
+        isAliasedSample(state.selectedModel.id, item.voice.id) && !FORCE_LIVE_PREVIEWS
+          ? `recorded from ${voiceDisplayLabel(state.selectedModel.name)}`
+          : '',
       )).join('')}
     </div>
   `).join('');
@@ -200,21 +243,22 @@ export function syncVoiceSelection(state: AppState): void {
 }
 
 /**
- * Enable or disable the audition buttons. An audition needs a loaded model:
- * pressing "Hear it" on a 88MB download that has not started would either do
- * nothing or kick off a silent 88MB fetch the user did not ask for.
+ * Enable or disable the audition buttons.
+ *
+ * A voice with a recording is always live, whatever the engine is doing; one
+ * without falls back to synthesis, which needs a loaded model — pressing
+ * "Hear it" on an 88MB download that has not started would either do nothing
+ * or kick off a silent 88MB fetch the user did not ask for.
  */
 export function updateVoicePreviewAvailability(state: AppState): void {
-  const ready = state.engine?.getEngineState() === 'ready';
   document.querySelectorAll<HTMLButtonElement>('.voice-card__play').forEach(btn => {
-    // Two independent reasons a button can be dead, tracked separately so a
-    // busy player does not overwrite the "load the model first" explanation.
-    if (ready) {
+    const voiceId = btn.closest<HTMLElement>('.voice-card')?.dataset.voiceId;
+    if (voiceId && canAudition(state, voiceId)) {
       btn.removeAttribute('data-blocked');
       btn.removeAttribute('title');
     } else {
       btn.setAttribute('data-blocked', '1');
-      btn.title = 'Load the model first to hear these voices';
+      btn.title = 'Load the model first to hear this voice';
     }
   });
   renderPreviewButtons();
@@ -256,12 +300,26 @@ function renderPreviewButtons(): void {
 
 async function auditionVoice(state: AppState, voiceId: string): Promise<void> {
   const engine = state.engine;
-  if (!engine) return;
+  const modelId = state.selectedModel.id;
   const player = getPreviewPlayer();
   // audition() marks the voice active synchronously, before the multi-second
   // synthesis starts — so paint before awaiting, or the button sits there
   // looking exactly as it did before the click and the click reads as a no-op.
-  const pending = player.audition(voiceId, id => engine.preview(PREVIEW_TEXT, id, state.currentSpeed));
+  // That is also why the fetch happens INSIDE the producer rather than before
+  // this call: awaiting it first would reintroduce the same dead-looking
+  // button, just for a few hundred milliseconds instead of several seconds.
+  const pending = player.audition(voiceId, async id => {
+    // A recording is preferred whenever there is one. Falling through to
+    // synthesis on a miss is deliberate: a voice added to a registry without
+    // a re-run of the generator should still be auditionable, and a 404 on a
+    // clip should cost a slower answer rather than a dead button.
+    if (!FORCE_LIVE_PREVIEWS) {
+      const recorded = await fetchVoiceSample(modelId, id);
+      if (recorded) return recorded;
+    }
+    if (!engine) throw new Error('No model is loaded.');
+    return engine.preview(PREVIEW_TEXT, id, state.currentSpeed);
+  });
   renderPreviewButtons();
   try {
     await pending;

@@ -162,7 +162,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <!-- Voice Selection (hidden if model has no voices) -->
       <div class="voice-section" id="voice-section" style="display:none">
         <div class="section-label" id="voice-section-label">Voice</div>
-        <div class="voice-hint">Press <strong>Hear it</strong> on any voice to hear a sample, then pick the one you like.</div>
+        <div class="voice-hint">Press <strong>Hear it</strong> on any voice to hear it — no download needed — then pick the one you like.</div>
         <div class="voice-grid" id="voice-grid" role="radiogroup" aria-labelledby="voice-section-label"></div>
         <div class="custom-voice-input" id="custom-voice-input" style="display:none">
           <input type="url" id="custom-voice-url" placeholder="https://example.com/your-speaker-embedding.bin" />

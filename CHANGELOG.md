@@ -80,6 +80,41 @@ All notable changes to Yapper are recorded here. Versions follow
   instead, which is all the app ever promised (a finished job carries a usable
   URL). Verified green on both jsdom 30.0.1 and 30.1.1.
 
+### Added
+- **Every voice is auditionable before you download anything.** 44 recorded
+  clips (Kokoro's 28, Kitten Nano's 8, Kitten Mini's 8) are committed under
+  `public/voice-samples/` — 1.2 MB of 24 kHz mono MP3, served by the same
+  Pages deploy as the app. Until now the "Hear it" buttons were dead until a
+  model finished downloading (`TTSEngine.preview()` throws without one, and
+  `updateVoicePreviewAvailability` blocked every button with "load the model
+  first"), which made the one genuinely human decision in the app — which
+  voice do I like? — the only decision you could not make first. A voice with
+  a recording is now live whatever the engine is doing, and a voice without
+  one still falls back to live synthesis, so adding a voice to a registry
+  without re-recording degrades to "slower" rather than "broken".
+  The clips are not hand-made: `scripts/generate_voice_samples.py` drives the
+  app's own audition path in a headless browser and records what comes out, so
+  a sample and a live synthesis are the same audio by construction rather than
+  by a test that hopes they match. It needs no app support — the capture hooks
+  `URL.createObjectURL` over CDP — and `?live-previews=1` forces real
+  synthesis so a re-run cannot regenerate the samples from themselves.
+  The manifest is keyed by **(model id, voice id)**, not voice id alone:
+  `KITTEN_VOICES` is one shared constant, so `kitten-mini` and `kitten-nano`
+  expose the same eight voice ids while conditioning on different embeddings.
+  Keyed by voice alone, Mini would quietly play Nano's audio — a valid file,
+  no error anywhere, and a user concluding that Mini sounds bad. The
+  generated `src/voice-samples.data.ts` also pins the upstream revision each
+  clip came from and an FNV-1a hash of `PREVIEW_TEXT`, and
+  `src/voice-samples.test.ts` fails if either drifts from the app or if a
+  referenced file is not actually committed, so 44 opaque binaries cannot
+  quietly go stale. `kokoro-82m-fp16` borrows the int8 recordings (same repo,
+  same 28 style vectors, only the dtype differs); the manifest records the
+  alias and the advanced view says "recorded from Kokoro-82M" on the card
+  rather than passing borrowed audio off as its own. Apache-2.0 covers both
+  models; `public/voice-samples/PROVENANCE.md` carries the attribution those
+  licences require, and Kokoro's synthetic training data means no real
+  person's voice is reproduced.
+
 ### Changed
 - **Vitest 5 and jsdom 30.1.1 are in; TypeScript 7 is deliberately not.**
   Renovate's grouped major bump could not land as written: its artifact step

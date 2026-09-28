@@ -563,6 +563,82 @@ def step_assert_simple_mode(cdp_holder):
           f'{s.get("presetBlurbs")})')
 
 
+VOICE_AUDITION_JS = r"""
+(() => {
+  const btns = [...document.querySelectorAll('.voice-card__play')];
+  return {
+    loaded: (document.querySelector('.model-card--loaded') || {}).dataset?.modelId || null,
+    total: btns.length,
+    live: btns.filter(b => !b.disabled && !b.hasAttribute('data-blocked')).length,
+    first: btns[0] ? btns[0].closest('.voice-card').dataset.voiceId : null,
+  };
+})()
+"""
+
+# Clicks one audition and reports both what played and whether the committed
+# recording was the thing that answered. The fetch count is the real assertion:
+# a model being loaded would make the button work anyway, so "it played" proves
+# nothing on its own. "It played AND the browser went to /voice-samples/" is
+# the only way to know the user is hearing a recorded clip.
+VOICE_AUDITION_PLAY_JS = r"""
+(async () => {
+  const vid = %s;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const btn = document.querySelector('.voice-card[data-voice-id="' + vid + '"] .voice-card__play');
+  if (!btn) return { ok: false, why: 'no play button for ' + vid };
+
+  const played = [];
+  const orig = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    played.push(this.src);
+    return orig.call(this).catch(() => {});
+  };
+  const sampleReqs = () =>
+    performance.getEntriesByType('resource').filter(e => e.name.includes('/voice-samples/')).length;
+  const before = sampleReqs();
+  try {
+    btn.click();
+    const t0 = Date.now();
+    while (!played.length && Date.now() - t0 < 30000) await sleep(100);
+    await sleep(500);
+    return { ok: played.length > 0, played, fetched: sampleReqs() - before };
+  } finally {
+    HTMLMediaElement.prototype.play = orig;
+  }
+})()
+"""
+
+
+def step_assert_audition_without_download(cdp_holder):
+    """Every voice is audible before any model has been downloaded.
+
+    This is the last thing the simple view used to make the user pay for: to
+    answer "which voice do I like?" you had to finish a model download first.
+    The recordings remove that, and this step is the only place that checks it
+    against a real browser — a unit test can prove the lookup returns a URL,
+    not that pressing the button fetches and plays one.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+    s = v(cdp.eval(VOICE_AUDITION_JS, target['id'], timeout=10))
+
+    if not s.get('total'):
+        raise AssertionError(f'no voice audition buttons rendered: {s}')
+    if s.get('live') != s.get('total'):
+        raise AssertionError(
+            f'{s["total"] - s["live"]} of {s["total"]} voices are still blocked '
+            f'with no model loaded (model={s.get("loaded")}): {s}')
+
+    res = v(cdp.eval_async(VOICE_AUDITION_PLAY_JS % json.dumps(s['first']),
+                          target['id'], timeout=60))
+    if not res.get('ok'):
+        raise AssertionError(f'audition produced no audio: {res}')
+    if not res.get('fetched'):
+        raise AssertionError(
+            'the audition played but never fetched a recording from '
+            f'/voice-samples/ — it synthesised instead: {res}')
+
+
 def step_enable_advanced_mode(cdp_holder):
     """The header toggle reveals the full set of controls and persists.
 
@@ -1473,6 +1549,10 @@ def main():
         # and speed slider are behind one toggle, so the model-selection
         # steps below have to turn advanced mode on first.
         ('assert_simple_mode', lambda: step_assert_simple_mode(cdp_holder)),
+        # Before any model is selected or loaded: the recordings must make
+        # every voice audible on their own.
+        ('assert_audition_without_download',
+         lambda: step_assert_audition_without_download(cdp_holder)),
         ('enable_advanced_mode', lambda: step_enable_advanced_mode(cdp_holder)),
         ('select_model', lambda: step_select_model(cdp_holder)),
         ('click_load', lambda: step_click_load(cdp_holder)),

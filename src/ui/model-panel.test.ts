@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ensureModelLoaded, handleLoadProgress } from './model-panel';
+import { ensureModelLoaded, handleLoadProgress, updateVoicePreviewAvailability } from './model-panel';
 import type { AppState } from '../app-state';
 import { MODELS } from '../engine';
 
@@ -98,5 +98,57 @@ describe('handleLoadProgress — progress copy for the two views', () => {
     const text = document.getElementById('progress-text')!;
     expect(text.textContent).toBe('Contacting huggingface.co for Kitten TTS Nano…');
     expect(text.querySelector('.progress-text__size')).toBeNull();
+  });
+});
+
+describe('updateVoicePreviewAvailability — auditioning without a download', () => {
+  /** One voice card, with a play button, as renderVoiceSection would emit. */
+  function voiceGrid(...voiceIds: string[]): void {
+    document.body.innerHTML = voiceIds.map(id => `
+      <div class="voice-card" data-voice-id="${id}">
+        <button class="voice-card__play" data-action="preview"></button>
+      </div>`).join('');
+  }
+
+  const buttons = () =>
+    [...document.querySelectorAll<HTMLButtonElement>('.voice-card__play')];
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="status-container"></div>';
+  });
+
+  it('lets a recorded voice be heard with no model loaded at all', () => {
+    // This is the feature. Before the samples existed the only way to hear a
+    // voice was to finish downloading a model, so the one choice the app asks
+    // a newcomer to make was the one choice that could not be made first.
+    voiceGrid('expr-voice-2-f');
+    updateVoicePreviewAvailability(stubState(stubEngine(), 'kitten-nano'));
+    expect(buttons()[0].hasAttribute('data-blocked')).toBe(false);
+  });
+
+  it('still blocks a voice with no recording when the engine is idle', () => {
+    // A voice added to a registry without a re-run of the generator must not
+    // offer a button that cannot work.
+    voiceGrid('a_voice_nobody_recorded');
+    updateVoicePreviewAvailability(stubState(stubEngine(), 'kitten-nano'));
+    expect(buttons()[0].getAttribute('data-blocked')).toBe('1');
+    expect(buttons()[0].title).toMatch(/load the model/i);
+  });
+
+  it('unblocks an unrecorded voice once the engine can synthesise', () => {
+    voiceGrid('a_voice_nobody_recorded');
+    updateVoicePreviewAvailability(stubState(
+      stubEngine({ getEngineState: () => 'ready' }), 'kitten-nano'));
+    expect(buttons()[0].hasAttribute('data-blocked')).toBe(false);
+  });
+
+  it('judges each voice on its own recording, not on a model-wide yes', () => {
+    // A single model-wide "has samples" flag would light up every button,
+    // including voices that have no clip and no loaded engine behind them.
+    voiceGrid('expr-voice-2-f', 'a_voice_nobody_recorded');
+    updateVoicePreviewAvailability(stubState(stubEngine(), 'kitten-nano'));
+    const [recorded, unrecorded] = buttons();
+    expect(recorded.hasAttribute('data-blocked')).toBe(false);
+    expect(unrecorded.getAttribute('data-blocked')).toBe('1');
   });
 });
