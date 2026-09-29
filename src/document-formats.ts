@@ -698,6 +698,24 @@ async function extractPptx(file: File): Promise<FormatExtraction> {
 const ODT_TEXT_NS = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
 
 /**
+ * Is this element a paragraph inside a list item?
+ *
+ * Walks up rather than trusting the immediate parent: ODT puts the text in a
+ * `text:p` nested inside `text:list-item`, and a nested list hangs off that
+ * same item, so an inner item's paragraph is two list levels up. The walk
+ * stops at the first ancestor that is neither a list nor a list item, so a
+ * paragraph after a list is not mistaken for one inside it.
+ */
+function odtInListItem(el: Element): boolean {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const name = node.localName;
+    if (name === 'list-item') return true;
+    if (name !== 'list' && name !== 'list-header') return false;
+  }
+  return false;
+}
+
+/**
  * ODT's block elements as document blocks.
  *
  * Headings are `text:h`, not `text:p`, and carry their depth in
@@ -710,11 +728,15 @@ export function odtToBlocks(root: Element | Document): DocumentBlock[] {
   for (const el of Array.from(root.getElementsByTagName('*'))) {
     const name = el.localName;
     let kind: DocumentBlock['kind'] | null = null;
-    if (name === 'p') kind = 'p';
+    if (name === 'p') kind = odtInListItem(el) ? 'li' : 'p';
     else if (name === 'h') {
       const level = Number(el.getAttributeNS(ODT_TEXT_NS, 'outline-level'));
       kind = level <= 1 ? 'h1' : level === 2 ? 'h2' : 'h3';
-    } else if (name === 'h' || name === 'list-item') kind = 'p';
+    } else if (name === 'list-item') {
+      // Only reached when the item holds its text directly, with no nested
+      // paragraph — otherwise the paragraph above is the block.
+      kind = 'li';
+    }
     if (!kind) continue;
     // Nested content (a list inside a list) is walked in its own right.
     if (Array.from(el.children).some(child => child.localName === 'p'

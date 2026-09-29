@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   extractFormat,
+  odtToBlocks,
   xlsxSheetTitles,
   pptxSlideSize,
   pptxSlideBlocks,
@@ -564,6 +565,65 @@ describe('DOCX extraction', () => {
   });
 });
 
+// The list cases are the ones the fixture cannot cover: it has a single flat
+// list, so nothing here proves that a paragraph AFTER a list stays prose or
+// that a nested item is not attributed to its parent.
+describe('odtToBlocks lists', () => {
+  const parse = (body: string) => odtToBlocks(new DOMParser().parseFromString(
+    `<office:document-content
+       xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+       xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+       <office:body><office:text>${body}</office:text></office:body>
+     </office:document-content>`, 'application/xml'));
+
+  it('marks paragraphs inside list items as list items', () => {
+    const blocks = parse(`<text:list>
+      <text:list-item><text:p>First item.</text:p></text:list-item>
+      <text:list-item><text:p>Second item.</text:p></text:list-item>
+    </text:list>`);
+    expect(blocks.map(b => b.kind)).toEqual(['li', 'li']);
+    expect(blocks.map(b => b.runs[0].text)).toEqual(['First item.', 'Second item.']);
+  });
+
+  it('keeps a paragraph after a list as prose', () => {
+    // The trap: every ancestor of this paragraph is inside <office:text>, so a
+    // naive "is any ancestor a list" check would be right by accident. What
+    // matters is that the previous sibling being a list changes nothing.
+    const blocks = parse(`<text:list>
+        <text:list-item><text:p>Item.</text:p></text:list-item>
+      </text:list>
+      <text:p>After the list.</text:p>`);
+    expect(blocks.map(b => b.kind)).toEqual(['li', 'p']);
+    expect(blocks[1].runs[0].text).toBe('After the list.');
+  });
+
+  it('marks a nested item as a list item, not as body text', () => {
+    const blocks = parse(`<text:list>
+      <text:list-item>
+        <text:p>Outer item.</text:p>
+        <text:list><text:list-item><text:p>Inner item.</text:p></text:list-item></text:list>
+      </text:list-item>
+    </text:list>`);
+    expect(blocks.map(b => b.kind)).toEqual(['li', 'li']);
+    expect(blocks.map(b => b.runs[0].text)).toEqual(['Outer item.', 'Inner item.']);
+  });
+
+  it('handles a list item holding its text with no nested paragraph', () => {
+    const blocks = parse('<text:list><text:list-item>Bare item.</text:list-item></text:list>');
+    expect(blocks.map(b => b.kind)).toEqual(['li']);
+    expect(blocks[0].runs[0].text).toBe('Bare item.');
+  });
+
+  it('reads numbered lists the same as bulleted ones', () => {
+    // ODT numbers a list with text:style-name; the kind does not care, but
+    // the earlier flattening did, so both styles go through the same path.
+    const blocks = parse(`<text:list text:style-name="L1">
+      <text:list-item><text:p>Step one.</text:p></text:list-item>
+    </text:list>`);
+    expect(blocks.map(b => b.kind)).toEqual(['li']);
+  });
+});
+
 // The other fixtures under public/test-docs/ are exercised end-to-end by
 // the browser suite; ODT gets the same treatment here because it is the one
 // format whose package layout (a stored `mimetype` member, an ODF manifest)
@@ -586,6 +646,16 @@ describe('the committed ODT fixture', () => {
     dom.innerHTML = doc.html ?? '';
     expect(dom.querySelectorAll('h1')[0]?.textContent).toBe('Reader Probe');
     expect(dom.querySelectorAll('h2')[0]?.textContent).toBe('Outline levels');
+    // Bullets must render as bullets. The DOCX path already does this and the
+    // browser suite asserts it; the ODT path used to flatten list items into
+    // plain paragraphs, so the same document rendered differently per format.
+    const items = dom.querySelectorAll('li');
+    expect([...items].map(li => li.textContent)).toEqual([
+      'Bullet one carries a sentence of its own.',
+      'Bullet two does as well, and the exporter still finds it in the transcript.',
+    ]);
+    // The prose around the list stays prose.
+    expect(dom.querySelectorAll('p')).toHaveLength(3);
 
     expect((doc.sections ?? []).map(s => s.title)).toEqual([
       'Reader Probe', 'Outline levels',

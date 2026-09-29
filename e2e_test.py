@@ -1896,6 +1896,11 @@ def step_document_view_renders_odt(cdp_holder):
     if state.get('headings') != 2:
         raise AssertionError(
             f'expected the fixture\'s two outline headings, got {state.get("headings")}')
+    if not state.get('listItems'):
+        raise AssertionError(
+            'the ODT list rendered as plain paragraphs — the same document '
+            'shows bullets in DOCX, so a list item flattened to a paragraph '
+            'here is a format bug, not a document property')
     if not state.get('stamps', {}).get('ok'):
         raise AssertionError(
             f'ODT runs do not tile the extracted text: {state.get("stamps")}')
@@ -1906,6 +1911,7 @@ def step_document_view_renders_odt(cdp_holder):
                 f'{needle!r} never reached the page; the ODT walker dropped it. '
                 f'First 120 chars: {state.get("paragraphText")!r}')
     print(f'      ✓ ODT rendered: headings={state.get("headings")} '
+          f'lists={state.get("listItems")} '
           f'blocks={state.get("stamps", {}).get("blocks")} '
           f'textLength={state.get("stamps", {}).get("textLength")}')
     cdp.screenshot(target['id'], SCREENSHOT_DIR / '07b-odt-rendered.png')
