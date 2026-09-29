@@ -4,6 +4,12 @@
 import './pdfjs-engine-shim.js';
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
+import type { TextAnchor } from './document-types';
+import {
+  blocksToTextAndHtml,
+  type DocumentBlock,
+  type DocumentRun,
+} from './document-html';
 import { getOcrEngine } from './ocr';
 import { getLlmOcrEngine } from './engines/llm-ocr';
 import { engineSupportsPdfJs, pdfUnsupportedMessage } from './pdf-capability';
@@ -22,10 +28,66 @@ export interface ExtractedDocument {
   text: string;
   /** For PDFs, optional per-page OCR layout blocks when OCR is enabled. */
   layoutBlocks?: LayoutBlock[];
+  /**
+   * Where runs of `text` sit on the page they came from, in character
+   * offsets. This is what lets the reader show the actual document and move a
+   * highlight over the real layout instead of over a wall of extracted text.
+   *
+   * It has to be produced *during* extraction. pdfjs hands us one text item
+   * at a time with a position attached, and the moment those are joined into
+   * a string the mapping from "character 4,182" back to "rectangle on page 7"
+   * is gone — there is no way to recover it afterwards, which is why the
+   * existing text-layer path reads `transform` only to detect line breaks and
+   * throws the rest away.
+   */
+  anchors?: TextAnchor[];
+  /**
+   * Renderable markup for formats with no page geometry (DOCX, EPUB), where
+   * the structure is real but there are no coordinates to anchor text to.
+   *
+   * Every element in it carries a `data-off="start:end"` stamp, and those
+   * ranges are offsets into `text` — both produced together by
+   * `blocksToTextAndHtml`, so a highlight is a lookup rather than a search for
+   * the sentence somewhere in the rendered DOM. PDFs leave this undefined and
+   * use `anchors` instead.
+   */
+  html?: string;
   /** Detected / declared MIME type. */
   mimeType: string;
   /** File name. */
   name: string;
+}
+
+export type { TextAnchor };
+
+/**
+ * Bounding box for one pdfjs text item, in scale-1 viewport space.
+ *
+ * This is pdfjs's own highlight recipe: compose the item's transform with the
+ * viewport's, take the origin from the composed matrix, and step *up* by the
+ * item height, because text space is bottom-left origin while viewport space
+ * is top-left. Getting that sign wrong is the classic way to end up with
+ * highlights mirrored onto the wrong lines of the page.
+ *
+ * Rotated text is flattened to an axis-aligned box. pdfjs's own viewer rotates
+ * the rectangle by `atan2(tx[1], tx[0])`; this does not, which is exact for
+ * the horizontal body text of essentially every book and slightly over-wide on
+ * a rotated caption or a table header. Carrying the angle per anchor costs a
+ * second rectangle and a rotation at every highlight, and is not worth
+ * carrying until a document actually needs it.
+ */
+function textItemRect(
+  viewport: { transform: number[] },
+  item: TextItem,
+): { x: number; y: number; width: number; height: number } {
+  const tx = pdfjs.Util.transform(viewport.transform, item.transform);
+  const height = item.height || Math.hypot(tx[2], tx[3]) || 10;
+  return {
+    x: tx[4],
+    y: tx[5] - height,
+    width: item.width || 0,
+    height,
+  };
 }
 
 export interface LayoutBlock {
@@ -245,6 +307,7 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
     const parts: string[] = [];
     const layoutBlocks: LayoutBlock[] = [];
+    const anchors: TextAnchor[] = [];
     const useOcr = options.useOcr ?? false;
     const maxPages = Math.min(pdf.numPages, options.maxPdfPages ?? MAX_PDF_PAGES);
     if (maxPages < pdf.numPages) {
@@ -252,6 +315,24 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
         `PDF has ${pdf.numPages} pages; only the first ${maxPages} will be extracted`,
       );
     }
+
+    /**
+     * Append a line and report where it landed in the joined text.
+     *
+     * The final document is `parts.join('\n\n')`, so part N starts at the sum
+     * of every earlier part's length plus two. Tracking that running offset
+     * as we go is the only way the anchors can point at real characters —
+     * a two-character-per-part error here would shift every subsequent
+     * highlight by two characters, which is invisible until a sentence
+     * highlights the wrong line and then looks like a rendering bug.
+     */
+    let offset = 0;
+    const pushPart = (text: string): number => {
+      const start = offset;
+      offset += text.length + 2; // the '\n\n' separator join() inserts
+      parts.push(text);
+      return start;
+    };
 
     for (let i = 1; i <= maxPages; i++) {
       onProgress?.(`Processing PDF page ${i}/${maxPages}…`);
@@ -263,30 +344,70 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
         const ocrOptions: ExtractOptions = { ...options, onProgress };
         const blocks = await ocrPage(page, i, ocrOptions);
         layoutBlocks.push(...blocks);
-        parts.push(...blocks.map(b => b.text));
+        // OCR already produced page geometry; the anchors are a re-index of
+        // the same rectangles, so the viewer has one shape to read.
+        for (const block of blocks) {
+          const start = pushPart(block.text);
+          anchors.push({
+            page: block.page,
+            x: block.x,
+            y: block.y,
+            width: block.width,
+            height: block.height,
+            start,
+            end: start + block.text.length,
+          });
+        }
       } else {
         const content = await page.getTextContent({ includeMarkedContent: false });
+        // Rectangles are captured in scale-1 viewport space, so a zoom is a
+        // multiply at render time rather than a second transform here.
+        const viewport = page.getViewport({ scale: 1 });
         let lastY = 0;
         const lineParts: string[] = [];
+        const lineAnchors: Omit<TextAnchor, 'page'>[] = [];
+        let lineLen = 0;
+
+        const flushLine = (): void => {
+          if (!lineParts.length) return;
+          const lineStart = pushPart(lineParts.join(' '));
+          for (const a of lineAnchors) {
+            anchors.push({ ...a, page: i, start: lineStart + a.start, end: lineStart + a.end });
+          }
+          lineParts.length = 0;
+          lineAnchors.length = 0;
+          lineLen = 0;
+        };
+
         for (const item of content.items) {
           const textItem = item as TextItem;
           const txt = textItem.str;
           if (!txt) continue;
           // Heuristic line break: large vertical gaps
           if (lineParts.length && Math.abs(textItem.transform[5] - lastY) > 3) {
-            parts.push(lineParts.join(' '));
-            lineParts.length = 0;
+            flushLine();
           }
+          if (lineParts.length) lineLen += 1; // the space join() puts between items
           lineParts.push(txt);
+          lineAnchors.push({
+            ...textItemRect(viewport, textItem),
+            start: lineLen,
+            end: lineLen + txt.length,
+          });
+          lineLen += txt.length;
           lastY = textItem.transform[5];
         }
-        if (lineParts.length) parts.push(lineParts.join(' '));
+        flushLine();
       }
     }
 
     return {
       text: parts.join('\n\n'),
       layoutBlocks: useOcr && layoutBlocks.length ? layoutBlocks : undefined,
+      // A PDF with no extractable text (pure scans, or a text layer pdfjs
+      // cannot find) has nothing to anchor and still renders fine visually,
+      // so an empty array is a legitimate answer, not a failure.
+      anchors: anchors.length ? anchors : undefined,
       mimeType: 'application/pdf',
       name: file.name,
     };
@@ -485,6 +606,58 @@ function groupWordsIntoLines(words: BboxWord[], yThreshold: number): LineGroup[]
 
 // ─── DOCX extraction ──────────────────────────────────────────────
 
+/** True when a `w:rPr` child like `w:b`/`w:i` is on (absent val means on). */
+function docxFlagOn(run: Element, tag: string): boolean {
+  const flags = run.getElementsByTagName(tag);
+  if (!flags.length) return false;
+  const val = flags[0].getAttribute('w:val');
+  return val === null || !/^(0|false|off)$/i.test(val);
+}
+
+/**
+ * Runs of one paragraph, with formatting.
+ *
+ * Falls back to a single unstyled run if the runs do not reconstruct the
+ * paragraph's text exactly. The text is the contract — the reader segments it
+ * and every offset in the document points into it — so when formatting and
+ * text conflict, formatting loses. That keeps a DOCX with unusual markup (a
+ * `w:t` outside any `w:r`, say) from silently shifting every offset in the
+ * file by a character or two.
+ */
+function docxParagraphRuns(p: Element): DocumentRun[] {
+  const whole = Array.from(p.getElementsByTagName('w:t'))
+    .map(t => t.textContent ?? '')
+    .join('');
+  if (!whole.length) return [];
+
+  const runs: DocumentRun[] = [];
+  for (const r of Array.from(p.getElementsByTagName('w:r'))) {
+    const text = Array.from(r.getElementsByTagName('w:t'))
+      .map(t => t.textContent ?? '')
+      .join('');
+    if (!text) continue;
+    runs.push({ text, bold: docxFlagOn(r, 'w:b'), italic: docxFlagOn(r, 'w:i') });
+  }
+
+  if (runs.length === 0 || runs.map(r => r.text).join('') !== whole) {
+    return [{ text: whole }];
+  }
+  return runs;
+}
+
+/** Map a paragraph's style to a block kind, defaulting to a plain paragraph. */
+function docxParagraphKind(p: Element): DocumentBlock['kind'] {
+  if (p.getElementsByTagName('w:numPr').length > 0) return 'li';
+  const style = p.getElementsByTagName('w:pStyle')[0]?.getAttribute('w:val') ?? '';
+  if (/^title$/i.test(style)) return 'h1';
+  const heading = style.match(/^heading\s*(\d)/i);
+  if (heading) {
+    const level = Number(heading[1]);
+    return level <= 1 ? 'h1' : level === 2 ? 'h2' : 'h3';
+  }
+  return 'p';
+}
+
 async function extractDocx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
   // We use manual XML parsing instead of mammoth because mammoth's internal
   // xmldom wrapper calls DOMParser.parseFromString() without a mimeType,
@@ -497,14 +670,17 @@ async function extractDocx(file: File): Promise<Omit<ExtractedDocument, 'mimeTyp
 
   const parser = new DOMParser();
   const xml = parser.parseFromString(xmlText, 'application/xml');
-  const paragraphs = xml.getElementsByTagName('w:p');
-  const out: string[] = [];
-  for (const p of Array.from(paragraphs)) {
-    const texts = p.getElementsByTagName('w:t');
-    const line = Array.from(texts).map(t => t.textContent ?? '').join('');
-    if (line.trim()) out.push(line);
+  const blocks: DocumentBlock[] = [];
+  for (const p of Array.from(xml.getElementsByTagName('w:p'))) {
+    const runs = docxParagraphRuns(p);
+    if (!runs.length) continue;
+    blocks.push({ kind: docxParagraphKind(p), runs });
   }
-  return { text: out.join('\n\n') };
+
+  // One pass produces both, so the markup's stamped ranges are guaranteed to
+  // be offsets into the text the reader is going to segment.
+  const { text, html } = blocksToTextAndHtml(blocks);
+  return { text, html: html || undefined };
 }
 
 // ─── DOC (legacy Word binary) extraction ──────────────────────────
@@ -752,13 +928,83 @@ async function extractOdt(file: File): Promise<Omit<ExtractedDocument, 'mimeType
 // Minimal subset of epubjs's spine API that we actually consume. The published
 // types are incomplete so we narrow to the shape we need.
 interface EpubSpineItem {
-  load: (fn: (url: string) => Promise<string | Document>) => Promise<string | Document>;
+  load: (fn: (url: string) => Promise<EpubLoaded>) => Promise<EpubLoaded>;
   unload?: () => void;
 }
 interface EpubBook {
   spine: { spineItems: EpubSpineItem[] };
-  load: (url: string) => Promise<string | Document>;
+  load: (url: string) => Promise<EpubLoaded>;
   loaded: { spine: Promise<unknown> };
+}
+
+/**
+ * What `spineItem.load()` actually resolves to.
+ *
+ * Every shape here is real, which is the trap: epubjs's `Section.load`
+ * resolves `xml.documentElement` — the `<html>` *element*, not the Document it
+ * came from — so reading `.body` off it yields `undefined` and an EPUB
+ * silently extracts to nothing at all. Reading the element's own `innerHTML`
+ * is what works. `string` and `Document` are kept because `Book.load` resolves
+ * text for non-XHTML entries, and older epubjs builds resolved a Document.
+ */
+type EpubLoaded = string | Document | Element;
+
+/**
+ * Blocks inside one EPUB spine item (chapter).
+ *
+ * Block-structured rather than one collapsed string per chapter, which is what
+ * this used to produce. Two reasons, and the second is the one that forced it:
+ * paragraph breaks are what the sentence segmenter uses to pace a reading, and
+ * a stamped range per block is only meaningful if the text it indexes is built
+ * from those same blocks. Collapsing a whole chapter to one line first would
+ * leave the markup's offsets pointing into a string that no longer exists.
+ */
+export function epubBlocks(root: EpubLoaded): DocumentBlock[] {
+  const host = document.createElement('div');
+
+  // Three shapes, and they are not interchangeable. A Document carries
+  // `.body`; an Element — which is what epubjs hands back — does not, so
+  // asking an Element for `.body` is how an entire book extracts to zero
+  // characters with no error anywhere. Dispatch on nodeType rather than on
+  // which properties happen to exist.
+  if (typeof root === 'string') {
+    host.innerHTML = root;
+  } else if (root.nodeType === 9) {
+    const doc = root as Document;
+    host.innerHTML = doc.body?.innerHTML ?? doc.documentElement?.innerHTML ?? '';
+    if (!host.textContent?.trim()) host.textContent = doc.documentElement?.textContent ?? '';
+  } else if (root.nodeType === 1) {
+    const el = root as Element;
+    // The element is normally `<html>`, so take its body: a chapter's
+    // `<head><title>` is not part of the book, and it would otherwise show up
+    // as the opening line of the chapter that has no block elements.
+    const source = el.querySelector('body') ?? el;
+    host.innerHTML = source.innerHTML;
+    // Serialisation is the second place this can come back empty (a document
+    // with no HTML serialiser available). The words are still on the element,
+    // so take them from there rather than reporting an empty chapter.
+    if (!host.textContent?.trim()) host.textContent = source.textContent ?? '';
+  }
+
+  const blocks: DocumentBlock[] = [];
+  for (const el of Array.from(host.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,figcaption,td'))) {
+    const text = collapseWhitespace(el.textContent ?? '');
+    if (!text) continue;
+    const kind: DocumentBlock['kind'] =
+      /^H1$/.test(el.tagName) ? 'h1'
+        : /^H2$/.test(el.tagName) ? 'h2'
+          : /^H[3-6]$/.test(el.tagName) ? 'h3'
+            : el.tagName === 'LI' ? 'li'
+              : 'p';
+    blocks.push({ kind, runs: [{ text }] });
+  }
+
+  // A chapter whose markup uses none of those elements still has words in it.
+  if (blocks.length === 0) {
+    const text = collapseWhitespace(host.textContent ?? '');
+    if (text) blocks.push({ kind: 'p', runs: [{ text }] });
+  }
+  return blocks;
 }
 
 async function extractEpub(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
@@ -767,22 +1013,23 @@ async function extractEpub(file: File): Promise<Omit<ExtractedDocument, 'mimeTyp
   const book = ePub(arrayBuffer);
   await book.loaded.spine;
 
-  const parts: string[] = [];
+  // Every chapter's blocks go into ONE list, so blocksToTextAndHtml can stamp
+  // globally-correct offsets in a single pass. Stamping per chapter would
+  // restart the numbering at zero and every highlight past chapter one would
+  // land at the start of the book.
+  const all: DocumentBlock[] = [];
   for (const item of book.spine.spineItems) {
-    const doc = await item.load(book.load.bind(book));
-    const text = typeof doc === 'string'
-      ? stripHtml(doc)
-      : (doc as Document).body?.textContent ?? '';
-    if (text.trim()) parts.push(collapseWhitespace(text));
+    const loaded = await item.load(book.load.bind(book));
+    const blocks = epubBlocks(loaded);
+    if (blocks.length) {
+      blocks[0] = { ...blocks[0], chapterStart: true };
+      all.push(...blocks);
+    }
     item.unload?.();
   }
-  return { text: parts.join('\n\n') };
-}
 
-function stripHtml(html: string): string {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  return tmp.textContent ?? '';
+  const { text, html } = blocksToTextAndHtml(all);
+  return { text, html: html || undefined };
 }
 
 function collapseWhitespace(s: string): string {

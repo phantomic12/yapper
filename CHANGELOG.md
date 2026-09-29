@@ -6,6 +6,24 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Fixed
+- **EPUB files imported as an empty document.** `spineItem.load()` resolves
+  `xml.documentElement` — the `<html>` *element*, not the Document it was
+  parsed from — and extraction read `.body` off it, a property that exists only
+  on a Document. `undefined ?? ''` then produced an empty string for every
+  chapter, so an EPUB opened as a blank document with no error anywhere to say
+  why, and no test ever covered EPUB content (only its MIME mapping), so it
+  stayed that way. Both shapes are handled now, dispatched on `nodeType` rather
+  than on which properties happen to exist, and `src/epub-blocks.test.ts`
+  builds a fixture with exactly the real shape and asserts it still has no
+  `.body` — so the guard cannot quietly stop covering the case it was written
+  for.
+- **Messages raised on the Reader page were written where the user could not
+  see them.** `showStatus()` renders into `#status-container`, which lives
+  inside `#page-studio`; from the Reader page that wrote a message into a
+  `display: none` subtree, so "Speak" on a classified block with no model
+  loaded, and the too-long-document refusal, both looked like dead controls.
+  Reader-page feedback now goes through the panel's own `reader-error`, which
+  is what `showReaderError()` already did for extraction failures.
 - **Kokoro no longer hangs — the "worker slowdown" is fixed at the root.**
   The engine used to call the `kokoro-js` package, which pins its own nested
   `@huggingface/transformers` 3.8.1 + onnxruntime-web 1.22.0-dev, and that
@@ -114,6 +132,52 @@ All notable changes to Yapper are recorded here. Versions follow
   models; `public/voice-samples/PROVENANCE.md` carries the attribution those
   licences require, and Kokoro's synthetic training data means no real
   person's voice is reproduced.
+
+### Added
+- **The reader opens the document and shows it, instead of a transcript of
+  it.** PDFs render as real pages with the read-aloud highlight drawn over the
+  actual layout and page navigation and zoom; DOCX and EPUB render as real
+  typography — headings, bold, italic, lists, blockquotes, escaped markup —
+  with the highlight following the words. The pane used to be titled
+  "Extracted text" and held a flat wall of sentences, which is the worst
+  possible view of a book: no pages, no headings, no way to tell a novel from
+  a scanned form. A **Document / Text** switch appears only for formats with a
+  visual form, so a plain-text or spreadsheet import does not offer a tab that
+  would show nothing.
+  What makes the highlight exact rather than approximate is that page geometry
+  is captured *during* extraction. pdfjs hands back one positioned text item at
+  a time, and the moment those are joined into a string the link between
+  "character 4,182" and "rectangle on page 7" is unrecoverable — the old
+  text-layer path read `transform` only to detect line breaks and discarded the
+  rest. `TextAnchor` now records each run's rectangle and character range as it
+  is read, which is the only moment that information exists, and `rectsForSpan`
+  turns a sentence's range back into boxes. DOCX and EPUB have no coordinates at
+  all, so their markup is generated from the same runs that produce the
+  extracted text and every run is stamped with the range it covers; the
+  alternative — rendering the document and then searching the DOM for the
+  sentence's text — is what most readers do and is quietly wrong the first time
+  a sentence appears twice or contains a typographic quote. Because text and
+  markup come from one pass over one list of blocks, they cannot drift.
+  Pages are windowed rather than all alive: a 500-page PDF with a canvas per
+  page is a tab-crash plan, so every page keeps a correctly-sized placeholder
+  (keeping the scrollbar honest) and only a small radius around the page being
+  read holds a rendered canvas. Clicking anywhere in a rendered document starts
+  the read from the sentence clicked, and the highlight moves on the click
+  rather than waiting for the first chunk to be synthesised — on a CPU/WASM
+  model that wait is seconds long, and a click that shows nothing reads as
+  broken. Verified in a real Chrome: the highlight lands on the anchor's own
+  geometry (an anchor at 80/88/261.42/12 renders at 108/118.8/352.917/16.2 at
+  1.35×, exact to three decimals), the click resolves to 5 distinct sentences
+  across 5 anchors, and the DOCX surface renders mixed bold/plain/italic runs
+  with every stamped range still slicing the extracted text to the characters
+  it displays.
+  DOCX parsing extends the existing `word/document.xml` reader rather than
+  adding mammoth, which this repo had already rejected: its internal xmldom
+  wrapper calls `parseFromString()` without a mime type and fails in modern
+  browsers. The two reader fixtures are reproducible rather than hand-made —
+  `scripts/gen_test_docs.py` generates them and parse-checks their XML at
+  generation time, because a malformed fixture fails as a blank viewer, which
+  looks like a bug in the viewer.
 
 ### Changed
 - **Vitest 5 and jsdom 30.1.1 are in; TypeScript 7 is deliberately not.**

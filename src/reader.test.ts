@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { prepareReaderData, pickHighlightedWord, DocumentReaderSession } from './reader';
+import {
+  prepareReaderData,
+  pickHighlightedWord,
+  sentenceAtOffset,
+  DocumentReaderSession,
+} from './reader';
 import type { TTSEngine } from './engine';
 
 describe('prepareReaderData — sentence segmentation', () => {
@@ -204,5 +209,158 @@ describe('DocumentReaderSession — pause and resume', () => {
     session.pause();
     session.resumeAfterGesture();
     expect(session.getState().needsUserGesture).toBeUndefined();
+  });
+});
+
+describe('sentence character offsets', () => {
+  it('slices each range back to exactly the sentence text', () => {
+    const text = 'The first sentence. The second one. And a third.';
+    const { sentences } = prepareReaderData(text);
+    for (const s of sentences) {
+      expect(s.start).toBeTypeOf('number');
+      expect(text.slice(s.start!, s.end!)).toBe(s.text);
+    }
+  });
+
+  it('locates sentences that segmentation rewrote', () => {
+    // The segmenter protects abbreviations, splits, then restores the dot.
+    // A range threaded through that pipeline would be off by however many
+    // characters the placeholder dance moved things.
+    const text = 'Dr. Smith went home. Mrs. Jones stayed.';
+    const { sentences } = prepareReaderData(text);
+    expect(sentences).toHaveLength(2);
+    expect(text.slice(sentences[0].start!, sentences[0].end!)).toBe('Dr. Smith went home.');
+    expect(text.slice(sentences[1].start!, sentences[1].end!)).toBe('Mrs. Jones stayed.');
+  });
+
+  it('gives two identical sentences two different ranges', () => {
+    // A plain lastIndexOf would put both at the same place and highlight the
+    // wrong one; this is the case the forward-scanning cursor exists for.
+    //
+    // Exclamation points, not full stops, on purpose: the abbreviation guard
+    // protects any capitalised word before a capitalised word ("Yes. No." is
+    // read as two initialisms and never splits), so a period would not even
+    // produce two sentences to compare.
+    const text = 'Yes! No! Yes!';
+    const { sentences } = prepareReaderData(text);
+    expect(sentences.map(s => s.text)).toEqual(['Yes!', 'No!', 'Yes!']);
+    expect(sentences[0].start).toBe(0);
+    expect(sentences[2].start).toBe(text.length - 'Yes!'.length);
+    expect(sentences[0].start).not.toBe(sentences[2].start);
+  });
+
+  it('keeps ranges ordered and non-overlapping across the document', () => {
+    const text = 'One. Two words here. Three! Four? Five. Six.';
+    const { sentences } = prepareReaderData(text);
+    for (let i = 1; i < sentences.length; i++) {
+      expect(sentences[i].start!).toBeGreaterThan(sentences[i - 1].start!);
+      expect(sentences[i].end!).toBeGreaterThan(sentences[i].start!);
+    }
+  });
+
+  it('covers the whole text with no gaps it could have filled', () => {
+    const text = 'Alpha beta. Gamma delta epsilon. Zeta.';
+    const { sentences } = prepareReaderData(text);
+    for (const s of sentences) {
+      expect(s.end! - s.start!).toBe(s.text.length);
+    }
+  });
+
+  it('leaves offsets undefined for empty input rather than pointing at 0', () => {
+    const { sentences } = prepareReaderData('   ');
+    expect(sentences).toHaveLength(0);
+  });
+});
+
+// ─── Click-to-read ────────────────────────────────────────────────
+// A click on the rendered document arrives as a character offset into the
+// extracted text. These two pieces are what turn that back into a reading
+// position: the sentence the offset sits in, and a session that can start
+// there.
+
+describe('sentenceAtOffset', () => {
+  it('finds the sentence an offset falls inside', () => {
+    const text = 'First sentence here. Second sentence here.';
+    const { sentences } = prepareReaderData(text);
+    const second = sentences[1];
+    expect(sentenceAtOffset(sentences, second.start! + 3)).toBe(second);
+  });
+
+  it('treats the end of a range as outside it', () => {
+    // Ranges are half-open. An offset equal to `end` is the first character
+    // of whatever follows, and claiming the preceding sentence for it would
+    // make clicking the start of a line read the line above.
+    const { sentences } = prepareReaderData('One. Two.');
+    expect(sentenceAtOffset(sentences, sentences[0].end!)).not.toBe(sentences[0]);
+  });
+
+  it('returns null for the gap between paragraphs', () => {
+    const text = 'One.\n\nTwo.';
+    const { sentences } = prepareReaderData(text);
+    const gap = sentences[0].end! + 1;
+    expect(text.slice(gap, gap + 1)).toBe('\n');
+    expect(sentenceAtOffset(sentences, gap)).toBeNull();
+  });
+
+  it('ignores a sentence whose range could not be located', () => {
+    // assignOffsets leaves start/end undefined rather than guessing, so the
+    // lookup has to cope with an array that is not uniformly ranged.
+    const sentences = [
+      { text: 'unlocatable', words: ['unlocatable'], globalIndex: 0, paragraphIndex: 0 },
+      { text: 'found', words: ['found'], globalIndex: 1, paragraphIndex: 0, start: 10, end: 15 },
+    ];
+    expect(sentenceAtOffset(sentences, 12)?.globalIndex).toBe(1);
+    expect(sentenceAtOffset(sentences, 5)).toBeNull();
+  });
+});
+
+describe('DocumentReaderSession — start at a sentence', () => {
+  const ENGINE = {
+    enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending', url: undefined })),
+    cancel: vi.fn(),
+    on: vi.fn(() => () => {}),
+    getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+  } as unknown as TTSEngine;
+
+  /** Six sentences, chunked two at a time, so there is somewhere to start. */
+  const LONG = Array.from({ length: 6 }, (_, i) => `Sentence number ${i} is here.`).join(' ');
+
+  it('starts at the chunk holding the requested sentence', () => {
+    const session = new DocumentReaderSession(ENGINE, LONG, { chunkSize: 60 });
+    const sentences = session.getSentences();
+    expect(session.getChunks().length).toBeGreaterThan(1);
+
+    session.start(sentences[sentences.length - 1].globalIndex);
+    const state = session.getState();
+    expect(state.currentIndex).toBe(session.getChunks().length - 1);
+    expect(state.status).toBe('playing');
+  });
+
+  it('still starts at the beginning when no sentence is given', () => {
+    const session = new DocumentReaderSession(ENGINE, LONG, { chunkSize: 60 });
+    session.start();
+    expect(session.getState().currentIndex).toBe(0);
+  });
+
+  it('falls back to the first chunk for an unknown sentence index', () => {
+    // A stale index from a document that has been replaced should read the
+    // document, not refuse to play.
+    const session = new DocumentReaderSession(ENGINE, LONG, { chunkSize: 60 });
+    session.start(9999);
+    expect(session.getState().currentIndex).toBe(0);
+    expect(session.getState().status).toBe('playing');
+  });
+
+  it('queues synthesis for the sentence it started at', () => {
+    // Starting in the middle must not leave the session waiting on chunk 0:
+    // without lookahead from the new position the reader would sit silent.
+    const enqueue = vi.fn(() => ({ id: 'job-1', status: 'pending', url: undefined }));
+    const engine = { ...ENGINE, enqueue } as unknown as TTSEngine;
+    const session = new DocumentReaderSession(engine, LONG, { chunkSize: 60 });
+    const sentences = session.getSentences();
+    session.start(sentences[sentences.length - 1].globalIndex);
+    expect(enqueue).toHaveBeenCalled();
+    const queued = enqueue.mock.calls.map(c => String(c[0]));
+    expect(queued.some(text => text.includes('Sentence number 5'))).toBe(true);
   });
 });

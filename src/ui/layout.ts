@@ -316,7 +316,19 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <div class="classify-list" id="classify-list"></div>
             </div>
 
-            <label class="section-label" for="document-reader-view">Extracted text</label>
+            <div class="docview-switch" role="group" aria-label="How to show the document">
+              <span class="section-label docview-switch__label">View</span>
+              <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
+                      id="docview-btn-document">Document</button>
+              <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
+                      id="docview-btn-text">Text</button>
+            </div>
+            <!-- The real thing: pages as they appear in the file. Populated only
+                 for formats we can render; see document-view.ts. -->
+            <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
+            <!-- Always populated, even when hidden: it is the accessible view of
+                 the document and the one a screen reader reads, so it is never
+                 left empty just because the visual view is on top. -->
             <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
             <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
           </div>

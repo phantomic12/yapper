@@ -26,6 +26,129 @@ export function getMimeType(ext: string, fallback: string): string {
 
 export const MAX_PDF_PAGES = 500;
 
+// ─── Page geometry ───────────────────────────────────────────────
+// Pure functions, deliberately in this file rather than document-reader.ts:
+// the viewer is the part most worth testing exhaustively, and it should not
+// need a pdfjs worker, a canvas, or a 2MB engine shim to be exercised.
+
+/**
+ * One run of extracted text, located on the page it came from.
+ *
+ * Rectangles are in **viewport space at scale 1** for
+ * `page.getViewport({ scale: 1 })` — top-left origin, pixels, page rotation
+ * already applied. Storing them this way makes zoom exact rather than
+ * approximate: pdfjs's viewport transform is linear in scale, so a rect
+ * measured at scale 1 is exactly `scale` times larger at any other scale, with
+ * rotation and page size already accounted for instead of being re-derived
+ * (and re-got-wrong) on every render.
+ */
+export interface TextAnchor {
+  /** 1-based page number. */
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Character offset into the extracted text where this run starts. */
+  start: number;
+  /** Character offset where this run ends (exclusive). */
+  end: number;
+}
+
+/** A rectangle ready to be scaled and drawn over a rendered page. */
+export interface SpanRect {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Do two rectangles sit on the same line of text?
+ *
+ * Judged by vertical overlap rather than by comparing baselines, because a
+ * baseline is not something the anchors carry. Half the shorter height is the
+ * threshold that survives a superscript in a footnote and still refuses to
+ * merge a heading with the paragraph under it.
+ */
+function sameLine(a: SpanRect, b: SpanRect): boolean {
+  const overlap = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return overlap > Math.min(a.height, b.height) * 0.5;
+}
+
+/**
+ * Collapse per-word rectangles into one rectangle per line.
+ *
+ * Without this a highlight over a normal sentence comes out as a barcode —
+ * forty separate boxes with hairline gaps — because pdfjs emits one text item
+ * per styled run, not per line. Merging is chained against the *accumulated*
+ * line rather than the previous rect, so A-B-C on one line merges even when A
+ * and C do not directly overlap.
+ */
+function mergeRectsOnPage(rects: SpanRect[]): SpanRect[] {
+  const out: SpanRect[] = [];
+  for (const rect of rects) {
+    const line = out[out.length - 1];
+    if (line && sameLine(line, rect)) {
+      const right = Math.max(line.x + line.width, rect.x + rect.width);
+      const bottom = Math.max(line.y + line.height, rect.y + rect.height);
+      line.x = Math.min(line.x, rect.x);
+      line.y = Math.min(line.y, rect.y);
+      line.width = right - line.x;
+      line.height = bottom - line.y;
+    } else {
+      out.push({ ...rect });
+    }
+  }
+  return out;
+}
+
+/** First anchor whose end is past `offset`, assuming anchors are start-sorted. */
+function firstAnchorPast(anchors: TextAnchor[], offset: number): number {
+  let lo = 0;
+  let hi = anchors.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (anchors[mid].end > offset) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+/**
+ * The rectangles covering characters `[start, end)` of the extracted text,
+ * grouped by page.
+ *
+ * This is the whole bridge between "the reader is on sentence 412" and "draw
+ * a box over the right lines of the right page". It is called continuously
+ * during playback, so it binary-searches to the first candidate anchor rather
+ * than scanning a 500-page document's worth of them for every sentence.
+ */
+export function rectsForSpan(
+  anchors: TextAnchor[],
+  start: number,
+  end: number,
+): Map<number, SpanRect[]> {
+  const byPage = new Map<number, SpanRect[]>();
+  if (!(end > start) || anchors.length === 0) return byPage;
+
+  for (let i = firstAnchorPast(anchors, start); i < anchors.length; i++) {
+    const a = anchors[i];
+    // Anchors are pushed in document order, so their starts only increase and
+    // everything from here on begins past the span.
+    if (a.start >= end) break;
+    if (a.end <= start) continue;
+    const rect: SpanRect = { page: a.page, x: a.x, y: a.y, width: a.width, height: a.height };
+    const list = byPage.get(a.page);
+    if (list) list.push(rect);
+    else byPage.set(a.page, [rect]);
+  }
+
+  for (const [page, rects] of byPage) byPage.set(page, mergeRectsOnPage(rects));
+  return byPage;
+}
+
 /**
  * OCR backend selection for scanned PDFs.
  * - `tesseract`: rule-based OCR via Tesseract.js (fast, ~4MB WASM, good for

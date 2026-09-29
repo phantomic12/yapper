@@ -1103,15 +1103,34 @@ READER_STATE_JS = """(function() {
 })()"""
 
 
-def _inject_file(cdp, target_id, path: Path, mime: str):
+def _inject_bytes(cdp, target_id, data: bytes, name: str, mime: str):
     import base64 as b64mod
-    b64 = b64mod.b64encode(path.read_bytes()).decode()
-    js = INJECT_FILE_JS % {'b64': json.dumps(b64), 'name': json.dumps(path.name), 'mime': json.dumps(mime)}
+    b64 = b64mod.b64encode(data).decode()
+    js = INJECT_FILE_JS % {'b64': json.dumps(b64), 'name': json.dumps(name), 'mime': json.dumps(mime)}
     resp = cdp.eval(js, target_id, timeout=15)
     r = v(resp)
     if not r.get('ok'):
         raise AssertionError(f'file injection failed: {r}')
-    print(f'      injected {path.name} ({path.stat().st_size} bytes)')
+    print(f'      injected {name} ({len(data)} bytes)')
+
+
+def _inject_file(cdp, target_id, path: Path, mime: str):
+    _inject_bytes(cdp, target_id, path.read_bytes(), path.name, mime)
+
+
+def _inject_served_file(cdp, target_id, rel_path: str, mime: str):
+    """Inject a fixture the app serves itself.
+
+    Used for the reader fixtures, which live in `public/test-docs/` because
+    they are committed for the app's own use. Copying them into e2e/fixtures
+    would mean two copies of the same file to keep in step, and the step would
+    then be testing a document the app never sees.
+    """
+    import urllib.request
+    url = f'{URL.rstrip("/")}/{rel_path.lstrip("/")}'
+    with urllib.request.urlopen(url, timeout=20) as resp:
+        data = resp.read()
+    _inject_bytes(cdp, target_id, data, Path(rel_path).name, mime)
 
 
 PAGE_STATE_JS = """(function() {
@@ -1533,6 +1552,315 @@ def step_upload_pdf_document(cdp_holder):
         f'text[:100]={s.get("text", "")[:100]!r}')
 
 
+DOCVIEW_STATE_JS = """(function() {
+    const host = document.getElementById('document-view');
+    const switchEl = document.querySelector('.docview-switch');
+    const active = document.querySelector('.docview-switch__btn--active');
+    const canvas = host ? host.querySelector('canvas') : null;
+    let dark = 0;
+    if (canvas && canvas.width) {
+        try {
+            const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+            for (let i = 0; i < d.length; i += 4) if (d[i] < 200) dark++;
+        } catch (e) { dark = -1; }
+    }
+    const overlay = document.getElementById('reader-overlay');
+    const pause = document.getElementById('pause-document-btn');
+    const surface = host && host.querySelector('.docview__surface');
+    const box = surface ? surface.getBoundingClientRect() : null;
+    return {
+        mounted: !!host && !host.hidden,
+        switchVisible: !!switchEl && !switchEl.hidden
+            && getComputedStyle(switchEl).display !== 'none',
+        activeView: active ? active.textContent.trim() : null,
+        canvas: canvas ? { w: canvas.width, h: canvas.height } : null,
+        darkPixels: dark,
+        highlightBoxes: host ? host.querySelectorAll('.docview__hl').length : 0,
+        pageLabel: host ? ((host.querySelector('.docview__count') || {}).textContent || '') : '',
+        overlayVisible: !!overlay && getComputedStyle(overlay).display !== 'none',
+        pauseVisible: !!pause && getComputedStyle(pause).display !== 'none',
+        viewport: { w: innerWidth, h: innerHeight },
+        pageOrigin: box ? { left: box.left, top: box.top, width: box.width, height: box.height } : null,
+    };
+})()"""
+
+
+# Where to aim inside a page: a little in from the left edge and stepped down
+# from the top, which is where body text starts. Several points because the
+# first line's baseline moves with the fixture's margins, and the check is
+# "clicking text reads from there", not "a specific pixel is text".
+_PAGE_CLICK_OFFSETS = (40, 66, 92, 118, 150, 185, 225, 270, 320)
+
+
+def step_document_view_renders_pdf(cdp_holder):
+    """The reader shows the actual page, and clicking it reads from there.
+
+    Runs immediately after upload_pdf_document, while that PDF is on screen.
+    The assertions are deliberately about pixels and offsets rather than about
+    the view being in the DOM: a document view that mounts but paints nothing
+    is the failure this whole feature exists to fix, and it looks identical
+    from the outside.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCVIEW_STATE_JS, target['id'], timeout=10))
+        if state.get('canvas') or not state.get('mounted'):
+            break
+        time.sleep(0.5)
+
+    if not state.get('mounted'):
+        raise AssertionError(
+            f'document view is not mounted for a PDF: {json.dumps(state, default=str)}')
+    if not state.get('switchVisible'):
+        raise AssertionError('the Document/Text switch is hidden for a PDF that has pages')
+    if state.get('activeView') != 'Document':
+        raise AssertionError(
+            f'expected the Document view to be the default, got {state.get("activeView")!r}')
+    if not state.get('canvas'):
+        raise AssertionError(
+            f'no page canvas appeared within 60s: {json.dumps(state, default=str)}')
+    if state.get('darkPixels', 0) <= 0:
+        raise AssertionError(
+            f'page canvas is blank (darkPixels={state.get("darkPixels")}) — rasterisation failed')
+    print(f'      ✓ page rasterised: {state["canvas"]["w"]}x{state["canvas"]["h"]}px, '
+          f'{state["darkPixels"]} dark pixels, {state["pageLabel"]!r}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '08-document-view.png')
+
+    v(cdp.eval(
+        "(function(){const h=document.getElementById('document-view');"
+        "if(h)h.scrollIntoView({block:'start'});return {ok:!!h};})()",
+        target['id'], timeout=10))
+    time.sleep(0.3)
+    state = v(cdp.eval(DOCVIEW_STATE_JS, target['id'], timeout=10))
+    origin = state.get('pageOrigin')
+    viewport = state.get('viewport') or {}
+    if not origin:
+        raise AssertionError('the page surface vanished before it could be clicked')
+
+    clicked: dict = {}
+    for offset in _PAGE_CLICK_OFFSETS:
+        x = origin['left'] + 120
+        y = origin['top'] + offset
+        # A trusted click has to be inside the viewport to land where we mean.
+        if not (0 < x < viewport.get('w', 0) and 0 < y < viewport.get('h', 0)):
+            continue
+        cdp.click_at(target['id'], x, y)
+        # Poll rather than sample once: the click highlights the clicked
+        # sentence immediately, but with a model loaded the session's own
+        # highlight then takes over as audio starts, so a single read can race
+        # the render loop and see neither.
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            time.sleep(0.4)
+            clicked = v(cdp.eval(DOCVIEW_STATE_JS, target['id'], timeout=10))
+            if clicked.get('highlightBoxes'):
+                break
+        if clicked.get('highlightBoxes'):
+            break
+
+    if not clicked.get('highlightBoxes'):
+        raise AssertionError(
+            'clicking the rendered page never produced a highlight — the click did '
+            'not resolve to a sentence'
+        )
+    if clicked.get('overlayVisible'):
+        raise AssertionError(
+            'clicking the page opened the full-screen reader overlay; the document '
+            'the user just clicked on should stay visible'
+        )
+    if clicked.get('pauseVisible'):
+        print(f'      ✓ clicked the page: {clicked["highlightBoxes"]} highlight '
+              f'box(es), reading started from there')
+    else:
+        print(f'      ✓ clicked the page: {clicked["highlightBoxes"]} highlight '
+              f'box(es) (no session — engine not ready in this run)')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '08b-document-view-click.png')
+
+
+DOCX_MIME = ('application/vnd.openxmlformats-officedocument'
+             '.wordprocessingml.document')
+
+# Reads back the rendered DOCX surface: what was rendered, with what styling,
+# and each run's own claim about which characters it covers.
+DOCHTML_STATE_JS = """(function() {
+    const host = document.getElementById('document-view');
+    if (!host) return { mounted: false };
+    const content = host.querySelector('.dochtml__content');
+    const runs = content ? [...content.querySelectorAll('[data-off]')] : [];
+    const parsed = runs.map(el => {
+        const [start, end] = (el.dataset.off || '').split(':').map(Number);
+        return { start, end, text: el.textContent };
+    });
+    const bad = parsed.filter(r => !Number.isFinite(r.start) || !Number.isFinite(r.end));
+
+    // The stamps must reproduce the offsets the extracted text was built
+    // with: runs contiguous inside a block, and one blank line (+2) between
+    // blocks. Checked against the rendered DOM rather than against the
+    // reader's text view, which is a different string — it is the same words
+    // laid out one sentence per element, with the paragraph separators gone,
+    // so comparing the two would fail on a correct document.
+    const stamps = (function() {
+        if (!content) return { ok: false, blocks: 0, reason: 'no content' };
+        let cursor = 0;
+        let blocks = 0;
+        for (const block of content.children) {
+            const spans = [...block.querySelectorAll('[data-off]')];
+            if (!spans.length) continue;
+            for (const span of spans) {
+                const [start, end] = (span.dataset.off || '').split(':').map(Number);
+                const len = (span.textContent || '').length;
+                if (start !== cursor || end - start !== len) {
+                    return {
+                        ok: false, blocks,
+                        reason: block.tagName + ' run [' + start + ',' + end + ') holds '
+                            + len + ' chars but the text cursor is at ' + cursor,
+                    };
+                }
+                cursor = end;
+            }
+            blocks++;
+            cursor += 2;
+        }
+        return { ok: true, blocks, textLength: Math.max(0, cursor - 2) };
+    })();
+
+    return {
+        stamps,
+        mounted: !host.hidden,
+        switchVisible: (function() {
+            const s = document.querySelector('.docview-switch');
+            return !!s && !s.hidden && getComputedStyle(s).display !== 'none';
+        })(),
+        activeView: (document.querySelector('.docview-switch__btn--active') || {}).textContent
+            ? document.querySelector('.docview-switch__btn--active').textContent.trim() : null,
+        runs: parsed,
+        unparsableRuns: bad.length,
+        headings: content ? content.querySelectorAll('h1, h2, h3').length : 0,
+        listItems: content ? content.querySelectorAll('li').length : 0,
+        boldRuns: content ? content.querySelectorAll('strong').length : 0,
+        italicRuns: content ? content.querySelectorAll('em').length : 0,
+        scriptTags: content ? content.querySelectorAll('script').length : 0,
+        paragraphText: content ? (content.textContent || '').slice(0, 120) : '',
+        highlightBoxes: host.querySelectorAll('.dochtml__hl').length,
+        runRects: runs.map(el => {
+            const b = el.getBoundingClientRect();
+            return { left: b.left, top: b.top, width: b.width, height: b.height };
+        }),
+        viewport: { w: innerWidth, h: innerHeight },
+    };
+})()"""
+
+
+def step_document_view_renders_docx(cdp_holder):
+    """A DOCX is shown as a document: real headings, bold, italic, bullets.
+
+    This asserts the two things that would break silently. First, the markup is
+    built from the same runs as the extracted text rather than by re-parsing the
+    file, so every stamped range must slice the extracted text back to exactly
+    the characters it renders — if that drifts, highlights land on the wrong
+    words with no error anywhere. Second, the document's own markup must not be
+    able to execute, because the file is user-supplied.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/reader-notes.docx', DOCX_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+
+    if not state.get('mounted'):
+        raise AssertionError(
+            f'the DOCX document view is not mounted: {json.dumps(state, default=str)[:400]}')
+    if state.get('activeView') != 'Document':
+        raise AssertionError(
+            f'expected the Document view to be active, got {state.get("activeView")!r}')
+
+    runs = state.get('runs') or []
+    if len(runs) < 8:
+        raise AssertionError(f'expected the fixture\'s runs to render, got {len(runs)}')
+    if state.get('unparsableRuns'):
+        raise AssertionError(f'{state["unparsableRuns"]} run(s) carried a malformed data-off')
+    if state.get('scriptTags'):
+        raise AssertionError('the document view executed markup out of the uploaded file')
+    if not state.get('boldRuns') or not state.get('italicRuns'):
+        raise AssertionError(
+            'bold/italic did not survive into the rendered document '
+            f'(bold={state.get("boldRuns")}, italic={state.get("italicRuns")})')
+    if not state.get('headings') or not state.get('listItems'):
+        raise AssertionError(
+            f'headings/lists did not render (headings={state.get("headings")}, '
+            f'lists={state.get("listItems")})')
+
+    stamps = state.get('stamps') or {}
+    if not stamps.get('ok'):
+        raise AssertionError(
+            'the rendered stamps do not line up with the extracted text: '
+            f'{stamps.get("reason")}'
+        )
+    print(f'      ✓ DOCX rendered as a document: {len(runs)} stamped runs across '
+          f'{stamps.get("blocks")} blocks, {state["headings"]} headings, '
+          f'{state["listItems"]} list items, {state["boldRuns"]} bold / '
+          f'{state["italicRuns"]} italic, offsets consistent to '
+          f'{stamps.get("textLength")} chars')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '09-document-view-docx.png')
+
+    # The HTML surface resolves a click through the browser's caret hit-test
+    # rather than through page geometry, so it is a different code path from
+    # the PDF one and worth clicking once here.
+    # The reader page is tall (drop zone, OCR options, structure list), so the
+    # document view is usually below the fold; a trusted click has to land
+    # inside the viewport to hit what it is aimed at.
+    v(cdp.eval(
+        "(function(){const h=document.getElementById('document-view');"
+        "if(h)h.scrollIntoView({block:'start'});return {ok:!!h};})()",
+        target['id'], timeout=10))
+    time.sleep(0.3)
+    state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+
+    rects = state.get('runRects') or []
+    viewport = state.get('viewport') or {}
+    clicked: dict = {}
+    attempts = 0
+    for rect in rects:
+        x = rect['left'] + max(4, rect['width'] * 0.5)
+        y = rect['top'] + rect['height'] / 2
+        if not (0 < x < viewport.get('w', 0) and 0 < y < viewport.get('h', 0)):
+            continue
+        attempts += 1
+        cdp.click_at(target['id'], x, y)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            time.sleep(0.4)
+            clicked = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+            if clicked.get('highlightBoxes'):
+                break
+        if clicked.get('highlightBoxes'):
+            break
+    if not clicked.get('highlightBoxes'):
+        raise AssertionError(
+            f'clicking the rendered DOCX produced no highlight after {attempts} '
+            f'click(s) inside a {viewport.get("w")}x{viewport.get("h")} viewport '
+            f'({len(rects)} runs on screen)'
+        )
+    print(f'      ✓ clicked a run: {clicked["highlightBoxes"]} highlight box(es)')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '09b-document-view-docx-click.png')
+
+    # Leave the reader stopped so the next document starts clean.
+    cdp.eval("(function(){const b=document.getElementById('stop-document-btn');"
+             "if(b&&getComputedStyle(b).display!=='none')b.click();return {ok:true};})()",
+             target['id'], timeout=10)
+
+
 # ─── Driver ──────────────────────────────────────────────────────────────
 
 def main():
@@ -1575,6 +1903,12 @@ def main():
         ('pause_resume_reader', lambda: step_pause_resume_reader(cdp_holder)),
         ('stop_reader', lambda: step_stop_reader(cdp_holder)),
         ('upload_pdf_document', lambda: step_upload_pdf_document(cdp_holder)),
+        # The same PDF, seen the way a user sees it: real pages on screen, and
+        # a click on the page starting the read from that sentence.
+        ('document_view_renders_pdf', lambda: step_document_view_renders_pdf(cdp_holder)),
+        # A DOCX has no page geometry, so it takes the other rendering path:
+        # markup built from the extracted runs and highlighted by offset.
+        ('document_view_renders_docx', lambda: step_document_view_renders_docx(cdp_holder)),
         ('upload_scanned_pdf_ocr', lambda: step_upload_scanned_pdf_ocr(cdp_holder)),
         # Live progress on Kokoro's streaming path, LAST: load the bigger
         # model, generate a multi-sentence input, and confirm sentence-

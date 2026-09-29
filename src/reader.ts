@@ -9,6 +9,17 @@ export interface ReaderSentence {
   globalIndex: number;
   /** Which paragraph this sentence belongs to. */
   paragraphIndex: number;
+  /**
+   * Character offsets into the document text this sentence was segmented from.
+   *
+   * These are what let the document view draw the read-aloud highlight over
+   * the real page: a sentence is located in the document by where its text
+   * sits, and that is meaningless without a character range. Absent means the
+   * sentence could not be located (a document with no geometry), and callers
+   * must degrade to highlighting nothing rather than highlighting page one.
+   */
+  start?: number;
+  end?: number;
 }
 
 export interface ReaderChunk {
@@ -120,18 +131,39 @@ export class DocumentReaderSession {
     this.options.onStateChange?.({ ...this.state });
   }
 
-  /** Start playback. Returns immediately; synthesis happens in the background. */
-  start() {
+  /**
+   * Start playback. Returns immediately; synthesis happens in the background.
+   *
+   * `fromSentenceIndex` starts at the chunk holding that sentence, which is how
+   * clicking a sentence in the document view reads from there. It defaults to
+   * the beginning, so existing callers that just want to play are unchanged.
+   */
+  start(fromSentenceIndex = 0) {
     if (this.chunks.length === 0) {
       this.setState({ status: 'finished' });
       return;
     }
     this.cancelHighlightLoop();
     this.subscribe();
-    this.setState({ isPlaying: true, status: 'playing', currentIndex: 0, bufferedIndex: -1 });
-    this.ensureBuffered(Math.min(this.options.lookahead! - 1, this.chunks.length - 1));
+    const from = this.chunkIndexForSentence(fromSentenceIndex);
+    this.setState({ isPlaying: true, status: 'playing', currentIndex: from, bufferedIndex: -1 });
+    this.ensureBuffered(Math.min(from + this.options.lookahead! - 1, this.chunks.length - 1));
     this.tryPlayNext();
     this.scheduleHighlightLoop();
+  }
+
+  /**
+   * The position of the chunk holding a sentence, or 0 if it holds none.
+   *
+   * Falls back to the start rather than failing: a sentence index that no
+   * longer resolves — a document replaced under an old click — should read the
+   * document from the top, not refuse to play at all.
+   */
+  private chunkIndexForSentence(globalIndex: number): number {
+    for (const chunk of this.chunks) {
+      if (chunk.sentences.some(s => s.globalIndex === globalIndex)) return chunk.index;
+    }
+    return 0;
   }
 
   /** Pause playback at the current chunk. */
@@ -382,8 +414,70 @@ export function pickHighlightedWord(
 /** Splits raw text into sentences and reading-order chunks. */
 export function prepareReaderData(text: string, maxChars: number = 300): PreparedReaderData {
   const sentences = segmentSentences(text);
+  assignOffsets(sentences, text);
   const chunks = buildChunks(sentences, maxChars);
   return { sentences, chunks };
+}
+
+/**
+ * Give every sentence its character range in the source text.
+ *
+ * Not threaded through the segmentation itself, which would mean carrying an
+ * offset past a `.trim()`, a paragraph split, and the abbreviation-protecting
+ * replace/restore dance — four places to be off by one, each producing a
+ * highlight on the wrong line and looking like a rendering bug.
+ *
+ * Instead: scan forward from the last known position. Segmentation emits
+ * sentences in document order, so a moving cursor finds the right occurrence
+ * even when a sentence's text appears twice in the document, and any
+ * transformation the segmenter did to the text is already undone by the time
+ * it lands in `sentence.text`.
+ */
+/**
+ * The sentence containing a character offset of the document text.
+ *
+ * This is what turns a click on the rendered document into a reading position:
+ * the document view reports where on the page you clicked as an offset into the
+ * extracted text, and this maps it back to the sentence the reader knows how to
+ * speak.
+ *
+ * A linear scan, deliberately. Binary search would need the array to be sorted
+ * with no gaps, and `assignOffsets` may leave a sentence's range undefined when
+ * its text cannot be located — so the invariant a binary search rests on is one
+ * this array does not reliably have. A click happens once per gesture, so the
+ * scan is free, and being obviously correct matters more than being clever.
+ *
+ * Returns null when the offset is not inside any sentence — the blank line
+ * between two paragraphs — rather than snapping to a neighbour, because
+ * silently reading a sentence the user did not click is worse than doing
+ * nothing.
+ */
+export function sentenceAtOffset(
+  sentences: ReaderSentence[],
+  offset: number,
+): ReaderSentence | null {
+  for (const sentence of sentences) {
+    if (sentence.start === undefined || sentence.end === undefined) continue;
+    if (offset >= sentence.start && offset < sentence.end) return sentence;
+  }
+  return null;
+}
+
+function assignOffsets(sentences: ReaderSentence[], text: string): void {
+  let cursor = 0;
+  for (const sentence of sentences) {
+    const at = text.indexOf(sentence.text, cursor);
+    if (at === -1) {
+      // Should not happen, but a sentence that cannot be located must not
+      // silently claim a range that points at unrelated text.
+      sentence.start = undefined;
+      sentence.end = undefined;
+      continue;
+    }
+    sentence.start = at;
+    sentence.end = at + sentence.text.length;
+    cursor = at + sentence.text.length;
+  }
 }
 
 /** Common English abbreviations and titles that end with a period but
