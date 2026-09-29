@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox,
-  stripRtfControlWords, parseCsv,
+  parseCsv,
   type OcrMode, type QuadWord,
 } from './document-types';
 
@@ -134,84 +134,6 @@ describe('quadToBbox', () => {
     const result = quadToBbox(word);
     // Should still compute the correct bounding box regardless of point order
     expect(result.bbox).toEqual({ x0: 10, y0: 20, x1: 60, y1: 50 });
-  });
-});
-
-// ─── stripRtfControlWords ─────────────────────────────────────────
-
-describe('stripRtfControlWords', () => {
-  it('extracts plain text from a simple RTF document', () => {
-    const rtf = '{\\rtf1\\ansi Hello World\\par\\0}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toContain('Hello World');
-  });
-
-  it('converts \\par to newlines', () => {
-    const rtf = '{\\rtf1 Line 1\\par Line 2\\par Line 3}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('Line 1\nLine 2\nLine 3');
-  });
-
-  it('converts \\tab to tabs', () => {
-    const rtf = '{\\rtf1 Col1\\tab Col2}';
-    const text = stripRtfControlWords(rtf);
-    // \tab produces a tab; the space after Col2 is part of the text
-    expect(text).toContain('Col1');
-    expect(text).toContain('\t');
-    expect(text).toContain('Col2');
-  });
-
-  it('handles Unicode escapes (\\uN?)', () => {
-    // \u8212? is the em dash (—)
-    const rtf = '{\\rtf1 Hello\\u8212? World}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('Hello\u2014 World');
-  });
-
-  it('handles negative Unicode escapes', () => {
-    // \u-32768? maps to 32768 in unsigned 16-bit
-    const rtf = '{\\rtf1 \\u-32768?}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe(String.fromCharCode(32768));
-  });
-
-  it('handles hex escapes (\\\'XX)', () => {
-    // \'e9 is é in Latin-1
-    const rtf = "{\\rtf1 caf\\'e9}";
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('caf\u00e9');
-  });
-
-  it('skips control word parameters', () => {
-    // \fs24 is a font size control word with parameter 24
-    const rtf = '{\\rtf1\\fs24 Hello}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('Hello');
-  });
-
-  it('skips group delimiters { and }', () => {
-    const rtf = '{\\rtf1 {\\b Bold} text}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('Bold text');
-  });
-
-  it('collapses excessive whitespace', () => {
-    const rtf = '{\\rtf1   Hello    World   \\par\\par\\par\\par Next}';
-    const text = stripRtfControlWords(rtf);
-    // The \par control words produce newlines; spaces before \par are
-    // preserved as a single space, then the newline follows.
-    expect(text).toContain('Hello World');
-    expect(text).toContain('Next');
-    // No more than 2 consecutive newlines
-    expect(text).not.toMatch(/\n{3,}/);
-    // No multiple consecutive spaces (except after tabs)
-    expect(text).not.toMatch(/(?<!\t)  +/);
-  });
-
-  it('returns empty string for RTF with no text', () => {
-    const rtf = '{\\rtf1\\ansi\\fs24}';
-    const text = stripRtfControlWords(rtf);
-    expect(text).toBe('');
   });
 });
 

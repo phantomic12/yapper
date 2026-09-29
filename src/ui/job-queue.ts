@@ -5,6 +5,8 @@ import {
   formatBytes,
 } from '../persistence';
 import { concatenateClips, type AudioClip } from '../audio-export';
+import { buildWebVtt, canBuildCaptions } from '../captions';
+import { blobToBase64, buildKaraokeHtml } from '../karaoke-transcript';
 import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
 import { voiceDisplayLabel } from '../voice-preview';
@@ -57,7 +59,7 @@ function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) 
   // element wired at that point. Re-running must NOT re-attach to elements
   // that already have listeners, or a click would fire N times.
   const unwired = card.querySelectorAll<HTMLElement>(
-    '[data-action="cancel"], [data-action="download"], audio[data-job-id]:not([data-wired])'
+    '[data-action="cancel"], [data-action="download"], [data-action="download-captions"], [data-action="download-karaoke"], audio[data-job-id]:not([data-wired])'
   );
   for (const el of unwired) {
     if (el.dataset.wired === 'true') continue;
@@ -77,6 +79,47 @@ function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) 
         a.href = job.url;
         a.download = `yapper-${id}-${Date.now()}.wav`;
         a.click();
+      });
+    } else if (action === 'download-captions') {
+      el.addEventListener('click', () => {
+        const id = card.dataset.jobId!;
+        const job = state.currentJobs.find(j => j.id === id);
+        if (!job) return;
+        // The clip's length closes the last cue: prefer the reported
+        // duration, else derive it from the PCM itself.
+        const endSeconds = job.durationMs
+          ? job.durationMs / 1000
+          : (job.audio && job.sampleRate ? job.audio.length / job.sampleRate : 0);
+        const vtt = buildWebVtt(job.text, job.wordTimings, endSeconds);
+        if (!vtt) return;
+        const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `yapper-${id}-${Date.now()}.vtt`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+    } else if (action === 'download-karaoke') {
+      el.addEventListener('click', () => {
+        const id = card.dataset.jobId!;
+        const job = state.currentJobs.find(j => j.id === id);
+        if (!job?.audio || !job.sampleRate || !job.wordTimings) return;
+        void (async () => {
+          const wav = float32ToWav(job.audio!, job.sampleRate!);
+          const html = buildKaraokeHtml({
+            title: job.modelName,
+            text: job.text,
+            wordTimings: job.wordTimings!,
+            endSeconds: job.audio!.length / job.sampleRate!,
+            wavBase64: await blobToBase64(wav),
+          });
+          const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `yapper-${id}-${Date.now()}-karaoke.html`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        })();
       });
     } else if (el instanceof HTMLAudioElement) {
       el.addEventListener('play', () => {
@@ -294,7 +337,7 @@ function renderJobCardHeader(job: GenerationJob): string {
     <div class="job-card__text">"${escapeHtml(textPreview)}"</div>`;
 }
 
-function renderJobCardBody(job: GenerationJob, queuePosition?: number): string {
+export function renderJobCardBody(job: GenerationJob, queuePosition?: number): string {
   switch (job.status) {
     case 'pending': {
       const positionLabel = queuePosition !== undefined && queuePosition > 1
@@ -319,6 +362,15 @@ function renderJobCardBody(job: GenerationJob, queuePosition?: number): string {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Download WAV
           </button>
+          ${canBuildCaptions(job.text, job.wordTimings) ? `
+          <button class="job-card__btn" data-action="download-captions" data-job-id="${job.id}" title="Download synchronized captions (.vtt)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="14" x2="11" y2="14"/><line x1="14" y1="14" x2="18" y2="14"/></svg>
+            Captions
+          </button>
+          <button class="job-card__btn" data-action="download-karaoke" data-job-id="${job.id}" title="Download a karaoke transcript (.html)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M10 18V5l11-2v13"/></svg>
+            Karaoke
+          </button>` : ''}
           <span class="job-card__meta">${((job.durationMs ?? 0) / 1000).toFixed(1)}s · ${job.audio && job.sampleRate ? Math.floor(job.audio.length / job.sampleRate) : 0}s audio</span>
         </div>`;
     case 'error':

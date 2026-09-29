@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitAtWord } from './karaoke';
+import { splitAtWord, wordIndexAtChar, wordSpanInDocument } from './karaoke';
 import type { ReaderSentence } from './reader';
 
 function sentence(text: string): ReaderSentence {
@@ -69,5 +69,59 @@ describe('splitAtWord', () => {
   it('handles a sentence with no words', () => {
     const empty: ReaderSentence = { ...s, text: '', words: [] };
     expect(splitAtWord(empty, 0)).toEqual({ before: '', active: '', after: '' });
+  });
+});
+
+describe('wordSpanInDocument', () => {
+  const text = 'Chapter 1. the quick brown fox jumps.';
+  const s: ReaderSentence = {
+    ...sentence('the quick brown fox jumps.'),
+    start: 11,
+    end: 37,
+  };
+
+  it('maps each word to its exact document range', () => {
+    for (let i = 0; i < s.words.length; i++) {
+      const span = wordSpanInDocument(s, i);
+      expect(span).not.toBeNull();
+      expect(text.slice(span!.start, span!.end)).toBe(s.words[i]);
+    }
+  });
+
+  it('distinguishes repeated words by walking a cursor', () => {
+    const repeated: ReaderSentence = { ...sentence('very very dark'), start: 2, end: 15 };
+    expect(wordSpanInDocument(repeated, 0)).toEqual({ start: 2, end: 6 });
+    expect(wordSpanInDocument(repeated, 1)).toEqual({ start: 7, end: 11 });
+    expect(wordSpanInDocument(repeated, 2)).toEqual({ start: 12, end: 16 });
+  });
+
+  it('returns null for unlocatable words and bad indices', () => {
+    const broken: ReaderSentence = { ...s, words: ['the', 'ghost', 'fox'] };
+    expect(wordSpanInDocument(broken, 1)).toBeNull();
+    expect(wordSpanInDocument(s, -1)).toBeNull();
+    expect(wordSpanInDocument(s, 99)).toBeNull();
+  });
+
+  it('returns null when the sentence has no document offsets', () => {
+    expect(wordSpanInDocument(sentence('loose text'), 0)).toBeNull();
+  });
+});
+
+describe('wordIndexAtChar', () => {
+  const words = ['the', 'quick', 'fox'];
+
+  it('maps character offsets to word indices across single spaces', () => {
+    expect(wordIndexAtChar(words, 0)).toBe(0);
+    expect(wordIndexAtChar(words, 2)).toBe(0);
+    // 'the quick fox': positions 4-8 are 'quick'.
+    expect(wordIndexAtChar(words, 4)).toBe(1);
+    expect(wordIndexAtChar(words, 8)).toBe(1);
+    expect(wordIndexAtChar(words, 10)).toBe(2);
+    expect(wordIndexAtChar(words, 12)).toBe(2);
+  });
+
+  it('returns -1 past the end', () => {
+    expect(wordIndexAtChar(words, 99)).toBe(-1);
+    expect(wordIndexAtChar([], 0)).toBe(-1);
   });
 });

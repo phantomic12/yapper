@@ -4,6 +4,18 @@ import {
   recordToJob,
   loadSettings,
   saveSettings,
+  documentProgressKey,
+  loadDocumentProgress,
+  saveDocumentProgress,
+  documentBookmarksKey,
+  loadDocumentBookmarks,
+  saveDocumentBookmarks,
+  documentHighlightsKey,
+  loadDocumentHighlights,
+  saveDocumentHighlights,
+  loadRecentDocuments,
+  recordRecentDocument,
+  clearRecentDocuments,
   selectJobsWithinBudget,
   estimateJobBytes,
   totalEstimatedBytes,
@@ -80,6 +92,76 @@ describe('jobToRecord / recordToJob', () => {
     const record = jobToRecord(makeJob({ status: 'pending' }))!;
     expect(record.audio).toBeUndefined();
     expect(record.blob).toBeUndefined();
+  });
+});
+
+describe('document reading progress', () => {
+  beforeEach(() => store.clear());
+
+  it('keys progress to file identity without storing document content', () => {
+    const file = { name: 'novel.epub', size: 1024, lastModified: 42 } as File;
+    expect(documentProgressKey(file)).toBe('yapper.document-progress.v1:novel.epub:1024:42');
+  });
+
+  it('round-trips navigation state and validates corrupted values', () => {
+    const key = 'yapper.document-progress.v1:sample';
+    saveDocumentProgress(key, { offset: 412, page: 7, scale: 1.5, viewMode: 'document' });
+    expect(loadDocumentProgress(key)).toEqual({ offset: 412, page: 7, scale: 1.5, viewMode: 'document' });
+    store.set(key, '{bad json');
+    expect(loadDocumentProgress(key)).toBeNull();
+    store.set(key, JSON.stringify({ offset: -1, page: 0, scale: -2, viewMode: 'weird' }));
+    expect(loadDocumentProgress(key)).toBeNull();
+  });
+
+  it('defaults invalid optional values and view mode safely', () => {
+    const key = 'yapper.document-progress.v1:legacy';
+    store.set(key, JSON.stringify({ offset: 10, page: -1, scale: Infinity, viewMode: 'unexpected', theme: 'neon' }));
+    expect(loadDocumentProgress(key)).toEqual({ offset: 10, page: undefined, scale: undefined, viewMode: 'document', theme: undefined });
+  });
+
+  it('round-trips the reading theme and rejects unknown themes', () => {
+    const key = 'yapper.document-progress.v1:themed';
+    saveDocumentProgress(key, { offset: 0, viewMode: 'document', theme: 'night' });
+    expect(loadDocumentProgress(key)?.theme).toBe('night');
+  });
+});
+
+describe('document bookmarks', () => {
+  beforeEach(() => store.clear());
+
+  it('keys bookmarks to file identity without storing document content', () => {
+    const file = { name: 'novel.epub', size: 1024, lastModified: 42 } as File;
+    expect(documentBookmarksKey(file)).toBe('yapper.document-bookmarks.v1:novel.epub:1024:42');
+  });
+
+  it('round-trips bookmarks with notes', () => {
+    const key = 'yapper.document-bookmarks.v1:sample';
+    const bookmarks = [
+      { id: 'a', label: 'The inciting line', offset: 412, note: 'Read this again tomorrow', createdAt: 5 },
+      { id: 'b', label: 'Chapter two', offset: 900, createdAt: 6 },
+    ];
+    saveDocumentBookmarks(key, bookmarks);
+    expect(loadDocumentBookmarks(key)).toEqual(bookmarks);
+  });
+
+  it('repairs what it can and drops what it cannot trust', () => {
+    const key = 'yapper.document-bookmarks.v1:damaged';
+    store.set(key, JSON.stringify([
+      { id: 'ok', label: 'Fine', offset: 3, createdAt: 1 },
+      { label: '   ', offset: -4 },
+      { id: 'renamed', offset: 7 },
+      'not an object',
+    ]));
+    const loaded = loadDocumentBookmarks(key);
+    expect(loaded.map(b => ({ id: b.id, label: b.label, offset: b.offset }))).toEqual([
+      { id: 'ok', label: 'Fine', offset: 3 },
+      { id: 'renamed', label: 'Bookmark at 7', offset: 7 },
+    ]);
+    expect(loadDocumentBookmarks('missing:key')).toEqual([]);
+    store.set(key, '{bad json');
+    expect(loadDocumentBookmarks(key)).toEqual([]);
+    store.set(key, JSON.stringify({ not: 'an array' }));
+    expect(loadDocumentBookmarks(key)).toEqual([]);
   });
 });
 
@@ -203,5 +285,102 @@ describe('isQuotaError', () => {
   it('does not swallow unrelated failures', () => {
     expect(isQuotaError(new Error('connection lost'))).toBe(false);
     expect(isQuotaError(null)).toBe(false);
+  });
+});
+
+describe('document highlights', () => {
+  const file = { name: 'novel.epub', size: 1024, lastModified: 42 };
+
+  it('keys by file identity', () => {
+    expect(documentHighlightsKey(file)).toBe('yapper.document-highlights.v1:novel.epub:1024:42');
+  });
+
+  it('round-trips highlights', () => {
+    const key = documentHighlightsKey(file);
+    const highlights = [
+      { id: 'h1', start: 3, end: 9, color: 'green' as const, note: 'nice', createdAt: 5 },
+      { id: 'h2', start: 20, end: 25, color: 'blue' as const, createdAt: 6 },
+    ];
+    saveDocumentHighlights(key, highlights);
+    expect(loadDocumentHighlights(key)).toEqual(highlights);
+    expect(loadDocumentHighlights('missing:key')).toEqual([]);
+  });
+
+  it('repairs malformed entries', () => {
+    const key = documentHighlightsKey(file);
+    localStorage.setItem(key, JSON.stringify([
+      { start: -1, end: 4 },
+      { start: 8, end: 4 },
+      { start: 'x', end: 4 },
+      { start: 1, end: 4, color: 'purple' },
+      'junk',
+    ]));
+    expect(loadDocumentHighlights(key)).toEqual([
+      { id: 'highlight-3', start: 1, end: 4, color: 'yellow', createdAt: 0 },
+    ]);
+  });
+});
+
+describe('document progress layout fields', () => {
+  it('round-trips font family and paged mode', () => {
+    saveDocumentProgress('progress:test', {
+      offset: 10,
+      viewMode: 'document',
+      fontFamily: 'mono',
+      paged: true,
+    });
+    const loaded = loadDocumentProgress('progress:test');
+    expect(loaded?.fontFamily).toBe('mono');
+    expect(loaded?.paged).toBe(true);
+  });
+
+  it('drops invalid values', () => {
+    localStorage.setItem('progress:bad', JSON.stringify({
+      offset: 1,
+      viewMode: 'document',
+      fontFamily: 'comic',
+      paged: 'yes',
+    }));
+    const loaded = loadDocumentProgress('progress:bad');
+    expect(loaded?.fontFamily).toBeUndefined();
+    expect(loaded?.paged).toBeUndefined();
+  });
+});
+
+describe('recent documents', () => {
+  it('records newest first and refreshes duplicates in place', () => {
+    recordRecentDocument({ name: 'a.pdf', size: 1, lastModified: 1, mimeType: 'application/pdf', charCount: 10, offset: 2, openedAt: 100 });
+    recordRecentDocument({ name: 'b.pdf', size: 2, lastModified: 2, mimeType: 'application/pdf', charCount: 20, offset: 0, openedAt: 200 });
+    recordRecentDocument({ name: 'a.pdf', size: 1, lastModified: 1, mimeType: 'application/pdf', charCount: 10, offset: 5, openedAt: 300 });
+    const list = loadRecentDocuments();
+    expect(list.map(entry => entry.name)).toEqual(['a.pdf', 'b.pdf']);
+    expect(list[0].offset).toBe(5);
+    expect(list[0].openedAt).toBe(300);
+  });
+
+  it('caps the shelf at twelve entries', () => {
+    for (let i = 0; i < 15; i++) {
+      recordRecentDocument({ name: `f${i}.txt`, size: i, lastModified: i, mimeType: 'text/plain', charCount: 0, offset: 0, openedAt: i });
+    }
+    const list = loadRecentDocuments();
+    expect(list).toHaveLength(12);
+    expect(list[0].name).toBe('f14.txt');
+  });
+
+  it('clears and repairs', () => {
+    recordRecentDocument({ name: 'a.pdf', size: 1, lastModified: 1, mimeType: 'application/pdf', charCount: 0, offset: 0, openedAt: 1 });
+    clearRecentDocuments();
+    expect(loadRecentDocuments()).toEqual([]);
+    localStorage.setItem('yapper.recent-docs.v1', JSON.stringify([{ name: 'x' }, 7]));
+    expect(loadRecentDocuments()).toEqual([]);
+  });
+});
+
+describe('job records carry word timings', () => {
+  it('round-trips per-word timings so captions survive a reload', () => {
+    const job = makeJob({ status: 'done', wordTimings: [0, 0.4, 1.2] });
+    const record = jobToRecord(job);
+    expect(record?.wordTimings).toEqual([0, 0.4, 1.2]);
+    expect(recordToJob(record!).wordTimings).toEqual([0, 0.4, 1.2]);
   });
 });

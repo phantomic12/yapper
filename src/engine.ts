@@ -5,6 +5,7 @@ import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
 import { REQUEST_TIMEOUTS, TimeoutError, PreviewBusyError, formatGenerateTimeout } from './engines/timeouts';
+import { estimateWordTimings } from './word-timings';
 
 // ─── Model definitions ───────────────────────────────────────────
 
@@ -235,10 +236,11 @@ export const MODELS: TTSModel[] = [
   //
   //    Re-adding any of these needs either an upstream ONNX export
   //    or hosting a self-converted mirror in a sibling HF repo (e.g.
-  //    `phantomic12/mms-tts-XXX-onnx`). The HF link-health regression
-  //    test (`src/links.test.ts`) skips auth-failed URLs, so an
-  //    anonymous probe failure (401/403) won't break CI; a clean 200
-  //    is required to be added here.
+  //    `phantomic12/mms-tts-XXX-onnx`). Note that the HF link-health
+  //    test (`src/links.test.ts`) HEADs every registry entry and fails
+  //    on anything that is not a clean 2xx — a gated repo answers 401
+  //    to an anonymous probe and would break CI, so the mirror has to
+  //    be public. Only the preflight reachability probe exempts 401.
   { id: 'mms-tts-eng', name: 'MMS-TTS (English)',     modelId: 'Xenova/mms-tts-eng', description: 'Meta MMS for English.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'en', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-spa', name: 'MMS-TTS (Spanish)',     modelId: 'Xenova/mms-tts-spa', description: 'Meta MMS for Spanish.',     category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'es', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
   { id: 'mms-tts-fra', name: 'MMS-TTS (French)',      modelId: 'Xenova/mms-tts-fra', description: 'Meta MMS for French.',      category: 'multilingual', sampleRate: 16000, dtype: 'q8', language: 'fr', sizeMB: 50, runsOnMainThread: true, voices: [], defaultVoiceId: '' },
@@ -998,6 +1000,16 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         // speed during inference — resampling again would double-speed.
         if (!model.custom && next.speed !== 1.0) {
           audio = changeSpeed(audio, next.speed);
+        }
+
+        // Engines that do not report per-word start times get estimates
+        // spread across the final audio, so captions and word-level karaoke
+        // are not a per-engine luxury. Computed after speed adjustment: an
+        // estimate must describe the audio that will actually play. Real
+        // timings (Kokoro) are never overwritten.
+        if (!next.wordTimings) {
+          const estimated = estimateWordTimings(next.text, audio.length / samplingRate);
+          if (estimated.length) next.wordTimings = estimated;
         }
 
         // Check if cancelled while running. cancel() may have mutated the

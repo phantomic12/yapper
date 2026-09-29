@@ -46,6 +46,226 @@ export function saveSettings(settings: PersistedSettings): void {
   }
 }
 
+export interface DocumentReadingProgress {
+  offset: number;
+  page?: number;
+  scale?: number;
+  viewMode: 'document' | 'text';
+  /** Reading theme of the visual document view. Optional for old records. */
+  theme?: 'light' | 'sepia' | 'night';
+  /** Document font family preference (reflowable views). */
+  fontFamily?: 'serif' | 'sans' | 'mono';
+  /** Whether the reflowable view was in paged (column) mode. */
+  paged?: boolean;
+}
+
+const DOCUMENT_PROGRESS_PREFIX = 'yapper.document-progress.v1:';
+
+/** Stable, content-free key for remembering a file's place without storing it. */
+export function documentProgressKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_PROGRESS_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentProgress(key: string): DocumentReadingProgress | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<DocumentReadingProgress>;
+    if (!Number.isFinite(value.offset) || (value.offset ?? -1) < 0) return null;
+    return {
+      offset: value.offset!,
+      page: Number.isInteger(value.page) && value.page! > 0 ? value.page : undefined,
+      scale: Number.isFinite(value.scale) && value.scale! > 0 ? value.scale : undefined,
+      viewMode: value.viewMode === 'text' ? 'text' : 'document',
+      theme: value.theme === 'sepia' || value.theme === 'night' ? value.theme : undefined,
+      fontFamily: value.fontFamily === 'serif' || value.fontFamily === 'mono' ? value.fontFamily : undefined,
+      paged: value.paged === true ? true : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveDocumentProgress(key: string, progress: DocumentReadingProgress): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(progress));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+/** A named place in a document, with an optional personal note. */
+export interface DocumentBookmark {
+  id: string;
+  label: string;
+  /** Character offset into the extracted text. */
+  offset: number;
+  note?: string;
+  createdAt: number;
+}
+
+const DOCUMENT_BOOKMARKS_PREFIX = 'yapper.document-bookmarks.v1:';
+const MAX_BOOKMARKS_PER_DOCUMENT = 200;
+
+/** Bookmarks share the progress key's shape: file identity, never content. */
+export function documentBookmarksKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_BOOKMARKS_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentBookmarks(key: string): DocumentBookmark[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_BOOKMARKS_PER_DOCUMENT).flatMap((value, index) => {
+      const entry = value as Partial<DocumentBookmark>;
+      if (!Number.isFinite(entry.offset) || (entry.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `bookmark-${index}`,
+        label: typeof entry.label === 'string' && entry.label.trim()
+          ? entry.label
+          : `Bookmark at ${entry.offset}`,
+        offset: entry.offset!,
+        ...(typeof entry.note === 'string' && entry.note ? { note: entry.note } : {}),
+        createdAt: Number.isFinite(entry.createdAt) ? entry.createdAt! : 0,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentBookmarks(key: string, bookmarks: DocumentBookmark[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(bookmarks.slice(0, MAX_BOOKMARKS_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+/** A marked-up range of the document text, with an optional personal note. */
+export interface DocumentHighlight {
+  id: string;
+  /** Character offsets into the extracted text, [start, end). */
+  start: number;
+  end: number;
+  color: 'yellow' | 'green' | 'blue';
+  note?: string;
+  createdAt: number;
+}
+
+const DOCUMENT_HIGHLIGHTS_PREFIX = 'yapper.document-highlights.v1:';
+const MAX_HIGHLIGHTS_PER_DOCUMENT = 500;
+
+/** Highlights share the progress key's shape: file identity, never content. */
+export function documentHighlightsKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_HIGHLIGHTS_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+const HIGHLIGHT_COLORS: ReadonlyArray<DocumentHighlight['color']> = ['yellow', 'green', 'blue'];
+
+export function loadDocumentHighlights(key: string): DocumentHighlight[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_HIGHLIGHTS_PER_DOCUMENT).flatMap((value, index) => {
+      const entry = value as Partial<DocumentHighlight>;
+      if (!Number.isFinite(entry.start) || !Number.isFinite(entry.end)) return [];
+      if ((entry.start ?? -1) < 0 || (entry.end ?? -1) <= (entry.start ?? Infinity)) return [];
+      return [{
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `highlight-${index}`,
+        start: entry.start!,
+        end: entry.end!,
+        color: HIGHLIGHT_COLORS.includes(entry.color as DocumentHighlight['color'])
+          ? (entry.color as DocumentHighlight['color'])
+          : 'yellow',
+        ...(typeof entry.note === 'string' && entry.note ? { note: entry.note } : {}),
+        createdAt: Number.isFinite(entry.createdAt) ? entry.createdAt! : 0,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentHighlights(key: string, highlights: DocumentHighlight[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(highlights.slice(0, MAX_HIGHLIGHTS_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+// ─── Recent documents ───────────────────────────────────────
+// A shelf of what was opened, so a document can be found again — and so
+// "resume where you left off" is visible before the file is re-picked.
+// Only metadata is stored; the file itself never leaves the user's disk.
+
+export interface RecentDocumentEntry {
+  name: string;
+  size: number;
+  lastModified: number;
+  mimeType: string;
+  /** Extracted-text length, so the shelf can show reading time. */
+  charCount: number;
+  /** Last reading position in the extracted text. */
+  offset: number;
+  openedAt: number;
+}
+
+const RECENT_DOCUMENTS_KEY = 'yapper.recent-docs.v1';
+const MAX_RECENT_DOCUMENTS = 12;
+
+export function loadRecentDocuments(): RecentDocumentEntry[] {
+  try {
+    const raw = localStorage.getItem(RECENT_DOCUMENTS_KEY);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_RECENT_DOCUMENTS).flatMap(value => {
+      const entry = value as Partial<RecentDocumentEntry>;
+      if (typeof entry.name !== 'string' || !entry.name) return [];
+      if (!Number.isFinite(entry.size) || !Number.isFinite(entry.lastModified)) return [];
+      return [{
+        name: entry.name,
+        size: entry.size!,
+        lastModified: entry.lastModified!,
+        mimeType: typeof entry.mimeType === 'string' ? entry.mimeType : 'application/octet-stream',
+        charCount: Number.isFinite(entry.charCount) ? Math.max(0, entry.charCount!) : 0,
+        offset: Number.isFinite(entry.offset) ? Math.max(0, entry.offset!) : 0,
+        openedAt: Number.isFinite(entry.openedAt) ? entry.openedAt! : 0,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Insert or refresh a document on the shelf (most recent first). */
+export function recordRecentDocument(entry: RecentDocumentEntry): void {
+  try {
+    const rest = loadRecentDocuments().filter(item =>
+      !(item.name === entry.name && item.size === entry.size && item.lastModified === entry.lastModified));
+    localStorage.setItem(
+      RECENT_DOCUMENTS_KEY,
+      JSON.stringify([entry, ...rest].slice(0, MAX_RECENT_DOCUMENTS)),
+    );
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+export function clearRecentDocuments(): void {
+  try {
+    localStorage.removeItem(RECENT_DOCUMENTS_KEY);
+  } catch {
+    // Best-effort.
+  }
+}
+
 // ─── Job records (pure mapping, unit-tested) ─────────────────────
 
 export interface StoredJob {
@@ -70,6 +290,8 @@ export interface StoredJob {
   blob?: Blob;
   readerSessionId?: string;
   readerIndex?: number;
+  /** Per-word start times, kept so caption export survives a reload. */
+  wordTimings?: number[];
 }
 
 export function jobToRecord(job: GenerationJob): StoredJob | null {
@@ -96,6 +318,7 @@ export function jobToRecord(job: GenerationJob): StoredJob | null {
     blob: job.status === 'done' ? job.blob : undefined,
     readerSessionId: job.readerSessionId,
     readerIndex: job.readerIndex,
+    wordTimings: job.wordTimings ? [...job.wordTimings] : undefined,
   };
 }
 
@@ -119,6 +342,7 @@ export function recordToJob(record: StoredJob): GenerationJob {
     blob: record.blob,
     readerSessionId: record.readerSessionId,
     readerIndex: record.readerIndex,
+    wordTimings: record.wordTimings ? [...record.wordTimings] : undefined,
   };
 }
 

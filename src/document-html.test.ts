@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   blocksToTextAndHtml,
+  blocksToTextHtmlAndSections,
   escapeHtmlText,
   overlappingRanges,
   parseOffsetAttr,
+  alignGridRow,
+  gridsToTextAndHtml,
+  slidesToTextAndHtml,
   type DocumentBlock,
 } from './document-html';
 
@@ -21,6 +25,70 @@ function stampedTexts(html: string): { text: string; start: number; end: number 
     return { text: el.textContent ?? '', start, end };
   });
 }
+
+describe('blocksToTextHtmlAndSections', () => {
+  const h = (kind: 'h1' | 'h2' | 'h3', text: string): DocumentBlock => ({
+    kind,
+    runs: [{ text }],
+  });
+
+  it('starts a section at each heading, running to the next one', () => {
+    const { text, sections } = blocksToTextHtmlAndSections([
+      h('h1', 'First'),
+      p('Body one.'),
+      h('h2', 'Second'),
+      p('Body two.'),
+      h('h1', 'Third'),
+      p('Body three.'),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['First', 'Second', 'Third']);
+    for (const section of sections) {
+      expect(text.slice(section.start, section.end)).toContain(section.title);
+    }
+    expect(sections[0].start).toBe(0);
+    expect(sections[sections.length - 1].end).toBe(text.length);
+  });
+
+  it('does not split at a subheading when real headings are present', () => {
+    // A chapter per subheading is not a chapter list; h1/h2 win when they exist.
+    const { sections } = blocksToTextHtmlAndSections([
+      h('h1', 'One'),
+      p('Body.'),
+      h('h2', 'Sub'),
+      p('More body.'),
+      h('h3', 'Deep'),
+      p('Even more.'),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['One', 'Sub']);
+  });
+
+  it('falls back to the shallowest heading when there is no h1 or h2', () => {
+    // Templates that style chapter titles as Heading 3 still have structure.
+    const { sections } = blocksToTextHtmlAndSections([
+      h('h3', 'One'),
+      p('Body.'),
+      h('h3', 'Two'),
+      p('More body.'),
+    ]);
+    expect(sections.map(s => s.title)).toEqual(['One', 'Two']);
+  });
+
+  it('produces no sections for a document of plain paragraphs and list items', () => {
+    const { sections } = blocksToTextHtmlAndSections([
+      p('Just prose.'),
+      { kind: 'li', runs: [{ text: 'A list item' }] },
+    ]);
+    expect(sections).toEqual([]);
+  });
+
+  it('leaves the text and markup untouched, so existing callers do not drift', () => {
+    const blocks = [h('h1', 'A Heading'), p('Body text.')];
+    const plain = blocksToTextAndHtml(blocks);
+    const rich = blocksToTextHtmlAndSections(blocks);
+    expect(rich.text).toBe(plain.text);
+    expect(rich.html).toBe(plain.html);
+  });
+});
 
 describe('blocksToTextAndHtml', () => {
   it('keeps the extracted text exactly as the paragraph join produced it', () => {
@@ -123,6 +191,74 @@ describe('blocksToTextAndHtml', () => {
   it('handles no blocks without pretending there is text', () => {
     expect(blocksToTextAndHtml([])).toEqual({ text: '', html: '' });
     expect(blocksToTextAndHtml([p(''), p('  ')])).toEqual({ text: '', html: '' });
+  });
+});
+
+describe('spreadsheet and slide document views', () => {
+  it('keeps sparse spreadsheet columns aligned and stamps exact ranges', () => {
+    const row = alignGridRow([
+      { ref: 'A1', text: 'Name' },
+      { ref: 'C1', text: 'Score' },
+    ]);
+    expect(row).toEqual(['Name', '', 'Score']);
+    const built = gridsToTextAndHtml([{ title: 'Sheet 1', rows: [row, ['Ada', '', '98']] }]);
+    expect(built.text).toBe('Name\t\tScore\n\nAda\t\t98');
+    expect(built.sections).toEqual([{ title: 'Sheet 1', start: 0, end: built.text.length }]);
+    const stamps = stampedTexts(built.html);
+    for (const stamp of stamps) expect(built.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    const dom = document.createElement('div');
+    dom.innerHTML = built.html;
+    expect(dom.querySelectorAll('th')).toHaveLength(3);
+    expect(dom.querySelector('table caption')?.textContent).toBe('Sheet 1');
+  });
+
+  it('keeps legacy spreadsheet text delimiters aligned with stamps', () => {
+    const built = gridsToTextAndHtml([{
+      title: 'Sheet 1', rows: [['A', 'B'], ['C', 'D']], delimiter: ', ', rowSeparator: '\n',
+    }]);
+    expect(built.text).toBe('A, B\nC, D');
+    for (const stamp of stampedTexts(built.html)) {
+      expect(built.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    }
+  });
+
+  it('groups slide blocks into positioned shape containers', () => {
+    const frame = { x: 5, y: 10, width: 90, height: 30 };
+    const built = slidesToTextAndHtml([{ blocks: [
+      { kind: 'h2', runs: [{ text: 'Title' }], frame },
+      { kind: 'p', runs: [{ text: 'Body' }], frame, separatorBefore: ' ', align: 'center' },
+      { kind: 'p', runs: [{ text: 'Footer' }], separatorBefore: ' ' },
+    ], aspect: 1.7778 }]);
+    const dom = document.createElement('div');
+    dom.innerHTML = built.html;
+    const shapes = dom.querySelectorAll('.dochtml__slide-shape');
+    // Two blocks share one frame: one container, holding both.
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].children).toHaveLength(2);
+    expect(shapes[0].getAttribute('style')).toContain('left:5.000%');
+    expect(dom.querySelector('.dochtml__slide')?.getAttribute('style')).toContain('aspect-ratio:1.7778');
+    expect(dom.querySelector('[style*="text-align:center"]')?.textContent).toBe('Body');
+    for (const stamp of stampedTexts(built.html)) {
+      expect(built.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    }
+  });
+
+  it('renders slides with continuous offsets and named navigation ranges', () => {
+    const built = slidesToTextAndHtml([
+      { blocks: [{ kind: 'h2', runs: [{ text: 'First slide' }] }, p('Opening') ] },
+      { blocks: [{ kind: 'h2', runs: [{ text: 'Second slide' }] }, p('Closing') ] },
+    ]);
+    expect(built.sections).toEqual([
+      { title: 'Slide 1', start: 0, end: 'First slide\n\nOpening'.length },
+      { title: 'Slide 2', start: 'First slide\n\nOpening'.length + 2,
+        end: 'First slide\n\nOpening'.length + 2 + 'Second slide\n\nClosing'.length },
+    ]);
+    for (const stamp of stampedTexts(built.html)) {
+      expect(built.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    }
+    const slideDom = document.createElement('div');
+    slideDom.innerHTML = built.html;
+    expect(slideDom.querySelectorAll('.dochtml__slide')).toHaveLength(2);
   });
 });
 

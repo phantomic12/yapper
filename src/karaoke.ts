@@ -32,6 +32,61 @@ export interface SplitSentence {
  * and `active` is empty, so the "now speaking" line degrades to the plain
  * sentence instead of going blank.
  */
+export interface WordSpan {
+  /** Character offsets into the document text. */
+  start: number;
+  end: number;
+}
+
+/**
+ * The document-text range of the word being spoken.
+ *
+ * `sentence.text` is an exact slice of the document at [sentence.start,
+ * sentence.end) — `assignOffsets` guarantees it — so locating the word the
+ * way `splitAtWord` does and shifting by `sentence.start` yields document
+ * offsets. That is what lets the document view paint a moving karaoke box
+ * over the actual page instead of highlighting the whole sentence.
+ *
+ * Returns null when the sentence carries no offsets (a sentence the
+ * segmenter could not locate) or the word cannot be found — the caller then
+ * falls back to the sentence's own range rather than painting nothing.
+ */
+export function wordSpanInDocument(
+  sentence: ReaderSentence,
+  wordIndex: number,
+): WordSpan | null {
+  if (sentence.start === undefined) return null;
+  const words = sentence.words;
+  if (wordIndex < 0 || wordIndex >= words.length) return null;
+  let cursor = 0;
+  for (let i = 0; i <= wordIndex; i++) {
+    const at = sentence.text.indexOf(words[i], cursor);
+    if (at === -1) return null;
+    if (i === wordIndex) {
+      return { start: sentence.start + at, end: sentence.start + at + words[i].length };
+    }
+    cursor = at + words[i].length;
+  }
+  return null;
+}
+
+/**
+ * Which word a character offset falls inside, for text joined with single
+ * spaces (as spoken sentences are). Returns -1 past the end.
+ *
+ * `speechSynthesis` boundary events report a `charIndex` into the utterance;
+ * this turns it into the word index `wordSpanInDocument` wants, completing
+ * the path from "the voice is on this character" to "paint this box".
+ */
+export function wordIndexAtChar(words: string[], charIndex: number): number {
+  let pos = 0;
+  for (let i = 0; i < words.length; i++) {
+    if (charIndex < pos + words[i].length) return i;
+    pos += words[i].length + 1;
+  }
+  return -1;
+}
+
 export function splitAtWord(
   sentence: ReaderSentence,
   wordIndex: number,

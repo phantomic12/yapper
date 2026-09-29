@@ -297,6 +297,20 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </div>
           </div>
 
+          <!-- Session shelf and cross-document search; live before a file opens. -->
+          <div class="docrecent" id="docrecent" hidden>
+            <div class="section-label">Recent documents</div>
+            <ul class="docrecent__list" id="docrecent-list"></ul>
+          </div>
+          <div class="docsearch" id="docsearch">
+            <div class="section-label">Search open documents</div>
+            <div class="docbookmarks__row">
+              <input class="docbookmarks__input" id="docsearch-input" type="search"
+                     placeholder="Search every document opened this session" aria-label="Search all open documents" />
+            </div>
+            <div class="docsearch__results" id="docsearch-results"></div>
+          </div>
+
           <div class="document-preview" id="document-preview" style="display:none">
             <div class="document-actions">
               <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
@@ -305,6 +319,9 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               </button>
               <button class="document-btn" id="pause-document-btn" type="button" style="display:none">Pause</button>
               <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
+              <!-- Instant browser-voice read-aloud: no model required. -->
+              <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
+              <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
               <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
             </div>
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
@@ -315,6 +332,71 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <div class="classify-chips" id="classify-chips"></div>
               <div class="classify-list" id="classify-list"></div>
             </div>
+
+            <!-- Places worth returning to, kept per uploaded file. -->
+            <div class="docbookmarks" id="docbookmarks">
+              <div class="section-label">Bookmarks</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="bookmark-add-btn" aria-expanded="false">
+                  Bookmark this spot
+                </button>
+              </div>
+              <form class="docbookmarks__form" id="bookmark-form" hidden>
+                <label class="docbookmarks__label" for="bookmark-name">Name</label>
+                <input class="docbookmarks__input" id="bookmark-name" type="text" maxlength="80" />
+                <label class="docbookmarks__label" for="bookmark-note">Note (optional)</label>
+                <textarea class="docbookmarks__note" id="bookmark-note" rows="2" maxlength="400"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save bookmark</button>
+                  <button class="document-btn" type="button" id="bookmark-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ul class="docbookmarks__list" id="bookmark-list"></ul>
+            </div>
+
+            <!-- Marked-up ranges of the document text, kept per uploaded file. -->
+            <div class="dochighlights" id="dochighlights">
+              <div class="section-label">Highlights</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="highlight-add-btn" aria-expanded="false">
+                  Highlight selection
+                </button>
+                <label class="docbookmarks__label" for="highlight-color">Color</label>
+                <select class="docbookmarks__input" id="highlight-color">
+                  <option value="yellow">Yellow</option>
+                  <option value="green">Green</option>
+                  <option value="blue">Blue</option>
+                </select>
+              </div>
+              <form class="docbookmarks__form" id="highlight-form" hidden>
+                <label class="docbookmarks__label" for="highlight-note">Note (optional)</label>
+                <textarea class="docbookmarks__note" id="highlight-note" rows="2" maxlength="400"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save highlight</button>
+                  <button class="document-btn" type="button" id="highlight-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ul class="docbookmarks__list" id="highlight-list"></ul>
+            </div>
+
+            <!-- Downloads and the keyboard cheat sheet. -->
+            <div class="docexports" id="docexports">
+              <div class="section-label">Export</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" id="export-md-btn" type="button">Markdown</button>
+                <button class="document-btn" id="export-html-btn" type="button">HTML</button>
+                <button class="document-btn" id="export-txt-btn" type="button">Text</button>
+                <button class="document-btn" id="export-notes-btn" type="button">Notes</button>
+                <button class="document-btn" id="export-audiobook-btn" type="button"
+                        title="Download the read-aloud audio as a zip: merged WAV, captions, and a karaoke page">Audiobook</button>
+                <button class="document-btn" id="review-notes-btn" type="button"
+                        title="Listen to your highlights and notes as a review session">▶ Review notes</button>
+                <button class="document-btn" id="shortcuts-btn" type="button" title="Keyboard shortcuts">Shortcuts (?)</button>
+              </div>
+            </div>
+
+            <!-- Position, size and reading time of the open document. -->
+            <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
 
             <div class="docview-switch" role="group" aria-label="How to show the document">
               <span class="section-label docview-switch__label">View</span>
@@ -388,6 +470,35 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span class="reader-legend reader-legend--past">Read</span>
         <span class="reader-legend reader-legend--active">Current</span>
         <span class="reader-legend reader-legend--future">Upcoming</span>
+      </div>
+    </div>
+
+    <!-- Presenter blackout / whiteout. Any of b, w, or Escape dismisses. -->
+    <div class="blackout" id="blackout" data-mode="black" hidden aria-hidden="true"></div>
+
+    <!-- Keyboard shortcut cheat sheet. -->
+    <div class="shortcut-help" id="shortcut-help" role="dialog" aria-modal="true"
+         aria-labelledby="shortcut-help-title" hidden>
+      <div class="shortcut-help__card">
+        <div class="shortcut-help__header">
+          <h2 class="shortcut-help__title" id="shortcut-help-title">Keyboard shortcuts</h2>
+          <button class="document-btn" id="shortcut-help-close" type="button">Close</button>
+        </div>
+        <dl class="shortcut-help__list">
+          <dt>/</dt><dd>Focus document search</dd>
+          <dt>n / Shift+N</dt><dd>Next / previous search result</dd>
+          <dt>m</dt><dd>Bookmark this spot</dd>
+          <dt>h</dt><dd>Highlight the selection</dd>
+          <dt>t</dt><dd>Cycle reading theme</dd>
+          <dt>o</dt><dd>Toggle the outline panel</dd>
+          <dt>s</dt><dd>Toggle the section/slide overview</dd>
+          <dt>b / w</dt><dd>Blackout / whiteout the screen</dd>
+          <dt>← / →</dt><dd>Previous / next page, slide, or sheet</dd>
+          <dt>+ / −</dt><dd>Zoom in / out</dd>
+          <dt>q</dt><dd>Quick read aloud from the current position</dd>
+          <dt>r</dt><dd>Review your highlights and notes aloud</dd>
+          <dt>?</dt><dd>Show or hide this help</dd>
+        </dl>
       </div>
     </div>
   `;

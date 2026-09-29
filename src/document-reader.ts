@@ -5,16 +5,22 @@ import './pdfjs-engine-shim.js';
 import * as pdfjs from 'pdfjs-dist';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import type { TextAnchor } from './document-types';
+import { blocksToTextAndHtml, type DocumentBlock } from './document-html';
 import {
-  blocksToTextAndHtml,
-  type DocumentBlock,
-  type DocumentRun,
-} from './document-html';
+  extractFormat,
+  formatKindForMime,
+  readArrayBuffer,
+  collapseWhitespace,
+  type FormatKind,
+  type FormatExtraction,
+  type FormatWorkerRequest,
+  type FormatWorkerResponse,
+} from './document-formats';
 import { getOcrEngine } from './ocr';
 import { getLlmOcrEngine } from './engines/llm-ocr';
 import { engineSupportsPdfJs, pdfUnsupportedMessage } from './pdf-capability';
-import { getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox, stripRtfControlWords, parseCsv, type OcrMode, type BboxWord, type QuadWord } from './document-types';
-export { getMimeType, getFileExtension, MAX_PDF_PAGES, type OcrMode, type BboxWord, type QuadWord, quadToBbox, stripRtfControlWords, parseCsv } from './document-types';
+import { getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox, type OcrMode, type BboxWord, type QuadWord } from './document-types';
+export { getMimeType, getFileExtension, MAX_PDF_PAGES, type OcrMode, type BboxWord, type QuadWord, quadToBbox, parseCsv } from './document-types';
 
 // PDF.js worker must be told where its worker script is. In Vite we copy the
 // worker to public/ and reference it relative to the served page so it works on
@@ -52,6 +58,8 @@ export interface ExtractedDocument {
    * use `anchors` instead.
    */
   html?: string;
+  /** Named navigation targets into the extracted text (EPUB chapters, slides). */
+  sections?: Array<{ title: string; start: number; end: number }>;
   /** Detected / declared MIME type. */
   mimeType: string;
   /** File name. */
@@ -125,6 +133,13 @@ export interface ExtractOptions {
    * Defaults to enabled; tests may pass false to avoid real timers.
    */
   watchdogEnabled?: boolean;
+  /**
+   * Kill-switch for the extraction worker. The ZIP/XML formats parse in a
+   * worker when the browser has one, so a 25 MB spreadsheet does not freeze
+   * the page; tests and debugging can force the main-thread path.
+   * Defaults to enabled.
+   */
+  workerEnabled?: boolean;
   /** Override the stall deadline (ms). Defaults to EXTRACT_STALL_TIMEOUT_MS. */
   stallTimeoutMs?: number;
 }
@@ -237,54 +252,122 @@ export async function extractDocument(file: File, options: ExtractOptions = {}):
   switch (mime) {
     case 'application/pdf':
       return extractPdf(file, options);
-    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-      return { ...(await extractDocx(file)), mimeType: mime, name: file.name };
-    case 'application/msword':
-      return { ...(await extractDoc(file)), mimeType: mime, name: file.name };
-    case 'application/vnd.oasis.opendocument.text':
-      return { ...(await extractOdt(file)), mimeType: mime, name: file.name };
-    case 'application/rtf':
-      return { ...(await extractRtf(file)), mimeType: mime, name: file.name };
     case 'application/epub+zip':
+      // EPUB stays on the main thread: epubjs walks the DOM, which the
+      // extraction worker deliberately does not have.
       return { ...(await extractEpub(file)), mimeType: mime, name: file.name };
-    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-      return { ...(await extractXlsx(file)), mimeType: mime, name: file.name };
-    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
-      return { ...(await extractPptx(file)), mimeType: mime, name: file.name };
-    case 'text/csv':
-      return { ...(await extractCsv(file)), mimeType: mime, name: file.name };
-    case 'text/html':
-      return { ...(await extractHtml(file)), mimeType: mime, name: file.name };
-    case 'text/plain':
-    case 'text/markdown':
-      return { text: await readTextFile(file), mimeType: mime, name: file.name };
-    default:
-      throw new Error(
-        `Unsupported file type: ${file.type || ext}. ` +
-        `Supported: PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD.`,
-      );
+    default: {
+      const kind = formatKindForMime(mime);
+      if (!kind) {
+        throw new Error(
+          `Unsupported file type: ${file.type || ext}. ` +
+          `Supported: PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD.`,
+        );
+      }
+      return { ...(await extractOfficeDocument(file, kind, options)), mimeType: mime, name: file.name };
+    }
   }
 }
 
 // (getMimeType and getFileExtension moved to ./document-types so they can be
 //  unit-tested without pulling pdfjs/tesseract into the test bundle.)
 
-function readTextFile(file: File): Promise<string> {
+// ─── Off-main-thread extraction ─────────────────────────────────────
+// The ZIP/XML formats (DOCX, XLSX, PPTX, …) parse entirely inside a worker,
+// which keeps the page responsive while a 25 MB spreadsheet inflates and its
+// XML is walked. The worker is an optimization, never a requirement:
+// anything that goes wrong — no Worker support, a CSP that blocks module
+// workers, a worker that stalls — falls back to parsing on the main thread,
+// exactly as this app always has.
+
+let formatWorker: Worker | null = null;
+let formatWorkerRequestId = 0;
+
+function terminateFormatWorker(): void {
+  formatWorker?.terminate();
+  formatWorker = null;
+}
+
+function extractInWorker(
+  file: File,
+  kind: FormatKind,
+  onProgress: ((message: string) => void) | undefined,
+): Promise<FormatExtraction> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsText(file);
+    let worker: Worker;
+    try {
+      formatWorker ??= new Worker(
+        new URL('./document-extract.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      worker = formatWorker;
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    const id = ++formatWorkerRequestId;
+    const cleanup = () => {
+      worker.removeEventListener('message', handleMessage);
+      worker.removeEventListener('error', handleError);
+    };
+    const handleMessage = (event: MessageEvent): void => {
+      const message = event.data as FormatWorkerResponse;
+      if (!message || message.id !== id) return;
+      if ('progress' in message) {
+        onProgress?.(message.progress);
+        return;
+      }
+      cleanup();
+      if (message.ok) resolve(message.doc);
+      else reject(new Error(message.error));
+    };
+    const handleError = (event: ErrorEvent): void => {
+      cleanup();
+      reject(new Error(event.message || 'Document extraction worker failed'));
+    };
+    worker.addEventListener('message', handleMessage);
+    worker.addEventListener('error', handleError);
+    const request: FormatWorkerRequest = { id, kind, file };
+    worker.postMessage(request);
   });
 }
 
-function readArrayBuffer(file: File): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsArrayBuffer(file);
+/**
+ * Extract a worker-safe format in the worker when possible, with the same
+ * stall watchdog the PDF path uses: a worker that goes quiet for
+ * `stallTimeoutMs` loses its turn and the main thread takes over.
+ */
+async function extractOfficeDocument(
+  file: File,
+  kind: FormatKind,
+  options: ExtractOptions,
+): Promise<FormatExtraction> {
+  if (options.workerEnabled === false || typeof Worker === 'undefined') {
+    return extractFormat(kind, file);
+  }
+  const progressSink: { callback?: (message: string) => void } = {};
+  const work = new Promise<FormatExtraction>((resolve, reject) => {
+    queueMicrotask(() => {
+      extractInWorker(file, kind, message => progressSink.callback?.(message)).then(resolve, reject);
+    });
   });
+  // A no-op floor keeps the wrapped progress callback defined even when the
+  // caller passed no onProgress: the stall deadline must still be pushed out
+  // by every worker progress message, or a quiet caller would let the
+  // watchdog fire mid-parse.
+  const watchdog = withProgressWatchdog<FormatExtraction>(
+    work,
+    options.stallTimeoutMs ?? EXTRACT_STALL_TIMEOUT_MS,
+    options.onProgress ?? (() => {}),
+  );
+  progressSink.callback = watchdog.onProgress ?? undefined;
+  try {
+    return await watchdog.promise;
+  } catch {
+    terminateFormatWorker();
+    options.onProgress?.('Retrying extraction on the main thread…');
+    return extractFormat(kind, file);
+  }
 }
 
 // ─── PDF extraction ────────────────────────────────────────────────
@@ -604,337 +687,54 @@ function groupWordsIntoLines(words: BboxWord[], yThreshold: number): LineGroup[]
   }).sort((a, b) => a.y - b.y);
 }
 
-// ─── DOCX extraction ──────────────────────────────────────────────
-
-/** True when a `w:rPr` child like `w:b`/`w:i` is on (absent val means on). */
-function docxFlagOn(run: Element, tag: string): boolean {
-  const flags = run.getElementsByTagName(tag);
-  if (!flags.length) return false;
-  const val = flags[0].getAttribute('w:val');
-  return val === null || !/^(0|false|off)$/i.test(val);
-}
-
-/**
- * Runs of one paragraph, with formatting.
- *
- * Falls back to a single unstyled run if the runs do not reconstruct the
- * paragraph's text exactly. The text is the contract — the reader segments it
- * and every offset in the document points into it — so when formatting and
- * text conflict, formatting loses. That keeps a DOCX with unusual markup (a
- * `w:t` outside any `w:r`, say) from silently shifting every offset in the
- * file by a character or two.
- */
-function docxParagraphRuns(p: Element): DocumentRun[] {
-  const whole = Array.from(p.getElementsByTagName('w:t'))
-    .map(t => t.textContent ?? '')
-    .join('');
-  if (!whole.length) return [];
-
-  const runs: DocumentRun[] = [];
-  for (const r of Array.from(p.getElementsByTagName('w:r'))) {
-    const text = Array.from(r.getElementsByTagName('w:t'))
-      .map(t => t.textContent ?? '')
-      .join('');
-    if (!text) continue;
-    runs.push({ text, bold: docxFlagOn(r, 'w:b'), italic: docxFlagOn(r, 'w:i') });
-  }
-
-  if (runs.length === 0 || runs.map(r => r.text).join('') !== whole) {
-    return [{ text: whole }];
-  }
-  return runs;
-}
-
-/** Map a paragraph's style to a block kind, defaulting to a plain paragraph. */
-function docxParagraphKind(p: Element): DocumentBlock['kind'] {
-  if (p.getElementsByTagName('w:numPr').length > 0) return 'li';
-  const style = p.getElementsByTagName('w:pStyle')[0]?.getAttribute('w:val') ?? '';
-  if (/^title$/i.test(style)) return 'h1';
-  const heading = style.match(/^heading\s*(\d)/i);
-  if (heading) {
-    const level = Number(heading[1]);
-    return level <= 1 ? 'h1' : level === 2 ? 'h2' : 'h3';
-  }
-  return 'p';
-}
-
-async function extractDocx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  // We use manual XML parsing instead of mammoth because mammoth's internal
-  // xmldom wrapper calls DOMParser.parseFromString() without a mimeType,
-  // which fails in modern browsers. Manual parsing of w:t runs covers the
-  // vast majority of DOCX text content (paragraphs, tables, lists).
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
-  const xmlText = await zip.file('word/document.xml')?.async('text');
-  if (!xmlText) throw new Error('Invalid DOCX: missing word/document.xml');
-
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(xmlText, 'application/xml');
-  const blocks: DocumentBlock[] = [];
-  for (const p of Array.from(xml.getElementsByTagName('w:p'))) {
-    const runs = docxParagraphRuns(p);
-    if (!runs.length) continue;
-    blocks.push({ kind: docxParagraphKind(p), runs });
-  }
-
-  // One pass produces both, so the markup's stamped ranges are guaranteed to
-  // be offsets into the text the reader is going to segment.
-  const { text, html } = blocksToTextAndHtml(blocks);
-  return { text, html: html || undefined };
-}
-
-// ─── DOC (legacy Word binary) extraction ──────────────────────────
-// The .doc format is a complex binary OLE container. Full parsing would
-// require a dedicated library (e.g. antiword or libreoffice). We do a
-// best-effort extraction: strip non-printable bytes and OLE overhead,
-// then clean up the result. This works for simple documents but may
-// produce noise for complex ones. Mammoth does not support .doc.
-
-async function extractDoc(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const arrayBuffer = await readArrayBuffer(file);
-  const bytes = new Uint8Array(arrayBuffer);
-  // Extract printable ASCII + common UTF-8 sequences from the binary.
-  // The WordDocument stream contains text as either Latin-1 or UTF-16LE.
-  // We try UTF-16LE first (most common in modern .doc files), then fall
-  // back to Latin-1.
-  const text = extractTextFromDocBinary(bytes);
-  if (!text.trim()) {
-    throw new Error(
-      'Could not extract text from .doc file. ' +
-      'Try converting it to .docx or .pdf for better results.',
-    );
-  }
-  return { text: text.trim() };
-}
-
-function extractTextFromDocBinary(bytes: Uint8Array): string {
-  // Try UTF-16LE decoding first — .doc files typically store text this way.
-  // We look for runs of valid UTF-16LE characters (printable ASCII range
-  // in the low byte, zero in the high byte).
-  const parts: string[] = [];
-  let i = 0;
-  let current: number[] = [];
-
-  while (i < bytes.length - 1) {
-    const lo = bytes[i];
-    const hi = bytes[i + 1];
-    // Printable ASCII or common Latin-1 in UTF-16LE
-    if (hi === 0 && lo >= 0x20 && lo <= 0x7e) {
-      current.push(lo);
-      i += 2;
-    } else if (hi === 0 && lo === 0x0a) {
-      // Newline
-      if (current.length) {
-        parts.push(String.fromCharCode(...current));
-        current = [];
-      }
-      i += 2;
-    } else if (hi === 0 && lo >= 0xa0 && lo <= 0xff) {
-      // Latin-1 supplement
-      current.push(lo);
-      i += 2;
-    } else {
-      // Non-text byte — flush current run
-      if (current.length >= 3) {
-        parts.push(String.fromCharCode(...current));
-      }
-      current = [];
-      i += 1;
-    }
-  }
-  if (current.length >= 3) {
-    parts.push(String.fromCharCode(...current));
-  }
-
-  return parts
-    .map(p => p.trim())
-    .filter(p => p.length > 0)
-    .join('\n');
-}
-
-// ─── RTF extraction ───────────────────────────────────────────────
-// RTF is a plain-text format with control words. We strip control words
-// and extract the text content. This handles the common cases (fonts,
-// colors, paragraphs) without needing a full RTF parser.
-
-async function extractRtf(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const rtf = await readTextFile(file);
-  const text = stripRtfControlWords(rtf);
-  if (!text.trim()) {
-    throw new Error('Could not extract text from RTF file (file may be empty or corrupted).');
-  }
-  return { text: text.trim() };
-}
-
-// ─── HTML extraction ──────────────────────────────────────────────
-
-async function extractHtml(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const html = await readTextFile(file);
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  // Remove script and style content
-  doc.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-  const text = doc.body?.textContent ?? '';
-  const cleaned = collapseWhitespace(text);
-  if (!cleaned) {
-    throw new Error('Could not extract text from HTML file (no body content).');
-  }
-  return { text: cleaned };
-}
-
-// ─── CSV extraction ───────────────────────────────────────────────
-// CSV is plain text — we read it and format rows as lines, preserving
-// the tabular structure for TTS readability.
-
-async function extractCsv(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const csv = await readTextFile(file);
-  if (!csv.trim()) {
-    throw new Error('CSV file is empty.');
-  }
-  const rows = parseCsv(csv);
-  const lines = rows.map(row => row.join(', '));
-  return { text: lines.join('\n') };
-}
-
-// ─── XLSX extraction ──────────────────────────────────────────────
-// XLSX is a ZIP with XML sheets. We use JSZip (already a dependency) to
-// read xl/worksheets/sheet*.xml and extract cell values from the shared
-// strings table (xl/sharedStrings.xml).
-
-async function extractXlsx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
-
-  // Load shared strings table (maps string IDs to text)
-  const sharedStringsXml = await zip.file('xl/sharedStrings.xml')?.async('text');
-  const sharedStrings: string[] = [];
-  if (sharedStringsXml) {
-    const parser = new DOMParser();
-    const ssDoc = parser.parseFromString(sharedStringsXml, 'application/xml');
-    const siNodes = ssDoc.getElementsByTagName('si');
-    for (const si of Array.from(siNodes)) {
-      // Each <si> contains one or more <t> (text runs)
-      const tNodes = si.getElementsByTagName('t');
-      const text = Array.from(tNodes).map(t => t.textContent ?? '').join('');
-      sharedStrings.push(text);
-    }
-  }
-
-  // Find and parse all worksheets
-  const sheetFiles = Object.keys(zip.files).filter(path => /^xl\/worksheets\/sheet\d+\.xml$/.test(path));
-  if (sheetFiles.length === 0) throw new Error('Invalid XLSX: no worksheets found');
-
-  const parser = new DOMParser();
-  const parts: string[] = [];
-
-  for (const sheetPath of sheetFiles.sort()) {
-    const sheetXml = await zip.file(sheetPath)?.async('text');
-    if (!sheetXml) continue;
-    const sheetDoc = parser.parseFromString(sheetXml, 'application/xml');
-    const rows = sheetDoc.getElementsByTagName('row');
-    for (const row of Array.from(rows)) {
-      const cells = row.getElementsByTagName('c');
-      const cellTexts: string[] = [];
-      for (const cell of Array.from(cells)) {
-        const type = cell.getAttribute('t');
-        const valueNode = cell.getElementsByTagName('v')[0];
-        const value = valueNode?.textContent ?? '';
-        if (type === 's') {
-          // Shared string reference
-          const idx = parseInt(value, 10);
-          cellTexts.push(sharedStrings[idx] ?? '');
-        } else if (type === 'inlineStr') {
-          // Inline string
-          const tNode = cell.getElementsByTagName('t')[0];
-          cellTexts.push(tNode?.textContent ?? '');
-        } else {
-          // Number or other
-          cellTexts.push(value);
-        }
-      }
-      if (cellTexts.some(t => t.trim())) {
-        parts.push(cellTexts.join(', '));
-      }
-    }
-    // Add a blank line between sheets
-    if (parts.length) parts.push('');
-  }
-
-  const text = parts.join('\n').trim();
-  if (!text) throw new Error('XLSX file contains no text data.');
-  return { text };
-}
-
-// ─── PPTX extraction ──────────────────────────────────────────────
-// PPTX is a ZIP with XML slides. We extract text from the <a:t> elements
-// in each slide's XML (ppt/slides/slide*.xml).
-
-async function extractPptx(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
-
-  const slideFiles = Object.keys(zip.files).filter(path => /^ppt\/slides\/slide\d+\.xml$/.test(path));
-  if (slideFiles.length === 0) throw new Error('Invalid PPTX: no slides found');
-
-  const parser = new DOMParser();
-  const parts: string[] = [];
-
-  // Sort slides by number (slide1.xml, slide2.xml, ... slide10.xml)
-  slideFiles.sort((a, b) => {
-    const numA = parseInt(a.match(/slide(\d+)\.xml/)?.[1] ?? '0', 10);
-    const numB = parseInt(b.match(/slide(\d+)\.xml/)?.[1] ?? '0', 10);
-    return numA - numB;
-  });
-
-  for (const slidePath of slideFiles) {
-    const slideXml = await zip.file(slidePath)?.async('text');
-    if (!slideXml) continue;
-    const slideDoc = parser.parseFromString(slideXml, 'application/xml');
-    // Text in PPTX slides is in <a:t> elements (DrawingML run text)
-    const textNodes = slideDoc.getElementsByTagName('a:t');
-    const texts = Array.from(textNodes).map(t => t.textContent ?? '');
-    const slideText = texts.join(' ').trim();
-    if (slideText) {
-      parts.push(slideText);
-    }
-  }
-
-  const text = parts.join('\n\n').trim();
-  if (!text) throw new Error('PPTX file contains no text data.');
-  return { text };
-}
-
-// ─── ODT extraction ──────────────────────────────────────────────
-
-async function extractOdt(file: File): Promise<Omit<ExtractedDocument, 'mimeType' | 'name'>> {
-  const JSZip = (await import('jszip')).default;
-  const zip = await JSZip.loadAsync(await readArrayBuffer(file));
-  const xmlText = await zip.file('content.xml')?.async('text');
-  if (!xmlText) throw new Error('Invalid ODT: missing content.xml');
-
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(xmlText, 'application/xml');
-  const paragraphs = xml.getElementsByTagNameNS('urn:oasis:names:tc:opendocument:xmlns:text:1.0', 'p');
-  const out: string[] = [];
-  for (const p of Array.from(paragraphs)) {
-    const text = p.textContent ?? '';
-    if (text.trim()) out.push(text);
-  }
-  return { text: out.join('\n\n') };
-}
-
 // ─── EPUB extraction ─────────────────────────────────────────────
 
 // Minimal subset of epubjs's spine API that we actually consume. The published
 // types are incomplete so we narrow to the shape we need.
 interface EpubSpineItem {
+  href?: string;
+  idref?: string;
   load: (fn: (url: string) => Promise<EpubLoaded>) => Promise<EpubLoaded>;
   unload?: () => void;
 }
+export interface EpubNavigationItem {
+  label?: string;
+  href?: string;
+  subitems?: EpubNavigationItem[];
+}
+
+export interface EpubChapterContent {
+  href?: string;
+  blocks: DocumentBlock[];
+}
+
+/** Map EPUB spine chapters to text ranges and their best navigation labels. */
+export function epubSectionsFromChapters(
+  chapters: EpubChapterContent[],
+  toc: EpubNavigationItem[],
+): Array<{ title: string; start: number; end: number }> {
+  const flattened = flattenEpubToc(toc);
+  let offset = 0;
+  return chapters.map((chapter, index) => {
+    const nav = flattened.find(entry => sameEpubPath(entry.href, chapter.href));
+    const blocks = chapter.blocks.filter(block => block.runs.map(run => run.text).join('').trim());
+    const chapterText = blocks.map(block => block.runs.map(run => run.text).join('')).join('\n\n');
+    const heading = blocks.find(block => block.kind === 'h1' || block.kind === 'h2' || block.kind === 'h3');
+    const section = {
+      title: nav?.label?.trim() || heading?.runs.map(run => run.text).join('').trim()
+        || chapter.href?.split('/').pop()?.replace(/\.[^.]+$/, '') || `Chapter ${index + 1}`,
+      start: offset,
+      end: offset + chapterText.length,
+    };
+    offset = section.end + 2;
+    return section;
+  });
+}
 interface EpubBook {
   spine: { spineItems: EpubSpineItem[] };
+  navigation?: { toc?: EpubNavigationItem[] };
   load: (url: string) => Promise<EpubLoaded>;
-  loaded: { spine: Promise<unknown> };
+  loaded: { spine: Promise<unknown>; navigation?: Promise<unknown> };
 }
 
 /**
@@ -1011,27 +811,48 @@ async function extractEpub(file: File): Promise<Omit<ExtractedDocument, 'mimeTyp
   const ePub = (await import('epubjs')).default as unknown as (data: ArrayBuffer) => EpubBook;
   const arrayBuffer = await readArrayBuffer(file);
   const book = ePub(arrayBuffer);
-  await book.loaded.spine;
+  await Promise.all([book.loaded.spine, book.loaded.navigation].filter(
+    (promise): promise is Promise<unknown> => !!promise,
+  ));
 
   // Every chapter's blocks go into ONE list, so blocksToTextAndHtml can stamp
   // globally-correct offsets in a single pass. Stamping per chapter would
   // restart the numbering at zero and every highlight past chapter one would
   // land at the start of the book.
   const all: DocumentBlock[] = [];
+  const chapters: EpubChapterContent[] = [];
+  const toc = book.navigation?.toc ?? [];
   for (const item of book.spine.spineItems) {
-    const loaded = await item.load(book.load.bind(book));
-    const blocks = epubBlocks(loaded);
-    if (blocks.length) {
-      blocks[0] = { ...blocks[0], chapterStart: true };
-      all.push(...blocks);
+    try {
+      const loaded = await item.load(book.load.bind(book));
+      const blocks = epubBlocks(loaded);
+      if (blocks.length) {
+        blocks[0] = { ...blocks[0], chapterStart: true };
+        chapters.push({ href: item.href, blocks });
+        all.push(...blocks);
+      }
+    } finally {
+      item.unload?.();
     }
-    item.unload?.();
   }
 
   const { text, html } = blocksToTextAndHtml(all);
-  return { text, html: html || undefined };
+  const sections = epubSectionsFromChapters(chapters, toc);
+  return { text, html: html || undefined, sections };
 }
 
-function collapseWhitespace(s: string): string {
-  return s.replace(/\s+/g, ' ').trim();
+function flattenEpubToc(items: EpubNavigationItem[]): EpubNavigationItem[] {
+  return items.flatMap(item => [item, ...flattenEpubToc(item.subitems ?? [])]);
 }
+
+function sameEpubPath(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const clean = (value: string) => {
+    const path = value.split(/[?#]/)[0].replace(/^\.\//, '');
+    try { return decodeURIComponent(path); } catch { return path; }
+  };
+  const left = clean(a);
+  const right = clean(b);
+  return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+}
+

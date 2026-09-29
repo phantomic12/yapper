@@ -19,7 +19,36 @@ import {
 import type { AppState } from '../app-state';
 import { showStatus } from '../dom-utils';
 import { SAMPLE_DOCUMENT } from '../sample-document';
+import {
+  loadDocumentProgress,
+  saveDocumentProgress,
+  documentProgressKey,
+  loadDocumentBookmarks,
+  saveDocumentBookmarks,
+  documentBookmarksKey,
+  loadDocumentHighlights,
+  saveDocumentHighlights,
+  documentHighlightsKey,
+  loadRecentDocuments,
+  recordRecentDocument,
+  type DocumentBookmark,
+  type DocumentHighlight,
+  type DocumentReadingProgress,
+} from '../persistence';
 import { mountHtmlView, mountPdfView, type DocumentView } from './document-view';
+import { parseOffsetAttr } from '../document-html';
+import { findMatches, matchSnippet } from './document-search';
+import { countWords, formatStatusBar, positionPercent } from './document-stats';
+import { buildExport, buildNotesExport, type ExportFile, type ExportFormat } from './document-export';
+import { ReadAloudController } from './read-aloud';
+import { wordIndexAtChar, wordSpanInDocument } from '../karaoke';
+import { createAudiobookBundle } from '../audiobook';
+import {
+  buildReviewScript,
+  reviewScriptText,
+  type ReviewScriptText,
+  type ReviewSegment,
+} from './document-review';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -97,6 +126,33 @@ export function bindDocumentEvents(state: AppState): void {
   const docViewBtns = Array.from(
     document.querySelectorAll<HTMLButtonElement>('[data-docview]'),
   );
+  const bookmarkPanel = document.getElementById('docbookmarks') as HTMLElement;
+  const bookmarkAddBtn = document.getElementById('bookmark-add-btn') as HTMLButtonElement;
+  const bookmarkForm = document.getElementById('bookmark-form') as HTMLFormElement;
+  const bookmarkName = document.getElementById('bookmark-name') as HTMLInputElement;
+  const bookmarkNote = document.getElementById('bookmark-note') as HTMLTextAreaElement;
+  const bookmarkCancelBtn = document.getElementById('bookmark-cancel-btn') as HTMLButtonElement;
+  const bookmarkList = document.getElementById('bookmark-list') as HTMLElement;
+  const highlightPanel = document.getElementById('dochighlights') as HTMLElement;
+  const highlightAddBtn = document.getElementById('highlight-add-btn') as HTMLButtonElement;
+  const highlightForm = document.getElementById('highlight-form') as HTMLFormElement;
+  const highlightColor = document.getElementById('highlight-color') as HTMLSelectElement;
+  const highlightNote = document.getElementById('highlight-note') as HTMLTextAreaElement;
+  const highlightCancelBtn = document.getElementById('highlight-cancel-btn') as HTMLButtonElement;
+  const highlightList = document.getElementById('highlight-list') as HTMLElement;
+  const statusBar = document.getElementById('doc-statusbar') as HTMLElement | null;
+  const recentPanel = document.getElementById('docrecent') as HTMLElement;
+  const recentList = document.getElementById('docrecent-list') as HTMLElement;
+  const sessionSearchInput = document.getElementById('docsearch-input') as HTMLInputElement;
+  const sessionSearchResults = document.getElementById('docsearch-results') as HTMLElement;
+  const readaloudBtn = document.getElementById('readaloud-btn') as HTMLButtonElement;
+  const readaloudSpeedBtn = document.getElementById('readaloud-speed-btn') as HTMLButtonElement;
+  const reviewBtn = document.getElementById('review-notes-btn') as HTMLButtonElement;
+  const audiobookBtn = document.getElementById('export-audiobook-btn') as HTMLButtonElement;
+  const shortcutsBtn = document.getElementById('shortcuts-btn') as HTMLButtonElement;
+  const shortcutHelp = document.getElementById('shortcut-help') as HTMLElement;
+  const shortcutHelpClose = document.getElementById('shortcut-help-close') as HTMLButtonElement;
+  const blackout = document.getElementById('blackout') as HTMLElement;
 
   /**
    * The file the reader is currently showing, kept so the document view can
@@ -110,6 +166,37 @@ export function bindDocumentEvents(state: AppState): void {
   /** Sentences of the current document, so a highlight can be resolved to a
    *  character range and handed to the document view. */
   let readerSentences: ReaderSentence[] = [];
+  let progressKey: string | null = null;
+  let savedProgress: ReturnType<typeof loadDocumentProgress> = null;
+  let progressTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastProgressOffset = 0;
+  let activeFileRequest = 0;
+  let bookmarksKey: string | null = null;
+  let bookmarks: DocumentBookmark[] = [];
+  let highlightsKey: string | null = null;
+  let highlights: DocumentHighlight[] = [];
+  /** Offset to jump to once the next document finishes mounting. */
+  let pendingGoToOffset: number | null = null;
+  /** Range captured by the highlight form while its note is being written. */
+  let pendingHighlight: { start: number; end: number } | null = null;
+  let sessionSearchTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const QUICK_RATES = [0.75, 1, 1.25, 1.5];
+  let quickRateIndex = 1;
+  /** The review script currently being spoken, for follow-along painting. */
+  let reviewSegments: ReviewSegment[] = [];
+  /**
+   * Which document the model session is speaking, if one is: 'document' for
+   * the file's own text (quick read / Read button), 'review' for the notes
+   * script. The browser-voice paths leave this null.
+   */
+  let modelSpeechKind: 'document' | 'review' | null = null;
+  /** Sessions cap here — the same limit the Read button enforces. */
+  const MAX_MODEL_READ_CHARS = 20000;
+
+  const fileIdentity = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+  /** Everything opened this session, so search can span documents. */
+  const sessionDocs = new Map<string, { file: File; doc: ExtractedDocument }>();
   /**
    * Whether the next play should take over the screen with the reading overlay.
    *
@@ -238,6 +325,45 @@ export function bindDocumentEvents(state: AppState): void {
   function setDocViewMode(mode: 'document' | 'text') {
     docViewMode = mode;
     applyDocViewMode();
+    scheduleProgressSave();
+  }
+
+  function scheduleProgressSave(position?: {
+    page?: number;
+    offset?: number;
+    scale?: number;
+    theme?: DocumentReadingProgress['theme'];
+    fontFamily?: DocumentReadingProgress['fontFamily'];
+    paged?: boolean;
+  }) {
+    if (position?.offset !== undefined) lastProgressOffset = position.offset;
+    updateStatusBar();
+    if (!progressKey) return;
+    savedProgress = {
+      offset: position?.offset ?? lastProgressOffset,
+      page: position?.page ?? docView?.activePage ?? savedProgress?.page,
+      scale: position?.scale ?? docView?.scale ?? savedProgress?.scale,
+      viewMode: docViewMode,
+      theme: position?.theme ?? docView?.theme ?? savedProgress?.theme,
+      fontFamily: position?.fontFamily ?? docView?.fontFamily ?? savedProgress?.fontFamily,
+      paged: position?.paged ?? docView?.paged ?? savedProgress?.paged,
+    };
+    clearTimeout(progressTimer);
+    progressTimer = setTimeout(() => {
+      if (progressKey && savedProgress) saveDocumentProgress(progressKey, savedProgress);
+      // Keep the shelf's progress figure honest as the user reads.
+      if (sourceFile && state.extractedDocument) {
+        recordRecentDocument({
+          name: sourceFile.name,
+          size: sourceFile.size,
+          lastModified: sourceFile.lastModified,
+          mimeType: state.extractedDocument.mimeType,
+          charCount: state.extractedDocument.text.length,
+          offset: lastProgressOffset,
+          openedAt: Date.now(),
+        });
+      }
+    }, 300);
   }
 
   for (const btn of docViewBtns) {
@@ -247,6 +373,349 @@ export function bindDocumentEvents(state: AppState): void {
       if (btn.dataset.docview === 'document') docViewHost.focus();
       else readerView.focus();
     });
+  }
+
+  /**
+   * Bookmarks: named places in the document, kept per uploaded file.
+   * Labels and notes are rendered with textContent, never markup — they are
+   * the user's own words and must not become HTML.
+   */
+  function renderBookmarks() {
+    bookmarkPanel.hidden = !bookmarksKey;
+    bookmarkList.replaceChildren();
+    for (const bookmark of bookmarks) {
+      const item = document.createElement('li');
+      item.className = 'docbookmarks__item';
+      item.dataset.bookmarkId = bookmark.id;
+      const text = document.createElement('div');
+      text.className = 'docbookmarks__text';
+      const label = document.createElement('span');
+      label.className = 'docbookmarks__label-text';
+      label.textContent = bookmark.label;
+      text.appendChild(label);
+      if (bookmark.note) {
+        const note = document.createElement('p');
+        note.className = 'docbookmarks__note-text';
+        note.textContent = bookmark.note;
+        text.appendChild(note);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(text, actions);
+      bookmarkList.appendChild(item);
+    }
+  }
+
+  bookmarkAddBtn.addEventListener('click', () => {
+    const opening = bookmarkForm.hidden;
+    bookmarkForm.hidden = !opening;
+    bookmarkAddBtn.setAttribute('aria-expanded', String(opening));
+    if (opening) {
+      const snippet = state.extractedDocument?.text
+        .slice(lastProgressOffset, lastProgressOffset + 32).trim();
+      bookmarkName.value = snippet
+        ? (state.extractedDocument!.text.length > lastProgressOffset + 32 ? `${snippet}…` : snippet)
+        : `Position ${lastProgressOffset}`;
+      bookmarkName.focus();
+    }
+  });
+
+  bookmarkCancelBtn.addEventListener('click', () => {
+    bookmarkForm.hidden = true;
+    bookmarkAddBtn.setAttribute('aria-expanded', 'false');
+    bookmarkName.value = '';
+    bookmarkNote.value = '';
+    bookmarkAddBtn.focus();
+  });
+
+  bookmarkForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!bookmarksKey) return;
+    const note = bookmarkNote.value.trim();
+    bookmarks = [...bookmarks, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      label: bookmarkName.value.trim() || `Bookmark at ${lastProgressOffset}`,
+      offset: lastProgressOffset,
+      ...(note ? { note } : {}),
+      createdAt: Date.now(),
+    }];
+    saveDocumentBookmarks(bookmarksKey, bookmarks);
+    bookmarkName.value = '';
+    bookmarkNote.value = '';
+    bookmarkForm.hidden = true;
+    bookmarkAddBtn.setAttribute('aria-expanded', 'false');
+    renderBookmarks();
+  });
+
+  bookmarkList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    const item = button?.closest<HTMLElement>('[data-bookmark-id]');
+    if (!button || !item) return;
+    const bookmark = bookmarks.find(entry => entry.id === item.dataset.bookmarkId);
+    if (!bookmark) return;
+    if (button.dataset.action === 'go') {
+      lastProgressOffset = bookmark.offset;
+      docView?.goToOffset(bookmark.offset);
+      const sentence = readerSentences.find(s => s.start !== undefined
+        && s.start <= bookmark.offset && (s.end ?? 0) > bookmark.offset);
+      const el = sentence
+        ? readerView.querySelector(`[data-sentence-index="${sentence.globalIndex}"]`)
+        : null;
+      (el ?? readerView).scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    } else if (button.dataset.action === 'remove') {
+      bookmarks = bookmarks.filter(entry => entry.id !== bookmark.id);
+      if (bookmarksKey) saveDocumentBookmarks(bookmarksKey, bookmarks);
+      renderBookmarks();
+    }
+  });
+
+  /** Position, size, and reading time for the status bar under the panels. */
+  function updateStatusBar() {
+    if (!statusBar) return;
+    const doc = state.extractedDocument;
+    if (!doc) {
+      statusBar.textContent = '';
+      return;
+    }
+    statusBar.textContent = formatStatusBar(
+      positionPercent(lastProgressOffset, doc.text.length),
+      countWords(doc.text),
+    );
+  }
+
+  /** The session shelf: what was opened, and how far it got. */
+  function renderRecentDocuments() {
+    const entries = loadRecentDocuments();
+    recentPanel.hidden = entries.length === 0;
+    recentList.replaceChildren();
+    for (const entry of entries) {
+      const item = document.createElement('li');
+      item.className = 'docrecent__item';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'document-btn docrecent__open';
+      button.textContent = entry.name;
+      // A File cannot be reopened without the user, so the button opens the
+      // picker; progress is restored automatically once the same file lands.
+      button.title = 'Choose this file again to reopen it at your place';
+      button.addEventListener('click', () => input.click());
+      const meta = document.createElement('span');
+      meta.className = 'docrecent__meta';
+      meta.textContent = `${positionPercent(entry.offset, entry.charCount)}% read · `
+        + `${new Date(entry.openedAt).toLocaleDateString()}`;
+      item.append(button, meta);
+      recentList.appendChild(item);
+    }
+  }
+
+  /** Search every document opened this session, grouped per document. */
+  function runSessionSearch() {
+    const query = sessionSearchInput.value.trim();
+    sessionSearchResults.replaceChildren();
+    if (!query) return;
+    for (const [identity, entry] of sessionDocs) {
+      const summary = findMatches(entry.doc.text, query, {}, 200);
+      if (!summary.matches.length) continue;
+      const group = document.createElement('div');
+      group.className = 'docsearch__group';
+      const head = document.createElement('div');
+      head.className = 'docsearch__doc';
+      head.textContent = `${entry.doc.name} · ${summary.matches.length} match${summary.matches.length === 1 ? '' : 'es'}${summary.truncated ? '+' : ''}`;
+      group.appendChild(head);
+      for (const match of summary.matches.slice(0, 5)) {
+        const snippet = matchSnippet(entry.doc.text, match);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'docsearch__result';
+        button.textContent = `${snippet.before}${snippet.match}${snippet.after}`;
+        button.addEventListener('click', () => jumpToSessionResult(identity, match.start));
+        group.appendChild(button);
+      }
+      sessionSearchResults.appendChild(group);
+    }
+    if (!sessionSearchResults.childElementCount) {
+      const none = document.createElement('p');
+      none.className = 'docsearch__none';
+      none.textContent = 'No matches in open documents.';
+      sessionSearchResults.appendChild(none);
+    }
+  }
+
+  function jumpToSessionResult(identity: string, offset: number) {
+    const entry = sessionDocs.get(identity);
+    if (!entry) return;
+    if (identity === (sourceFile ? fileIdentity(sourceFile) : null)) {
+      lastProgressOffset = offset;
+      docView?.goToOffset(offset);
+      scheduleProgressSave({ offset });
+    } else {
+      // Re-open the file's document and land on the match once it mounts.
+      pendingGoToOffset = offset;
+      handleFile(entry.file);
+    }
+  }
+
+  /**
+   * Map a DOM position to an offset in the extracted text.
+   *
+   * Both views stamp their content with document offsets — `data-off` ranges
+   * in the visual view, sentence indices in the text view — so a selection
+   * resolves to text coordinates instead of view coordinates, and highlights
+   * survive switching views and reloading the file.
+   */
+  function textOffsetIn(root: Element, node: Node, nodeOffset: number): number | null {
+    let seen = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let current = walker.nextNode();
+    while (current) {
+      if (current === node) return seen + nodeOffset;
+      seen += current.textContent?.length ?? 0;
+      current = walker.nextNode();
+    }
+    return null;
+  }
+
+  function documentOffsetOf(node: Node, nodeOffset: number): number | null {
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node as Element | null;
+    if (!el) return null;
+    const stamped = el.closest<HTMLElement>('[data-off]');
+    const stamp = stamped ? parseOffsetAttr(stamped.dataset.off) : null;
+    if (stamped && stamp) {
+      const within = textOffsetIn(stamped, node, nodeOffset);
+      if (within === null) return null;
+      return Math.max(stamp.start, Math.min(stamp.end, stamp.start + within));
+    }
+    const sentenceEl = el.closest<HTMLElement>('[data-sentence-index]');
+    if (sentenceEl) {
+      const sentence = readerSentences.find(s =>
+        s.globalIndex === Number(sentenceEl.dataset.sentenceIndex));
+      if (sentence?.start !== undefined) {
+        const within = textOffsetIn(sentenceEl, node, nodeOffset) ?? 0;
+        const limit = (sentence.end ?? sentence.start) - sentence.start;
+        return sentence.start + Math.min(within, limit);
+      }
+    }
+    return null;
+  }
+
+  function resolveSelection(): { start: number; end: number } | null {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0);
+    const start = documentOffsetOf(range.startContainer, range.startOffset);
+    const end = documentOffsetOf(range.endContainer, range.endOffset);
+    if (start === null || end === null || !(end > start)) return null;
+    return { start, end };
+  }
+
+  /** Paint the stored highlights into the mounted view. */
+  function applyAnnotationsToView() {
+    docView?.setAnnotations(highlights.map(({ start, end, color }) => ({ start, end, color })));
+  }
+
+  function renderHighlights() {
+    highlightPanel.hidden = !highlightsKey;
+    highlightList.replaceChildren();
+    for (const highlight of highlights) {
+      const item = document.createElement('li');
+      item.className = 'docbookmarks__item';
+      item.dataset.highlightId = highlight.id;
+      const text = document.createElement('div');
+      text.className = 'docbookmarks__text';
+      const label = document.createElement('span');
+      label.className = 'docbookmarks__label-text';
+      // The user's own words (and the document's) are text, never markup.
+      const quote = state.extractedDocument?.text.slice(highlight.start, highlight.end).replace(/\s+/g, ' ').trim() ?? '';
+      label.textContent = quote
+        ? `${quote.length > 80 ? `${quote.slice(0, 80)}…` : quote} (${highlight.color})`
+        : `Highlight at ${highlight.start} (${highlight.color})`;
+      text.appendChild(label);
+      if (highlight.note) {
+        const note = document.createElement('p');
+        note.className = 'docbookmarks__note-text';
+        note.textContent = highlight.note;
+        text.appendChild(note);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(text, actions);
+      highlightList.appendChild(item);
+    }
+  }
+
+  function downloadFile(file: ExportFile) {
+    downloadBlob(file.filename, new Blob([file.content], { type: file.mime }));
+  }
+
+  function downloadBlob(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  /**
+   * The audiobook bundle: the current reading session's generated clips as
+   * one zip — merged WAV, document-wide captions, and a karaoke page. Only
+   * what has actually been synthesised goes in; stopping early gives a
+   * shorter book, not a broken one.
+   */
+  async function exportAudiobook() {
+    const session = state.readerSession;
+    const clips = state.currentJobs
+      .filter(job => job.status === 'done' && job.audio && job.sampleRate
+        && session && job.readerSessionId === session.getSessionId())
+      .sort((a, b) => (a.readerIndex ?? 0) - (b.readerIndex ?? 0))
+      .map(job => ({
+        text: job.text,
+        audio: job.audio!,
+        sampleRate: job.sampleRate!,
+        wordTimings: job.wordTimings,
+      }));
+    if (!clips.length) {
+      showReaderNotice('Read the document aloud first — the audiobook is assembled from the generated audio.');
+      return;
+    }
+    try {
+      const doc = state.extractedDocument;
+      const name = doc?.name.replace(/\.[^./\\]+$/, '') || 'audiobook';
+      // Section offsets are into the extracted text, so the text has to come
+      // along: the chapter map is a lookup in what was read, not arithmetic.
+      const bundle = await createAudiobookBundle(clips, {
+        name,
+        sections: doc?.sections,
+        documentText: doc?.text ?? '',
+      });
+      downloadBlob(`${name}-audiobook.zip`, bundle.zip);
+    } catch (err) {
+      showReaderNotice(`Could not assemble the audiobook: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function exportDocument(format: ExportFormat) {
+    const doc = state.extractedDocument;
+    if (!doc) return;
+    downloadFile(buildExport({ name: doc.name, text: doc.text, html: doc.html }, format));
   }
 
   /** Tear down the previous document's view before showing a new one. */
@@ -260,32 +729,68 @@ export function bindDocumentEvents(state: AppState): void {
   /**
    * Mount the visual view for a document, if it has one.
    *
-   * PDFs render from their anchors, DOCX and EPUB from stamped markup. A
-   * plain-text or spreadsheet import has no visual form worth showing, so the
-   * switch stays hidden and the reader keeps the text view it always had —
-   * rather than offering a Document tab that would show nothing.
+   * PDFs render from their anchors; structured formats render their stamped
+   * markup, tables, or slides. Plain text has no visual form, so the switch
+   * stays hidden rather than offering a Document tab that would show nothing.
    */
-  async function mountDocumentView(doc: ExtractedDocument) {
+  async function mountDocumentView(doc: ExtractedDocument, request: number) {
     destroyDocView();
+    const mountHost = document.createElement('div');
+    const pdfFile = sourceFile;
+    let mountedView: DocumentView | null = null;
     try {
-      if (sourceFile && doc.anchors?.length) {
-        docView = await mountPdfView(docViewHost, sourceFile, doc.anchors, {
+      if (pdfFile && (doc.anchors?.length || doc.mimeType === 'application/pdf')) {
+        mountedView = await mountPdfView(mountHost, pdfFile, doc.anchors ?? [], {
+          initialPage: savedProgress?.page,
+          initialScale: savedProgress?.scale,
+          initialTheme: savedProgress?.theme,
+          text: doc.text,
+          onNavigate: scheduleProgressSave,
           onError: (err, page) => {
             // A page that will not rasterise is a real problem the user can
             // see, so it is said out loud rather than left as a blank page.
             console.warn(`[reader] page ${page} failed to render`, err);
           },
           onPick: readFromOffset,
+          // A scanned PDF has no text layer, so search asks for one on
+          // demand: OCR runs the first time the user searches and hands the
+          // view text plus page geometry to highlight against.
+          ...(doc.text.trim() ? {} : {
+            loadSearchText: async onProgress => {
+              const indexed = await extractDocument(pdfFile, {
+                useOcr: true,
+                ocrMode: state.ocrMode,
+                onProgress,
+              });
+              return { text: indexed.text, anchors: indexed.anchors ?? [] };
+            },
+          }),
         });
       } else if (doc.html) {
-        docView = mountHtmlView(docViewHost, doc.html, doc.name, {
+        mountedView = mountHtmlView(mountHost, doc.html, doc.name, {
           onPick: readFromOffset,
+          sections: doc.sections,
+          text: doc.text,
+          initialScale: savedProgress?.scale,
+          initialTheme: savedProgress?.theme,
+          fontFamily: savedProgress?.fontFamily,
+          paged: savedProgress?.paged,
+          onNavigate: scheduleProgressSave,
         });
       } else {
         return;
       }
+      if (request !== activeFileRequest || !mountedView) {
+        mountedView?.destroy();
+        return;
+      }
+      docViewHost.replaceChildren(mountHost);
+      docView = mountedView;
       hasDocView = true;
       applyDocViewMode();
+      if (savedProgress?.viewMode) setDocViewMode(savedProgress.viewMode);
+      if (lastProgressOffset > 0) docView.goToOffset(lastProgressOffset);
+      applyAnnotationsToView();
       // A document opened while the reader is already part-way through should
       // not start with its highlight missing.
       if (lastHighlightedWord) {
@@ -295,6 +800,8 @@ export function bindDocumentEvents(state: AppState): void {
     } catch (err) {
       // Falling back to the text view is a working reader with fewer pixels,
       // which beats an error page for the whole document.
+      mountedView?.destroy();
+      if (request !== activeFileRequest) return;
       destroyDocView();
       setDocViewMode('text');
       console.warn('[reader] document view unavailable, showing text instead', err);
@@ -307,8 +814,42 @@ export function bindDocumentEvents(state: AppState): void {
    * rendering as a real file instead of a simplified preview.
    */
   function showDocument(doc: ExtractedDocument, file: File | null) {
+    const request = ++activeFileRequest;
+    // Speech about the old document must not follow the new one on screen.
+    quickRead.stop();
+    reviewRead.stop();
     state.extractedDocument = doc;
     sourceFile = file;
+    progressKey = file ? documentProgressKey(file) : null;
+    savedProgress = progressKey ? loadDocumentProgress(progressKey) : null;
+    lastProgressOffset = savedProgress?.offset ?? 0;
+    bookmarksKey = file ? documentBookmarksKey(file) : null;
+    bookmarks = bookmarksKey ? loadDocumentBookmarks(bookmarksKey) : [];
+    renderBookmarks();
+    highlightsKey = file ? documentHighlightsKey(file) : null;
+    highlights = highlightsKey ? loadDocumentHighlights(highlightsKey) : [];
+    pendingHighlight = null;
+    highlightForm.hidden = true;
+    renderHighlights();
+    // A cross-document search result sets the landing spot before extraction.
+    if (pendingGoToOffset !== null) {
+      lastProgressOffset = pendingGoToOffset;
+      pendingGoToOffset = null;
+    }
+    if (file) {
+      sessionDocs.set(fileIdentity(file), { file, doc });
+      recordRecentDocument({
+        name: file.name,
+        size: file.size,
+        lastModified: file.lastModified,
+        mimeType: doc.mimeType,
+        charCount: doc.text.length,
+        offset: lastProgressOffset,
+        openedAt: Date.now(),
+      });
+      renderRecentDocuments();
+    }
+    updateStatusBar();
     renderReaderView(doc.text);
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
@@ -326,7 +867,7 @@ export function bindDocumentEvents(state: AppState): void {
     // over and hide the text of a file that has no visual view.
     docViewMode = 'document';
     destroyDocView();
-    void mountDocumentView(doc);
+    void mountDocumentView(doc, request);
     readerView.focus();
   }
 
@@ -339,18 +880,27 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   function handleFile(file: File) {
+    const request = ++activeFileRequest;
     if (file.size > 25 * 1024 * 1024) {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
       return;
     }
+    destroyDocView();
+    hasDocView = false;
+    applyDocViewMode();
     clearReaderError();
     setProgress('Extracting text…');
     const useOcr = ocrToggle.checked && file.name.toLowerCase().endsWith('.pdf');
-    extractDocument(file, { useOcr, ocrMode: state.ocrMode, onProgress: setProgress })
+    extractDocument(file, {
+      useOcr,
+      ocrMode: state.ocrMode,
+      onProgress: message => { if (request === activeFileRequest) setProgress(message); },
+    })
       .then(doc => {
-        showDocument(doc, file);
+        if (request === activeFileRequest) showDocument(doc, file);
       })
       .catch(err => {
+        if (request !== activeFileRequest) return;
         clearProgress();
         // Surface the failure in the reader panel itself, not just the
         // transient top banner: extraction errors (corrupt file, engine
@@ -499,9 +1049,19 @@ export function bindDocumentEvents(state: AppState): void {
     // Drive the document view from the same signal. The span comes from the
     // sentence segmentation rather than from anything view-specific, so the
     // text view and the rendered page always agree on where the reader is.
+    // The engine's word timings arrive as `wordIndex`, so the page gets a
+    // karaoke word box inside a faint sentence trail instead of a fresh
+    // sentence wash on every word.
     const active = readerSentences.find(s => s.globalIndex === info.sentenceIndex);
     if (active?.start !== undefined && active.end !== undefined) {
-      docView?.highlight(active.start, active.end);
+      lastProgressOffset = active.start;
+      const word = wordSpanInDocument(active, info.wordIndex);
+      if (word) {
+        docView?.highlight(word.start, word.end, { start: active.start, end: active.end });
+      } else {
+        docView?.highlight(active.start, active.end);
+      }
+      scheduleProgressSave({ offset: active.start });
     }
   }
 
@@ -547,6 +1107,7 @@ export function bindDocumentEvents(state: AppState): void {
       readerOverlayStatus.textContent = '';
       clearHighlight();
     }
+    updateSpeechButtons();
   }
 
   /**
@@ -560,15 +1121,18 @@ export function bindDocumentEvents(state: AppState): void {
   function beginReading(fromSentenceIndex: number, overlay: boolean) {
     const text = state.extractedDocument?.text?.trim();
     if (!text) return;
-    if (text.length > 20000) {
+    if (text.length > MAX_MODEL_READ_CHARS) {
       showReaderNotice('Text is too long to read in one session. Paste a shorter excerpt.');
       return;
     }
     openOverlayOnPlay = overlay;
     state.readerSession?.stop();
+    quickRead.stop();
+    reviewRead.stop();
     clearHighlight();
     clearReaderError();
     renderOverlay(text);
+    modelSpeechKind = 'document';
     state.readerSession = new DocumentReaderSession(state.engine!, text, {
       chunkSize: 300,
       lookahead: 2,
@@ -593,6 +1157,8 @@ export function bindDocumentEvents(state: AppState): void {
   function readFromOffset(offset: number) {
     const sentence = sentenceAtOffset(readerSentences, offset);
     if (!sentence) return;
+    lastProgressOffset = sentence.start ?? offset;
+    scheduleProgressSave({ offset: lastProgressOffset });
 
     // Move the highlight the moment the click happens. The session's own
     // highlight only arrives once the first chunk has been synthesised and
@@ -623,11 +1189,7 @@ export function bindDocumentEvents(state: AppState): void {
     }
   });
 
-  stopBtn.addEventListener('click', () => {
-    state.readerSession?.stop();
-    clearHighlight();
-    closeReaderOverlay();
-  });
+  stopBtn.addEventListener('click', stopAllSpeech);
 
   readerOverlayPause.addEventListener('click', () => {
     if (!state.readerSession) return;
@@ -637,21 +1199,341 @@ export function bindDocumentEvents(state: AppState): void {
       state.readerSession.resumeAfterGesture();
     }
   });
-  readerOverlayStop.addEventListener('click', () => {
-    state.readerSession?.stop();
-    clearHighlight();
-    closeReaderOverlay();
-  });
-  readerOverlayClose.addEventListener('click', () => {
-    state.readerSession?.stop();
-    clearHighlight();
-    closeReaderOverlay();
-  });
+  readerOverlayStop.addEventListener('click', stopAllSpeech);
+  readerOverlayClose.addEventListener('click', stopAllSpeech);
   readerOverlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      state.readerSession?.stop();
-      clearHighlight();
-      closeReaderOverlay();
+      stopAllSpeech();
     }
   });
+
+  // ── Highlights: user-made marked ranges with optional notes ──
+  highlightAddBtn.addEventListener('click', () => {
+    const range = resolveSelection();
+    if (!range) {
+      showReaderNotice('Select some text in the document first, then highlight it.');
+      return;
+    }
+    pendingHighlight = range;
+    highlightForm.hidden = false;
+    highlightAddBtn.setAttribute('aria-expanded', 'true');
+    highlightNote.focus();
+  });
+
+  highlightCancelBtn.addEventListener('click', () => {
+    pendingHighlight = null;
+    highlightForm.hidden = true;
+    highlightAddBtn.setAttribute('aria-expanded', 'false');
+    highlightAddBtn.focus();
+  });
+
+  highlightForm.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!highlightsKey || !pendingHighlight) return;
+    const note = highlightNote.value.trim();
+    highlights = [...highlights, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      start: pendingHighlight.start,
+      end: pendingHighlight.end,
+      color: highlightColor.value as DocumentHighlight['color'],
+      ...(note ? { note } : {}),
+      createdAt: Date.now(),
+    }];
+    saveDocumentHighlights(highlightsKey, highlights);
+    pendingHighlight = null;
+    highlightNote.value = '';
+    highlightForm.hidden = true;
+    highlightAddBtn.setAttribute('aria-expanded', 'false');
+    renderHighlights();
+    applyAnnotationsToView();
+  });
+
+  highlightList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    const item = button?.closest<HTMLElement>('[data-highlight-id]');
+    if (!button || !item) return;
+    const highlight = highlights.find(entry => entry.id === item.dataset.highlightId);
+    if (!highlight) return;
+    if (button.dataset.action === 'go') {
+      lastProgressOffset = highlight.start;
+      docView?.goToOffset(highlight.start);
+      docView?.highlight(highlight.start, highlight.end);
+      scheduleProgressSave({ offset: highlight.start });
+    } else if (button.dataset.action === 'remove') {
+      highlights = highlights.filter(entry => entry.id !== highlight.id);
+      if (highlightsKey) saveDocumentHighlights(highlightsKey, highlights);
+      renderHighlights();
+      applyAnnotationsToView();
+    }
+  });
+
+  // ── Exports ────────────────────────────────────────────────
+  document.getElementById('export-md-btn')?.addEventListener('click', () => exportDocument('markdown'));
+  document.getElementById('export-html-btn')?.addEventListener('click', () => exportDocument('html'));
+  document.getElementById('export-txt-btn')?.addEventListener('click', () => exportDocument('text'));
+  document.getElementById('export-notes-btn')?.addEventListener('click', () => {
+    const doc = state.extractedDocument;
+    if (!doc) return;
+    downloadFile(buildNotesExport({ name: doc.name, text: doc.text }, bookmarks, highlights));
+  });
+  audiobookBtn.addEventListener('click', () => {
+    void exportAudiobook();
+  });
+
+  // ── Quick read: the loaded model's voice when ready, the browser's
+  // voice otherwise. Either way the highlight follows the spoken sentence. ──
+  const quickRead = new ReadAloudController({
+    onSentence: index => {
+      const sentence = readerSentences[index];
+      if (sentence?.start !== undefined && sentence.end !== undefined) {
+        lastProgressOffset = sentence.start;
+        docView?.highlight(sentence.start, sentence.end);
+        scheduleProgressSave({ offset: sentence.start });
+      }
+    },
+    // Where the browser reports word boundaries, the highlight goes
+    // word-by-word (karaoke) instead of washing the whole sentence.
+    onWord: (index, charIndex) => {
+      const sentence = readerSentences[index];
+      if (!sentence || sentence.start === undefined || sentence.end === undefined) return;
+      const wordIndex = wordIndexAtChar(sentence.words, charIndex);
+      if (wordIndex < 0) return;
+      const span = wordSpanInDocument(sentence, wordIndex);
+      if (span) docView?.highlight(span.start, span.end, { start: sentence.start, end: sentence.end });
+    },
+    onStateChange: () => updateSpeechButtons(),
+    onError: message => showReaderNotice(message),
+  });
+
+  function sessionLive(): boolean {
+    const status = state.readerSession?.getState().status;
+    return status === 'playing' || status === 'paused';
+  }
+
+  /** The model can speak this much text; beyond it, fall back to the browser. */
+  function canUseModelVoice(spokenChars: number): boolean {
+    return state.engine?.getEngineState() === 'ready' && spokenChars <= MAX_MODEL_READ_CHARS;
+  }
+
+  function updateSpeechButtons() {
+    const documentSpeech = quickRead.getState() !== 'idle'
+      || (sessionLive() && modelSpeechKind !== 'review');
+    const reviewSpeech = reviewRead.getState() !== 'idle'
+      || (sessionLive() && modelSpeechKind === 'review');
+    readaloudBtn.textContent = documentSpeech ? '■ Stop quick read' : '▶ Quick read';
+    reviewBtn.textContent = reviewSpeech ? '■ Stop review' : '▶ Review notes';
+  }
+
+  /** Stop every speech path at once: model session, quick read, review. */
+  function stopAllSpeech() {
+    quickRead.stop();
+    reviewRead.stop();
+    state.readerSession?.stop();
+    state.readerSession = null;
+    modelSpeechKind = null;
+    clearHighlight();
+    closeReaderOverlay();
+    updateSpeechButtons();
+  }
+
+  readaloudBtn.addEventListener('click', () => {
+    if (quickRead.getState() !== 'idle' || (modelSpeechKind === 'document' && sessionLive())) {
+      stopAllSpeech();
+      return;
+    }
+    if (!readerSentences.length) return;
+    const text = state.extractedDocument?.text ?? '';
+    const from = sentenceAtOffset(readerSentences, lastProgressOffset)?.globalIndex ?? 0;
+    if (canUseModelVoice(text.length)) {
+      // The same session the Read button uses, minus the overlay: the
+      // model's voice, starting at the current sentence.
+      beginReading(from, false);
+      return;
+    }
+    reviewRead.stop();
+    state.readerSession?.stop();
+    quickRead.speak(
+      readerSentences.map(sentence => ({ text: sentence.words.join(' ') })),
+      from,
+      { rate: QUICK_RATES[quickRateIndex] },
+    );
+  });
+
+  readaloudSpeedBtn.addEventListener('click', () => {
+    quickRateIndex = (quickRateIndex + 1) % QUICK_RATES.length;
+    quickRead.setRate(QUICK_RATES[quickRateIndex]);
+    reviewRead.setRate(QUICK_RATES[quickRateIndex]);
+    readaloudSpeedBtn.textContent = `${QUICK_RATES[quickRateIndex]}×`;
+  });
+
+  // ── Review notes: speak the highlights and bookmarks back ──
+  const reviewRead = new ReadAloudController({
+    onSentence: index => {
+      const segment = reviewSegments[index];
+      if (!segment || segment.start === undefined || segment.end === undefined) return;
+      lastProgressOffset = segment.start;
+      docView?.goToOffset(segment.start);
+      docView?.highlight(segment.start, segment.end);
+      scheduleProgressSave({ offset: segment.start });
+    },
+    onStateChange: () => updateSpeechButtons(),
+    onError: message => showReaderNotice(message),
+  });
+
+  /** Speak the review through the loaded model, painting each note as it plays. */
+  function speakReviewWithModel(script: ReviewSegment[], built: ReviewScriptText) {
+    modelSpeechKind = 'review';
+    openOverlayOnPlay = false;
+    state.readerSession?.stop();
+    quickRead.stop();
+    clearHighlight();
+    clearReaderError();
+    const session = new DocumentReaderSession(state.engine!, built.text, {
+      chunkSize: 300,
+      lookahead: 2,
+      speed: state.currentSpeed,
+      onStateChange: renderReaderState,
+      onHighlight: info => {
+        // The session reports sentence indexes into the script text; the
+        // script's ranges say which note (and document span) that is.
+        const sentence = session.getSentences()[info.sentenceIndex];
+        if (sentence?.start === undefined) return;
+        const index = built.ranges.findIndex(range =>
+          sentence.start! >= range.start && sentence.start! < range.end);
+        const segment = index >= 0 ? script[index] : null;
+        if (!segment || segment.start === undefined || segment.end === undefined) return;
+        lastProgressOffset = segment.start;
+        docView?.highlight(segment.start, segment.end);
+        scheduleProgressSave({ offset: segment.start });
+      },
+    });
+    state.readerSession = session;
+    session.start(0);
+  }
+
+  reviewBtn.addEventListener('click', () => {
+    if (reviewRead.getState() !== 'idle' || (modelSpeechKind === 'review' && sessionLive())) {
+      stopAllSpeech();
+      return;
+    }
+    const doc = state.extractedDocument;
+    if (!doc) return;
+    const script = buildReviewScript({ name: doc.name, text: doc.text }, bookmarks, highlights);
+    if (!script.length) {
+      showReaderNotice('No highlights or bookmarks to review yet.');
+      return;
+    }
+    reviewSegments = script;
+    const built = reviewScriptText(script);
+    if (canUseModelVoice(built.text.length)) {
+      speakReviewWithModel(script, built);
+      return;
+    }
+    quickRead.stop();
+    state.readerSession?.stop();
+    reviewRead.speak(script.map(segment => ({ text: segment.text })), 0, {
+      rate: QUICK_RATES[quickRateIndex],
+    });
+  });
+
+  // ── Cross-document search ────────────────────────────────
+  sessionSearchInput.addEventListener('input', () => {
+    clearTimeout(sessionSearchTimer);
+    sessionSearchTimer = setTimeout(runSessionSearch, 150);
+  });
+
+  // ── Shortcuts, blackout, and the cheat sheet ─────────────
+  function toggleShortcutHelp() {
+    shortcutHelp.hidden = !shortcutHelp.hidden;
+    if (!shortcutHelp.hidden) shortcutHelpClose.focus();
+    else shortcutsBtn.focus();
+  }
+
+  shortcutsBtn.addEventListener('click', toggleShortcutHelp);
+  shortcutHelpClose.addEventListener('click', toggleShortcutHelp);
+
+  document.addEventListener('keydown', (e) => {
+    // A visible blackout swallows the next key: dismissing it is the action.
+    if (!blackout.hidden) {
+      blackout.hidden = true;
+      e.preventDefault();
+      return;
+    }
+    const target = e.target as HTMLElement | null;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+      || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    switch (e.key) {
+      case '/':
+        e.preventDefault();
+        docView?.search?.focus();
+        break;
+      case 'n':
+        docView?.search?.next();
+        break;
+      case 'N':
+        docView?.search?.prev();
+        break;
+      case 'm':
+        bookmarkAddBtn.click();
+        break;
+      case 'h':
+        highlightAddBtn.click();
+        break;
+      case 't':
+        docView?.cycleTheme();
+        break;
+      case 'o':
+        docViewHost.querySelector<HTMLButtonElement>('[data-role="toggle-outline"]')?.click();
+        break;
+      case 's':
+        docViewHost.querySelector<HTMLButtonElement>('[data-role="toggle-overview"]')?.click();
+        break;
+      case 'b':
+        blackout.dataset.mode = 'black';
+        blackout.hidden = false;
+        break;
+      case 'w':
+        blackout.dataset.mode = 'white';
+        blackout.hidden = false;
+        break;
+      case 'ArrowLeft':
+        if (docView) {
+          e.preventDefault();
+          docView.prevPage();
+        }
+        break;
+      case 'ArrowRight':
+        if (docView) {
+          e.preventDefault();
+          docView.nextPage();
+        }
+        break;
+      case '+':
+      case '=':
+        docView?.zoomIn();
+        break;
+      case '-':
+        docView?.zoomOut();
+        break;
+      case 'q':
+        readaloudBtn.click();
+        break;
+      case 'r':
+        reviewBtn.click();
+        break;
+      case '?':
+        toggleShortcutHelp();
+        break;
+      case 'Escape':
+        if (!shortcutHelp.hidden) toggleShortcutHelp();
+        break;
+    }
+  });
+
+  blackout.addEventListener('click', () => {
+    blackout.hidden = true;
+  });
+
+  renderRecentDocuments();
 }

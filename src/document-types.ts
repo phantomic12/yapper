@@ -198,13 +198,100 @@ export function getFileExtension(name: string): string {
 
 // ─── RTF control-word stripper (pure, testable) ────────────────────
 
+/** One paragraph of RTF, with the formatting needed to recognise a heading. */
+export interface RtfParagraph {
+  text: string;
+  /** True when every visible character in the paragraph was bold. */
+  allBold: boolean;
+  /** Largest `\fsN` font size seen, in half-points; 0 when none was declared. */
+  maxFontSize: number;
+  /** The `\sN` paragraph style index, or 0 when none was declared. */
+  styleIndex: number;
+  /** Heading depth 1–6 from the document's stylesheet; 0 when unstyled. */
+  stylesheetLevel: number;
+}
+
 /**
- * Strip RTF control words and extract plain text. Handles Unicode escapes
- * (\uN?), hex escapes (\'XX), and converts \par/\line/\tab to whitespace.
+ * Style indices the document's own stylesheet maps to "heading 1"… "heading 6".
+ *
+ * Word records this in a `{\stylesheet}` group. Resolving it is authoritative —
+ * far better than inferring a heading from how it looks — but plenty of RTF
+ * writers omit the stylesheet, so font size and bold remain the fallback.
  */
-export function stripRtfControlWords(rtf: string): string {
-  let out = '';
+function rtfHeadingStyles(rtf: string): Map<number, number> {
+  const styles = new Map<number, number>();
+  const table = /\{\\stylesheet/.test(rtf) ? rtf.slice(rtf.indexOf('{\\stylesheet')) : '';
+  if (!table) return styles;
+  // Each entry looks like: {\s1\s0\fs24\b\f0\cf1\outlinelevel0 heading 1;}
+  for (const entry of table.matchAll(/\{\\s(\d+)([^;{}]*);/g)) {
+    // The name is what is left once the entry's own control words are gone;
+    // the formatting before it is not part of the name.
+    const name = entry[2].replace(/\\[a-z]+-?\d*\s?/gi, ' ').replace(/\s+/g, ' ').trim();
+    const heading = /(?:^|\s)heading\s*([1-6])(?:\s|$)/i.exec(name);
+    if (heading) styles.set(Number(entry[1]), Number(heading[1]));
+    else if (/(?:^|\s)title(?:\s|$)/i.test(name)) styles.set(Number(entry[1]), 1);
+  }
+  return styles;
+}
+
+/** Groups whose contents are metadata, never document text. */
+const RTF_SKIP_DESTINATIONS = /^(?:fonttbl|colortbl|stylesheet|info|listtable|listoverridetable|revtbl|rsidtbl|generator|pict|themedata|colorschememapping|latentstyles|datastore|nonshapes|txexttext|filetbl|xmlnstbl|mmathPr|upr|xmlopen|listtext|panose|stylesheet)\b/i;
+
+/**
+ * Split RTF into paragraphs, recording the formatting each one needs to be
+ * recognised as a heading.
+ *
+ * A heading is not a special token in RTF — it is a paragraph that happens to
+ * carry a heading style, or to be formatted like one. Both signals are needed
+ * because neither is sufficient: the stylesheet is authoritative but frequently
+ * missing, and bold-on-a-larger-font is how every writer marks a heading when
+ * the stylesheet is gone.
+ *
+ * Group state is a stack, so `{\b ...}` and `{\b0 ...}` nest correctly; losing
+ * that would report every paragraph after a bold run as bold.
+ */
+export function rtfParagraphs(rtf: string): RtfParagraph[] {
+  const headingStyles = rtfHeadingStyles(rtf);
+  const paragraphs: RtfParagraph[] = [];
+  let text = '';
+  let sawChar = false;
+  let allBold = true;
+  let maxFontSize = 0;
+  let styleIndex = 0;
+
+  interface State { bold: boolean; fontSize: number; style: number; skip: boolean }
+  const top: State = { bold: false, fontSize: 0, style: 0, skip: false };
+  const stack: State[] = [];
+  let state = top;
+  const flush = () => {
+    const trimmed = text.replace(/[ \t]+/g, ' ').trim();
+    if (trimmed) {
+      paragraphs.push({
+        text: trimmed,
+        allBold: sawChar && allBold,
+        maxFontSize,
+        styleIndex,
+        stylesheetLevel: headingStyles.get(styleIndex) ?? 0,
+      });
+    }
+    text = '';
+    sawChar = false;
+    allBold = true;
+    maxFontSize = 0;
+    styleIndex = 0;
+  };
+
   let i = 0;
+  /** Append a decoded character, keeping the paragraph's bold verdict honest. */
+  const emit = (value: string) => {
+    if (state.skip) return;
+    text += value;
+    for (const ch of value) {
+      if (!/\S/.test(ch)) continue;
+      sawChar = true;
+      if (!state.bold) allBold = false;
+    }
+  };
   while (i < rtf.length) {
     const ch = rtf[i];
     if (ch === '\\') {
@@ -213,15 +300,15 @@ export function stripRtfControlWords(rtf: string): string {
         let j = i + 2;
         if (rtf[j] === '-') j++;
         let numStr = '';
-        while (j < rtf.length && /\d/.test(rtf[j])) {
-          numStr += rtf[j];
-          j++;
-        }
+        while (j < rtf.length && /\d/.test(rtf[j])) numStr += rtf[j++];
         if (rtf[j] === '?') j++;
+        // A single space after the escape is RTF's parameter delimiter, not
+        // content. Leaving it in inserts a phantom space mid-word: "\u72 st"
+        // is "r" then "st", not "r st".
+        else if (rtf[j] === ' ') j++;
         if (numStr) {
           const code = parseInt(numStr, 10);
-          const uint16 = code < 0 ? code + 0x10000 : code;
-          out += String.fromCharCode(uint16);
+          emit(String.fromCharCode(code < 0 ? code + 0x10000 : code));
         }
         i = j;
         continue;
@@ -229,42 +316,72 @@ export function stripRtfControlWords(rtf: string): string {
       // Hex escape: \'XX
       if (rtf[i + 1] === "'") {
         const hex = rtf.substring(i + 2, i + 4);
-        if (/^[0-9a-fA-F]{2}$/.test(hex)) {
-          out += String.fromCharCode(parseInt(hex, 16));
-          i += 4;
-          continue;
-        }
+        if (/^[0-9a-fA-F]{2}$/.test(hex)) emit(String.fromCharCode(parseInt(hex, 16)));
+        i += 4;
+        continue;
       }
-      // Control word: \word
+      // Control symbol (a single non-alphabetic character after the slash).
+      if (!/[a-zA-Z]/.test(rtf[i + 1] ?? '')) {
+        if (rtf[i + 1] === '\\' || rtf[i + 1] === '{' || rtf[i + 1] === '}') {
+          emit(rtf[i + 1]);
+        }
+        if (rtf[i + 1] === '~') emit(' ');
+        i += 2;
+        continue;
+      }
       let j = i + 1;
       while (j < rtf.length && /[a-zA-Z]/.test(rtf[j])) j++;
       const controlWord = rtf.substring(i + 1, j);
+      let param = '';
       if (rtf[j] === '-' || /\d/.test(rtf[j])) {
         if (rtf[j] === '-') j++;
+        const start = j;
         while (j < rtf.length && /\d/.test(rtf[j])) j++;
+        param = rtf.substring(start, j);
       }
       if (rtf[j] === ' ') j++;
+
       if (controlWord === 'par' || controlWord === 'line') {
-        out += '\n';
-      } else if (controlWord === 'tab') {
-        out += '\t';
+        flush();
+      } else if (RTF_SKIP_DESTINATIONS.test(controlWord)) {
+        // A metadata group: the stylesheet's own entries, the font table, the
+        // colour table. Their contents are names, never prose, and reading them
+        // out is how "Times;Normal;heading 1;" ends up in the spoken text.
+        state.skip = true;
+      } else if (!state.skip) {
+        const n = param === '' ? NaN : Number(param);
+        if (controlWord === 'b') { if (param === '' || Number(param) !== 0) state.bold = true; }
+        else if (controlWord === 'b0') state.bold = false;
+        else if (controlWord === 'fs' && Number.isFinite(n) && n > maxFontSize) maxFontSize = n;
+        else if (controlWord === 's' && Number.isFinite(n)) styleIndex = n;
+        else if (controlWord === 'pard') {
+          // `\pard` resets the paragraph's *style*, but not the font size the
+          // document set before it — clearing that would make every paragraph
+          // look unstyled and no heading could be found by size.
+          flush();
+          styleIndex = 0;
+        }
       }
       i = j;
       continue;
     }
-    if (ch === '{' || ch === '}') {
+    if (ch === '{') {
+      stack.push({ ...state });
       i++;
       continue;
     }
-    out += ch;
+    if (ch === '}') {
+      const restored = stack.pop();
+      if (restored) state = restored;
+      i++;
+      continue;
+    }
+    if (ch === '\n' || ch === '\r') { i++; continue; }
+    emit(ch);
     i++;
   }
-  return out
-    .replace(/ {2,}/g, ' ')   // collapse multiple spaces (preserve tabs)
-    .replace(/\t +/g, '\t')   // trim spaces after tabs
-    .replace(/ +\t/g, '\t')   // trim spaces before tabs
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  flush();
+  return paragraphs;
 }
 
 // ─── CSV parser (pure, testable) ──────────────────────────────────

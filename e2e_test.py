@@ -12,6 +12,9 @@ Drives a real Chrome instance through the full TTS workflow:
   8. Queue a read of that document ("Read aloud") with the loaded model
   9. Verify the live sentence/word highlight advances during playback
  10. Stop the read, then upload a PDF and verify pdfjs text extraction
+ 11. Reader document views: rendered PDF pages, DOCX/EPUB stamped markup
+     with chapter navigation, XLSX tables joined to workbook sheet names,
+     and PPTX slides with shape geometry from the file
 
 Usage:
     python e2e_test.py                                  # uses defaults
@@ -1861,7 +1864,861 @@ def step_document_view_renders_docx(cdp_holder):
              target['id'], timeout=10)
 
 
+def step_document_view_renders_odt(cdp_holder):
+    """The committed ODT fixture, through the real package reader.
+
+    ODT is the one supported format whose container is not an OOXML zip:
+    its `mimetype` member is stored uncompressed and first, and the outline
+    lives on `text:outline-level` rather than in a paragraph style. The unit
+    suite covers the walker against XML built in-test, but only this step
+    feeds it the package as a real writer lays it out — and it asserts the
+    stamps still tile the extracted text, which is where a dropped list item
+    or a lost heading would show up as a silent offset drift.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.odt', ODT_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+
+    if not state.get('mounted'):
+        raise AssertionError(
+            f'the ODT document view is not mounted: {json.dumps(state, default=str)[:400]}')
+    if state.get('readerError'):
+        raise AssertionError(f'the ODT failed to open: {state["readerError"]}')
+    if state.get('headings') != 2:
+        raise AssertionError(
+            f'expected the fixture\'s two outline headings, got {state.get("headings")}')
+    if not state.get('stamps', {}).get('ok'):
+        raise AssertionError(
+            f'ODT runs do not tile the extracted text: {state.get("stamps")}')
+    text = ' '.join(r.get('text') or '' for r in state.get('runs') or [])
+    for needle in ('Reader Probe', 'Outline levels', 'Bullet two does as well'):
+        if needle not in text:
+            raise AssertionError(
+                f'{needle!r} never reached the page; the ODT walker dropped it. '
+                f'First 120 chars: {state.get("paragraphText")!r}')
+    print(f'      ✓ ODT rendered: headings={state.get("headings")} '
+          f'blocks={state.get("stamps", {}).get("blocks")} '
+          f'textLength={state.get("stamps", {}).get("textLength")}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '07b-odt-rendered.png')
+
+
+ODT_MIME = 'application/vnd.oasis.opendocument.text'
+RTF_MIME = 'application/rtf'
+CSV_MIME = 'text/csv'
+HTML_MIME = 'text/html'
+EPUB_MIME = 'application/epub+zip'
+XLSX_MIME = ('application/vnd.openxmlformats-officedocument'
+             '.spreadsheetml.sheet')
+PPTX_MIME = ('application/vnd.openxmlformats-officedocument'
+             '.presentationml.presentation')
+
+# Stamp invariant for formats whose text joins are not the DOCX paragraph
+# contract (tables delimit cells, slides space-join their runs). What must
+# hold for every format: each stamp covers exactly its element's characters,
+# and stamps never overlap or run backwards.
+GENERIC_STAMPS_JS = """(function() {
+    const content = document.querySelector('#document-view .dochtml__content');
+    if (!content) return { ok: false, reason: 'no content' };
+    const stamps = [...content.querySelectorAll('[data-off]')].map(el => {
+        const [start, end] = (el.dataset.off || '').split(':').map(Number);
+        return { start, end, len: (el.textContent || '').length };
+    });
+    for (let i = 0; i < stamps.length; i++) {
+        const s = stamps[i];
+        if (!Number.isFinite(s.start) || !Number.isFinite(s.end) || s.end - s.start !== s.len) {
+            return { ok: false, count: stamps.length, reason: 'stamp ' + i + ' holds ' + s.len
+                + ' chars but spans [' + s.start + ',' + s.end + ')' };
+        }
+        if (i > 0 && s.start < stamps[i - 1].end) {
+            return { ok: false, count: stamps.length,
+                reason: 'stamp ' + i + ' starts before the previous one ends' };
+        }
+    }
+    return { ok: true, count: stamps.length };
+})()"""
+
+
+def _assert_generic_stamps(cdp, target_id):
+    stamps = v(cdp.eval(GENERIC_STAMPS_JS, target_id, timeout=10))
+    if not stamps.get('ok'):
+        raise AssertionError(f'stamped ranges are inconsistent: {stamps}')
+    return stamps
+
+
+EPUB_NAV_JS = """(function() {
+    const sel = document.querySelector('#document-view .docview__section');
+    const scroller = document.querySelector('#document-view .docview__pages');
+    return {
+        options: sel ? [...sel.options].map(o => o.textContent.trim()) : [],
+        value: sel ? sel.value : null,
+        scrollerTop: scroller ? scroller.scrollTop : -1,
+    };
+})()"""
+
+
+def step_document_view_renders_epub(cdp_holder):
+    """An EPUB is shown as a book: chapters from its TOC, offsets across the
+    spine, and file markup that cannot execute."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/reader-probe.epub', EPUB_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+    if state.get('readerError'):
+        raise AssertionError(f'EPUB extraction failed: {state.get("readerError")!r}')
+    if not state.get('mounted') or state.get('activeView') != 'Document':
+        raise AssertionError(
+            f'EPUB document view is not active: {json.dumps(state, default=str)[:400]}')
+
+    runs = state.get('runs') or []
+    if len(runs) < 8:
+        raise AssertionError(f'expected the fixture chapters to render, got {len(runs)} runs')
+    stamps = state.get('stamps') or {}
+    if not stamps.get('ok'):
+        raise AssertionError(f'EPUB stamps do not line up: {stamps.get("reason")}')
+    if state.get('scriptTags'):
+        raise AssertionError('the document view executed markup out of the uploaded EPUB')
+    if 'alert(1)' not in (state.get('paragraphText') or ''):
+        raise AssertionError('the inert <script> string lost its text representation')
+    if not state.get('headings') or state.get('headings', 0) < 2:
+        raise AssertionError(f'chapter headings did not render: {state.get("headings")}')
+    if not state.get('listItems') or state.get('listItems', 0) < 2:
+        raise AssertionError(f'list items did not render: {state.get("listItems")}')
+
+    nav = v(cdp.eval(EPUB_NAV_JS, target['id'], timeout=10))
+    if nav.get('options') != ['Chapter One', 'Chapter Two']:
+        raise AssertionError(
+            f'chapter navigation should carry the TOC labels, got {nav.get("options")}')
+    print(f'      ✓ EPUB rendered: {len(runs)} runs, {stamps.get("count")} stamps, '
+          f'chapters {nav.get("options")}, script stayed inert')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '10-document-view-epub.png')
+
+    # Jump to chapter two through the TOC and confirm the view follows.
+    v(cdp.eval("""(function() {
+        const sel = document.querySelector('#document-view .docview__section');
+        if (!sel) return { ok: false };
+        sel.value = '1';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true };
+    })()""", target['id'], timeout=10))
+    jumped: dict = {}
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        jumped = v(cdp.eval(EPUB_NAV_JS, target['id'], timeout=10))
+        if jumped.get('scrollerTop', 0) > 0 and jumped.get('value') == '1':
+            break
+        time.sleep(0.3)
+    if jumped.get('value') != '1' or jumped.get('scrollerTop', 0) <= 0:
+        raise AssertionError(f'choosing Chapter Two did not move the view: {jumped}')
+    print(f'      ✓ chapter jump moved the document (scrollTop={jumped.get("scrollerTop"):.0f})')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '10b-document-view-epub-ch2.png')
+
+
+RE_TOOLS_JS = """(function() {
+    const outlineItems = [...document.querySelectorAll('#document-view .docview__outline-item')];
+    const tabs = [...document.querySelectorAll('#document-view .docview__tab')];
+    const status = (document.getElementById('doc-statusbar') || {}).textContent || '';
+    const recent = [...document.querySelectorAll('#docrecent-list .docrecent__open')].map(b => (b.textContent || '').trim());
+    return {
+        outlineCount: outlineItems.length,
+        outlineLabels: outlineItems.map(b => (b.textContent || '').trim()),
+        tabLabels: tabs.map(b => (b.textContent || '').trim()),
+        status,
+        recent,
+        hasQuickRead: !!document.getElementById('readaloud-btn'),
+        hasExport: !!document.getElementById('export-md-btn') && !!document.getElementById('export-notes-btn'),
+        searchToggles: document.querySelectorAll('#document-view [data-role^="search-"]').length,
+        helpVisible: !(document.getElementById('shortcut-help') || {}).hidden,
+        blackoutVisible: !(document.getElementById('blackout') || {}).hidden,
+    };
+})()"""
+
+
+def _wait_for_rendered(cdp, target_id: str, seconds: float = 60) -> dict:
+    """Poll the stamped-markup view until a document is in it, or give up.
+
+    Shared by the format steps below: each loads a different fixture, but the
+    wait is the same — a mounted view with at least one [data-off] run, or an
+    error the step should report instead of a bare timeout.
+    """
+    state: dict = {}
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target_id, timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+    return state
+
+
+def _assert_rendered(state: dict, label: str) -> str:
+    """Common checks for the stamped-markup path, plus the text it rendered."""
+    if not state.get('mounted'):
+        raise AssertionError(f'the {label} document view is not mounted: '
+                             f'{json.dumps(state, default=str)[:300]}')
+    if state.get('readerError'):
+        raise AssertionError(f'{label} failed to open: {state["readerError"]}')
+    if not state.get('stamps', {}).get('ok'):
+        raise AssertionError(
+            f'{label} runs do not tile the extracted text: {state.get("stamps")}')
+    if state.get('scriptTags'):
+        raise AssertionError(f'{label} executed markup out of the uploaded file')
+    return ' '.join(r.get('text') or '' for r in state.get('runs') or [])
+
+
+def step_document_view_renders_rtf(cdp_holder):
+    """RTF arrives with no OOXML package: just control words and groups.
+
+    The fixture carries no heading at all, so this asserts the honest
+    outcome — plain paragraphs, no invented chapters — plus the part that is
+    genuinely easy to lose: `\\par` has to become a block boundary and the
+    paragraph offsets still have to tile the extracted text, or every
+    highlight after the first one lands on the wrong words.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.rtf', RTF_MIME)
+    state = _wait_for_rendered(cdp, target['id'])
+    text = _assert_rendered(state, 'RTF')
+
+    if state.get('headings'):
+        raise AssertionError(
+            f'the RTF fixture has no headings; got {state["headings"]}')
+    if state.get('stamps', {}).get('blocks') != 2:
+        raise AssertionError(
+            f"expected the fixture's two paragraphs, got "
+            f'{state.get("stamps", {}).get("blocks")}')
+    for needle in ('The quick brown fox jumps over the lazy dog', 'Lorem ipsum dolor sit amet'):
+        if needle not in text:
+            raise AssertionError(f'{needle!r} never reached the page: {text[:160]!r}')
+    print(f'      ✓ RTF rendered: 2 paragraphs, no headings, '
+          f'textLength={state.get("stamps", {}).get("textLength")}')
+
+
+def step_document_view_renders_html(cdp_holder):
+    """HTML is user markup: keep its structure, drop its behaviour.
+
+    The fixture's <h1> has to survive as a heading (and become the document's
+    one section), while its <script> and <style> must not run and must not
+    leak into the text either — a reader that voiced `console.log("ignore
+    this")` would be both wrong and, for the script, a security hole.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.html', HTML_MIME)
+    state = _wait_for_rendered(cdp, target['id'])
+    text = _assert_rendered(state, 'HTML')
+
+    if state.get('headings') != 1:
+        raise AssertionError(
+            f'the fixture has one <h1>; got {state.get("headings")} headings')
+    for dropped in ('ignore this', 'sans-serif', 'console.log'):
+        if dropped in text:
+            raise AssertionError(
+                f"{dropped!r} from the page's script/style leaked into the text")
+    for needle in ('The quick brown fox jumps over the lazy dog', 'She sells seashells'):
+        if needle not in text:
+            raise AssertionError(f'{needle!r} never reached the page: {text[:160]!r}')
+    print(f'      ✓ HTML rendered: 1 heading kept, script/style dropped '
+          f'(blocks={state.get("stamps", {}).get("blocks")})')
+
+
+def step_upload_csv_document(cdp_holder):
+    """A CSV is a table the reader has to say out loud.
+
+    CSV has no visual form, so it renders in the reader's own sentence view —
+    the assertion that matters is the quoting: the fixture's `She said
+    ""hello""` has to survive as `She said "hello"` inside a row whose other
+    cell contains commas too, or the spoken text drops words and the cell
+    boundaries bleed into each other.
+
+    The fixture is also three rows in three columns, which the chapter
+    heuristic is meant to REJECT: too few rows to call it a table of
+    sections. Asserting the absence is deliberate — a reader that invented
+    chapters here would do it on real spreadsheets too.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.csv', CSV_MIME)
+
+    extract_timeout = float(os.environ.get('YAPPER_EXTRACT_TIMEOUT', '60'))
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < extract_timeout:
+        s = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if s.get('previewVisible') and 'Quote test' in s.get('text', ''):
+            break
+        time.sleep(0.5)
+
+    if not s.get('previewVisible'):
+        raise AssertionError(f'the CSV never rendered: {json.dumps(s, default=str)[:300]}')
+    text = s.get('text', '')
+    for needle in ('She said "hello"', 'The quick brown fox jumps over the lazy dog'):
+        if needle not in text:
+            raise AssertionError(
+                f'{needle!r} did not survive CSV parsing: {text[:200]!r}')
+    # A doubled quote must collapse to one, not stay as "".
+    if '""hello""' in text:
+        raise AssertionError(f'escaped quotes were not collapsed: {text[:200]!r}')
+    # Every row's cells must be present. The rows are joined with ", " and the
+    # text carries no terminal punctuation between them, so the whole table
+    # reads as ONE sentence — that is the measured behaviour, and the reason
+    # this asserts word count rather than sentence count.
+    if s.get('wordCount', 0) < 20:
+        raise AssertionError(
+            f'the CSV lost rows: only {s.get("wordCount")} words in {text[:200]!r}')
+    for cell in ('Name, Description, Value', 'Dog, Lazy companion, 7', '99'):
+        if cell not in text:
+            raise AssertionError(f'{cell!r} is missing from the rendered CSV')
+
+    # The Outline button lives inside the stamped document view, and it is
+    # only rendered when the outline has entries at all (document-view.ts).
+    # So for this fixture its absence is the assertion: three rows do not
+    # make a table of chapters, and no view means no outline to fake them.
+    outline = v(cdp.eval("""(function() {
+        const btn = document.querySelector('[data-role="toggle-outline"]');
+        return { present: !!btn,
+                 labels: Array.from(document.querySelectorAll(
+                     '.docview__outline button, .docview__outline li'))
+                     .slice(0, 8).map(i => i.textContent.trim()) };
+    })()""", target['id'], timeout=10))
+    if outline.get('present') or outline.get('labels'):
+        raise AssertionError(
+            f'a 3-row CSV must yield no chapters, but the outline offers '
+            f'{json.dumps(outline.get("labels"))}')
+    print('      ✓ CSV yielded no phantom chapters')
+    print(f'      ✓ CSV rendered: {s.get("wordCount")} words across '
+          f'{s.get("sentenceCount")} sentence(s), quoting intact')
+
+
+def step_document_view_reading_tools(cdp_holder):
+    """The reading toolbox around the document: outline panel, section tabs,
+    status bar, recent shelf, search toggles, shortcut help, blackout."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/reader-probe.epub', EPUB_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+    if not state.get('mounted') or state.get('readerError'):
+        raise AssertionError(f'EPUB did not mount for the tools step: {state}')
+
+    # Open the outline panel: chapter headings become jumpable items.
+    v(cdp.eval("""(function() {
+        const btn = document.querySelector('#document-view [data-role="toggle-outline"]');
+        if (!btn) return { ok: false };
+        btn.click();
+        return { ok: true };
+    })()""", target['id'], timeout=10))
+    tools = v(cdp.eval(RE_TOOLS_JS, target['id'], timeout=10))
+    if tools.get('outlineCount', 0) < 2:
+        raise AssertionError(f'outline should list the chapter headings: {tools}')
+    if tools.get('tabLabels') != ['Chapter One', 'Chapter Two']:
+        raise AssertionError(f'section tabs should carry the TOC labels: {tools.get("tabLabels")}')
+    if 'words' not in tools.get('status', '') or 'min read' not in tools.get('status', ''):
+        raise AssertionError(f'status bar should show size and reading time: {tools.get("status")!r}')
+    if not tools.get('hasQuickRead') or not tools.get('hasExport'):
+        raise AssertionError(f'quick read / export controls are missing: {tools}')
+    if tools.get('searchToggles', 0) < 6:
+        raise AssertionError(f'search toolbar should carry its toggles: {tools.get("searchToggles")}')
+    if 'reader-probe.epub' not in tools.get('recent', []):
+        raise AssertionError(f'the opened document should appear on the recent shelf: {tools.get("recent")}')
+    print(f'      ✓ reading tools live: {tools.get("outlineCount")} outline items, '
+          f'tabs {tools.get("tabLabels")}, status {tools.get("status")!r}')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '13-document-view-tools.png')
+
+    # Jump through the outline: the clicked item marks itself current.
+    jumped = v(cdp.eval("""(function() {
+        const items = [...document.querySelectorAll('#document-view .docview__outline-item')];
+        if (items.length < 2) return { ok: false };
+        items[1].click();
+        return { ok: items[1].getAttribute('aria-current') === 'true' };
+    })()""", target['id'], timeout=10))
+    if not jumped.get('ok'):
+        raise AssertionError('clicking an outline item did not mark it current')
+
+    # Keyboard: ? opens the cheat sheet, Escape closes it again.
+    for key, expect_visible in (('?', True), ('Escape', False)):
+        v(cdp.eval("""(function(key) {
+            document.body.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true }));
+            return { ok: true };
+        })(%s)""" % json.dumps(key), target['id'], timeout=10))
+        vis = v(cdp.eval(RE_TOOLS_JS, target['id'], timeout=10)).get('helpVisible')
+        if vis is not expect_visible:
+            raise AssertionError(f'key {key!r} should set help visible={expect_visible}, got {vis}')
+
+    # b blacks the screen out; the next keypress dismisses it.
+    v(cdp.eval("""(function() {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true }));
+        return { ok: true };
+    })()""", target['id'], timeout=10))
+    if not v(cdp.eval(RE_TOOLS_JS, target['id'], timeout=10)).get('blackoutVisible'):
+        raise AssertionError('the b key did not black the screen out')
+    v(cdp.eval("""(function() {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+        return { ok: true };
+    })()""", target['id'], timeout=10))
+    if v(cdp.eval(RE_TOOLS_JS, target['id'], timeout=10)).get('blackoutVisible'):
+        raise AssertionError('a keypress did not dismiss the blackout')
+    print('      ✓ shortcut help and presenter blackout respond to the keyboard')
+
+
+XLSX_STATE_JS = """(function() {
+    const host = document.getElementById('document-view');
+    const content = host ? host.querySelector('.dochtml__content') : null;
+    const tables = content ? [...content.querySelectorAll('table')] : [];
+    return {
+        mounted: !!host && !host.hidden,
+        tableCount: tables.length,
+        captions: tables.map(t => (t.querySelector('caption') || {}).textContent || ''),
+        headers: content ? content.querySelectorAll('th').length : 0,
+        cells: content ? content.querySelectorAll('td').length : 0,
+        text: content ? (content.textContent || '') : '',
+    };
+})()"""
+
+
+def step_document_view_renders_xlsx(cdp_holder):
+    """A spreadsheet renders as an accessible table carrying its real sheet
+    name — the caption proves the workbook.xml to worksheet join; the
+    filename-order fallback would read "Sheet 1"."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.xlsx', XLSX_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(XLSX_STATE_JS, target['id'], timeout=10))
+        if state.get('tableCount'):
+            break
+        time.sleep(0.5)
+    if not state.get('mounted') or not state.get('tableCount'):
+        raise AssertionError(
+            f'spreadsheet table did not render: {json.dumps(state, default=str)[:400]}')
+    if state.get('captions') != ['Sheet1']:
+        raise AssertionError(
+            f'expected the workbook\'s own sheet name as caption, got {state.get("captions")}')
+    if state.get('headers') != 3 or state.get('cells') != 3:
+        raise AssertionError(
+            f'expected a 3x2 table with a header row, got {state.get("headers")} th / '
+            f'{state.get("cells")} td')
+    stamps = _assert_generic_stamps(cdp, target['id'])
+    if 'quick brown fox' not in (state.get('text') or ''):
+        raise AssertionError('shared strings did not resolve into the cells')
+    print(f'      ✓ spreadsheet rendered: caption {state.get("captions")}, '
+          f'{state.get("headers")} header cells, {stamps.get("count")} stamps')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '11-document-view-xlsx.png')
+
+    # Search reads the same text the table shows: "quick" occurs twice
+    # (two rows quote the pangram), and jumping to the second one must
+    # highlight it inside the table.
+    v(cdp.eval("""(function() {
+        const input = document.querySelector('#document-view .docview__search');
+        if (!input) return { ok: false };
+        input.value = 'quick';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return { ok: true };
+    })()""", target['id'], timeout=10))
+    results: dict = {}
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        results = v(cdp.eval("""(function() {
+            return {
+                matches: document.querySelectorAll('#document-view .docview__result').length,
+                status: (document.querySelector('#document-view .docview__search-status')
+                    || {}).textContent || '',
+            };
+        })()""", target['id'], timeout=10))
+        if results.get('matches'):
+            break
+        time.sleep(0.3)
+    if results.get('matches') != 2:
+        raise AssertionError(f'expected 2 search hits in the sheet, got {results}')
+    v(cdp.eval("""(function() {
+        const hits = document.querySelectorAll('#document-view .docview__result');
+        if (hits.length > 1) hits[1].click();
+        return { ok: hits.length > 1 };
+    })()""", target['id'], timeout=10))
+    highlighted = False
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        highlighted = v(cdp.eval(
+            "({ hl: document.querySelectorAll('#document-view .dochtml__hl').length })",
+            target['id'], timeout=10)).get('hl', 0) > 0
+        if highlighted:
+            break
+        time.sleep(0.3)
+    if not highlighted:
+        raise AssertionError('jumping to a spreadsheet search hit produced no highlight')
+    print(f'      ✓ search found both cells and highlighted the chosen one')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '11b-document-view-xlsx-search.png')
+
+
+PPTX_STATE_JS = """(function() {
+    const host = document.getElementById('document-view');
+    const slides = host ? [...host.querySelectorAll('.dochtml__slide')] : [];
+    const shapes = host ? [...host.querySelectorAll('.dochtml__slide-shape')] : [];
+    return {
+        mounted: !!host && !host.hidden,
+        slides: slides.map(s => ({
+            label: s.getAttribute('aria-label') || '',
+            style: s.getAttribute('style') || '',
+            text: s.textContent || '',
+        })),
+        shapes: shapes.map(s => ({ style: s.getAttribute('style') || '', text: s.textContent || '' })),
+        headings: host ? host.querySelectorAll('.dochtml__slide h2').length : 0,
+    };
+})()"""
+
+
+def step_document_view_renders_pptx(cdp_holder):
+    """A deck shows as navigable slides with the contract extraction has
+    always spoken: runs joined by spaces, slides separated by blank lines."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.pptx', PPTX_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(PPTX_STATE_JS, target['id'], timeout=10))
+        if state.get('slides'):
+            break
+        time.sleep(0.5)
+    if not state.get('mounted') or not state.get('slides'):
+        raise AssertionError(
+            f'presentation slides did not render: {json.dumps(state, default=str)[:400]}')
+    slide = state['slides'][0]
+    if slide['label'] != 'Slide 1':
+        raise AssertionError(f'expected a labelled slide card, got {slide["label"]!r}')
+    if 'The quick brown fox jumps over the lazy dog' not in slide['text']:
+        raise AssertionError(f'first run lost: {slide["text"][:120]!r}')
+    if 'Lorem ipsum dolor sit amet.' not in slide['text']:
+        raise AssertionError(f'second paragraph lost: {slide["text"][:120]!r}')
+    stamps = _assert_generic_stamps(cdp, target['id'])
+    print(f'      ✓ presentation rendered: {len(state["slides"])} slide card, '
+          f'{stamps.get("count")} stamps, spoken text intact')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '12-document-view-pptx.png')
+
+
+# A deck built here rather than committed: the shape geometry is the point
+# of the check, so the fixture shows exactly the numbers asserted below.
+# EMUs: 914400 per inch; this deck is 4:3 (914400 x 685800).
+SYNTH_PPTX_PRESENTATION = '''<?xml version="1.0"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldSz cx="914400" cy="685800"/>
+</p:presentation>'''
+
+SYNTH_PPTX_SLIDE = '''<?xml version="1.0"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="100000"/></a:xfrm></p:spPr>
+      <p:txBody><a:p><a:r><a:t>Quarterly Review</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="91440" y="100000"/><a:ext cx="731520" cy="585800"/></a:xfrm></p:spPr>
+      <p:txBody>
+        <a:p><a:r><a:t>Hello</a:t></a:r><a:r><a:t> world</a:t></a:r></a:p>
+        <a:p><a:pPr algn="ctr"/><a:r><a:t>Second line</a:t></a:r></a:p>
+      </p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>'''
+
+
+def _build_layout_deck() -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('ppt/presentation.xml', SYNTH_PPTX_PRESENTATION)
+        z.writestr('ppt/slides/slide1.xml', SYNTH_PPTX_SLIDE)
+    return buf.getvalue()
+
+
+def step_document_view_pptx_layout(cdp_holder):
+    """Slide layout fidelity: text lands where the file says it stands.
+
+    The synthetic deck declares exact shape geometry (title across the top,
+    body inset at 10%), so the rendered shape containers must carry those
+    proportions — this is the assertion that catches the view quietly
+    falling back to a flat text column."""
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_bytes(cdp, target['id'], _build_layout_deck(), 'layout-deck.pptx', PPTX_MIME)
+
+    state: dict = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        state = v(cdp.eval(PPTX_STATE_JS, target['id'], timeout=10))
+        if state.get('shapes') or state.get('slides'):
+            break
+        time.sleep(0.5)
+    if not state.get('slides'):
+        raise AssertionError(
+            f'synthetic deck did not render: {json.dumps(state, default=str)[:400]}')
+    shapes = state.get('shapes') or []
+    if len(shapes) != 2:
+        raise AssertionError(
+            f'expected both shapes to keep their frames, got {len(shapes)}: {shapes}')
+    title_shape = next((s for s in shapes if 'Quarterly Review' in s['text']), None)
+    body_shape = next((s for s in shapes if 'Second line' in s['text']), None)
+    if not title_shape or not body_shape:
+        raise AssertionError(f'shape text is misplaced: {shapes}')
+    if 'left:0.000%' not in title_shape['style'] or 'width:100.000%' not in title_shape['style']:
+        raise AssertionError(f'title frame lost: {title_shape["style"]!r}')
+    if 'left:10.000%' not in body_shape['style'] or 'width:80.000%' not in body_shape['style']:
+        raise AssertionError(f'body frame lost: {body_shape["style"]!r}')
+    if 'aspect-ratio' not in state['slides'][0]['style']:
+        raise AssertionError(
+            f'slide card does not carry its aspect ratio: {state["slides"][0]["style"]!r}')
+    if not state.get('headings'):
+        raise AssertionError('the title placeholder did not become the slide heading')
+    stamps = _assert_generic_stamps(cdp, target['id'])
+    print(f'      ✓ slide geometry preserved: title {title_shape["style"][:48]!r}…, '
+          f'body {body_shape["style"][:48]!r}…, {stamps.get("count")} stamps')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '12b-document-view-pptx-layout.png')
+
+
 # ─── Driver ──────────────────────────────────────────────────────────────
+
+# Reads a real zip out of the page without a download directory: the
+# object URL handed to the anchor is captured, then its entries are parsed
+# from the central directory and the two text members are inflated with
+# DecompressionStream. Downloading for real would need
+# Browser.setDownloadBehavior plus a writable path, and this keeps the
+# assertion on the bytes the app actually assembled.
+ZIP_CAPTURE_JS = """(function() {
+    window.__abZip = null;
+    const orig = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = function (obj) {
+        if (!window.__abZip && obj instanceof Blob && obj.size > 512) window.__abZip = obj;
+        return orig(obj);
+    };
+    return { ok: true };
+})()"""
+
+ZIP_LIST_JS = """(async function () {
+    const blob = window.__abZip;
+    if (!blob) return { ok: false, msg: 'no captured blob yet' };
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65535; i--) {
+        if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return { ok: false, msg: 'no end-of-central-directory record' };
+    const count = dv.getUint16(eocd + 10, true);
+    let off = dv.getUint32(eocd + 16, true);
+    const dec = new TextDecoder();
+    const entries = [];
+    for (let n = 0; n < count; n++) {
+        if (dv.getUint32(off, true) !== 0x02014b50) return { ok: false, msg: 'bad central dir' };
+        const nlen = dv.getUint16(off + 28, true);
+        const elen = dv.getUint16(off + 30, true);
+        const clen = dv.getUint16(off + 32, true);
+        entries.push({
+            name: dec.decode(buf.subarray(off + 46, off + 46 + nlen)),
+            method: dv.getUint16(off + 10, true),
+            csize: dv.getUint32(off + 20, true),
+            usize: dv.getUint32(off + 24, true),
+            lho: dv.getUint32(off + 42, true),
+        });
+        off += 46 + nlen + elen + clen;
+    }
+    return { ok: true, size: buf.length, entries };
+})()"""
+
+ZIP_READ_JS = """(async function (name) {
+    const blob = window.__abZip;
+    if (!blob) return { ok: false, msg: 'no captured blob' };
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65535; i--) {
+        if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    const count = dv.getUint16(eocd + 10, true);
+    let off = dv.getUint32(eocd + 16, true);
+    let entry = null;
+    for (let n = 0; n < count && !entry; n++) {
+        const nlen = dv.getUint16(off + 28, true);
+        const elen = dv.getUint16(off + 30, true);
+        const clen = dv.getUint16(off + 32, true);
+        const nm = new TextDecoder().decode(buf.subarray(off + 46, off + 46 + nlen));
+        if (nm === name) {
+            entry = {
+                method: dv.getUint16(off + 10, true),
+                csize: dv.getUint32(off + 20, true),
+                lho: dv.getUint32(off + 42, true),
+            };
+        }
+        off += 46 + nlen + elen + clen;
+    }
+    if (!entry) return { ok: false, msg: 'entry ' + name + ' not in bundle' };
+    const lho = entry.lho;
+    if (dv.getUint32(lho, true) !== 0x04034b50) return { ok: false, msg: 'bad local header' };
+    const nlen = dv.getUint16(lho + 26, true);
+    const elen = dv.getUint16(lho + 28, true);
+    const start = lho + 30 + nlen + elen;
+    const raw = buf.subarray(start, start + entry.csize);
+    let bytes;
+    if (entry.method === 0) {
+        bytes = raw;
+    } else {
+        const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    return { ok: true, text: new TextDecoder().decode(bytes).slice(0, 20000) };
+})(%s)"""
+
+
+def _done_clips(cdp, target_id: str) -> int:
+    """How many clips in the reader's job list finished generating."""
+    resp = cdp.eval(READER_STATE_JS, target_id, timeout=10)
+    cards = v(resp).get('jobCards') or []
+    return sum(1 for c in cards if c.get('status') == 'done')
+
+
+def step_audiobook_chapters_export(cdp_holder):
+    """Read a sectioned document, export the bundle, and open the zip.
+
+    Chapter markers are only meaningful if they survive the whole path a
+    user's audio takes: section offsets are into the extracted text, the
+    chapters are located by finding those offsets in the merged transcript,
+    and the result is written into the exported zip. Asserting the zip is
+    what actually downloads catches a bundle that quietly lost the VTT, and
+    checking the karaoke HTML carries the nav proves the standalone player
+    was built with chapters rather than falling back to plain cues.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    # reader-notes.docx: a Heading1 and a Heading2, so the export has more
+    # than one chapter to place.
+    _inject_served_file(cdp, target['id'], 'test-docs/reader-notes.docx', DOCX_MIME)
+    deadline = time.time() + 60
+    state: dict = {}
+    while time.time() < deadline:
+        state = v(cdp.eval(DOCHTML_STATE_JS, target['id'], timeout=10))
+        if state.get('runs') or state.get('readerError'):
+            break
+        time.sleep(0.5)
+    if not state.get('runs'):
+        raise AssertionError(
+            f'the DOCX did not render before the export step: {json.dumps(state, default=str)[:300]}')
+
+    # One finished clip is enough: the bundle assembles from whatever the
+    # session has produced, and reading the whole probe would add minutes.
+    _click_trusted(cdp, target['id'], '#read-document-btn')
+    clip_timeout = float(os.environ.get('YAPPER_AUDIOBOOK_CLIP_TIMEOUT', '180'))
+    start = time.time()
+    done = 0
+    while time.time() - start < clip_timeout:
+        done = _done_clips(cdp, target['id'])
+        if done:
+            break
+        time.sleep(1.5)
+    if not done:
+        raise AssertionError(
+            f'no clip finished generating within {clip_timeout}s, so the '
+            f'audiobook has nothing to assemble')
+
+    stop = cdp.find_element(target['id'], '#reader-overlay-stop')
+    if stop:
+        _click_trusted(cdp, target['id'], '#reader-overlay-stop')
+    time.sleep(1)
+
+    armed = v(cdp.eval(ZIP_CAPTURE_JS, target['id'], timeout=10))
+    if not armed.get('ok'):
+        raise AssertionError(f'could not arm the blob capture: {armed}')
+
+    _click_trusted(cdp, target['id'], '#export-audiobook-btn')
+    listing: dict = {}
+    start = time.time()
+    while time.time() - start < 60:
+        listing = v(cdp.eval(ZIP_LIST_JS, target['id'], timeout=30))
+        if listing.get('ok') and listing.get('entries'):
+            break
+        time.sleep(0.5)
+    if not listing.get('ok'):
+        raise AssertionError(
+            f'the export produced no readable zip: {listing.get("msg")!r}. '
+            f'A notice may be showing in the reader panel.')
+
+    names = [e['name'] for e in listing['entries']]
+    base = 'reader-notes'
+    for suffix in ('.wav', '.vtt', '-chapters.vtt', '-karaoke.html'):
+        expected = base + suffix
+        if expected not in names:
+            raise AssertionError(
+                f'{expected} is missing from the exported bundle: {names}')
+    print(f'      ✓ bundle holds {len(names)} files: {", ".join(names)}')
+
+    chapters = v(cdp.eval(ZIP_READ_JS % json.dumps(base + '-chapters.vtt'),
+                          target['id'], timeout=30))
+    if not chapters.get('ok'):
+        raise AssertionError(f'could not read the chapters VTT: {chapters.get("msg")!r}')
+    vtt = chapters['text']
+    if not vtt.startswith('WEBVTT'):
+        raise AssertionError(f'the chapters file is not WebVTT: {vtt[:40]!r}')
+    if vtt.count('-->') < 1:
+        raise AssertionError('the chapters file has no cues')
+    for heading in ('Reader Probe', 'Rendering fidelity'):
+        if heading not in vtt:
+            raise AssertionError(
+                f'chapter {heading!r} never made it into the markers: {vtt[:300]!r}')
+    print(f'      ✓ chapters: {vtt.count("-->")} cues, both headings present')
+
+    karaoke = v(cdp.eval(ZIP_READ_JS % json.dumps(base + '-karaoke.html'),
+                         target['id'], timeout=30))
+    if not karaoke.get('ok'):
+        raise AssertionError(f'could not read the karaoke HTML: {karaoke.get("msg")!r}')
+    html = karaoke['text']
+    # A CSS class, not a JS identifier: the suite runs against the built
+    # bundle, where local function names are minified away. It lives in the
+    # page's <head>, which is why the read is capped at the first 20k.
+    if 'chapnav' not in html:
+        raise AssertionError(
+            'the exported karaoke page has no chapter navigation: the '
+            'chapters were dropped on the way into the bundle')
+    print('      ✓ karaoke page carries chapter navigation')
+    cdp.screenshot(target['id'], SCREENSHOT_DIR / '09-audiobook-chapters.png')
+
 
 def main():
     banner('Yapper — E2E browser test via raw CDP')
@@ -1909,6 +2766,29 @@ def main():
         # A DOCX has no page geometry, so it takes the other rendering path:
         # markup built from the extracted runs and highlighted by offset.
         ('document_view_renders_docx', lambda: step_document_view_renders_docx(cdp_holder)),
+        # The one non-OOXML container: outline levels on text:h, and a
+        # package whose mimetype member must stay stored.
+        ('document_view_renders_odt', lambda: step_document_view_renders_odt(cdp_holder)),
+        # Reflowable formats beyond DOCX: EPUB chapters from the book's own
+        # TOC, spreadsheets as tables named by the workbook, presentations
+        # as slides that keep the file's shape geometry.
+        ('document_view_renders_epub', lambda: step_document_view_renders_epub(cdp_holder)),
+        ('document_view_renders_xlsx', lambda: step_document_view_renders_xlsx(cdp_holder)),
+        ('document_view_renders_pptx', lambda: step_document_view_renders_pptx(cdp_holder)),
+        ('document_view_pptx_layout', lambda: step_document_view_pptx_layout(cdp_holder)),
+        # The toolbox around the document: outline, tabs, status bar, recent
+        # shelf, keyboard shortcuts, and the presenter blackout.
+        ('document_view_reading_tools', lambda: step_document_view_reading_tools(cdp_holder)),
+        # The fixtures that predate the chapter work but never reached a
+        # browser step: RTF's control words, HTML's own markup, and CSV's
+        # quoting (plus the chapters it must NOT invent).
+        ('document_view_renders_rtf', lambda: step_document_view_renders_rtf(cdp_holder)),
+        ('document_view_renders_html', lambda: step_document_view_renders_html(cdp_holder)),
+        ('upload_csv_document', lambda: step_upload_csv_document(cdp_holder)),
+        # The export, opened up: read a sectioned DOCX, let one clip finish,
+        # export the bundle and read the zip back out of the page to confirm
+        # the chapter VTT and the karaoke player's nav both made it in.
+        ('audiobook_chapters_export', lambda: step_audiobook_chapters_export(cdp_holder)),
         ('upload_scanned_pdf_ocr', lambda: step_upload_scanned_pdf_ocr(cdp_holder)),
         # Live progress on Kokoro's streaming path, LAST: load the bigger
         # model, generate a multi-sentence input, and confirm sentence-

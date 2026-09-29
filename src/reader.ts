@@ -126,6 +126,11 @@ export class DocumentReaderSession {
     return { ...this.state };
   }
 
+  /** Identifies this session's jobs, so its clips can be exported together. */
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
   private setState(partial: Partial<ReaderState>) {
     this.state = { ...this.state, ...partial };
     this.options.onStateChange?.({ ...this.state });

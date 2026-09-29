@@ -205,8 +205,10 @@ describe('TTSEngine — job queue', () => {
     expect(finished.wordTimings).toEqual([0, 0.25, 0.5, 0.75, 1.0]);
   });
 
-  it('leaves wordTimings undefined when the engine does not provide them', async () => {
-    // mock.wordTimings is undefined unless set above
+  it('estimates wordTimings when the engine does not provide them', async () => {
+    // mock.wordTimings is undefined unless set above; the mock emits one
+    // second of audio, so the words divide that second by size: 'silent'
+    // weighs 6 and 'job' weighs 3, giving the split at 6/9s.
     const job = engine.enqueue('silent job', { modelId: 'kitten-nano' });
     await new Promise<void>((resolve) => {
       const i = setInterval(() => {
@@ -216,7 +218,10 @@ describe('TTSEngine — job queue', () => {
         }
       }, 2);
     });
-    expect(engine.getJobs().find(j => j.id === job.id)?.wordTimings).toBeUndefined();
+    const timings = engine.getJobs().find(j => j.id === job.id)?.wordTimings;
+    expect(timings).toHaveLength(2);
+    expect(timings![0]).toBe(0);
+    expect(timings![1]).toBeCloseTo(6 / 9, 5);
   });
 
   it('processes jobs in the order they were added (FIFO queue)', async () => {

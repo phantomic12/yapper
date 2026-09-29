@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { formatGeneratingHint, formatQueuePosition, updateJobCardProgress } from './job-queue';
+import { formatGeneratingHint, formatQueuePosition, renderJobCardBody, updateJobCardProgress } from './job-queue';
+import type { GenerationJob } from '../engine';
 
 // ─── Pure formatters ─────────────────────────────────────────────
 
@@ -120,5 +121,31 @@ describe('updateJobCardProgress', () => {
       jobId: 'job-7', status: 'generating', phase: 'synthesizing', elapsedMs: 5000,
     });
     expect(other.querySelector('[data-role="job-hint"]')!.textContent).toBe('2nd in queue');
+  });
+});
+
+describe('renderJobCardBody captions', () => {
+  const done: GenerationJob = {
+    id: 'j1',
+    text: 'Hello world.',
+    modelId: 'm',
+    modelName: 'M',
+    speed: 1,
+    status: 'done',
+    createdAt: 1,
+    url: 'blob:clip',
+    durationMs: 1200,
+    wordTimings: [0, 0.5],
+  };
+
+  it('offers captions when the timings cover every word', () => {
+    const html = renderJobCardBody(done);
+    expect(html).toContain('data-action="download-captions"');
+    expect(html).toContain('Captions');
+  });
+
+  it('omits captions when timings are missing or incomplete', () => {
+    expect(renderJobCardBody({ ...done, wordTimings: undefined })).not.toContain('download-captions');
+    expect(renderJobCardBody({ ...done, wordTimings: [0] })).not.toContain('download-captions');
   });
 });
