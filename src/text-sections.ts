@@ -27,6 +27,15 @@ export interface TextSection {
   end: number;
 }
 
+/**
+ * Rows in the text built from a CSV. A blank line between rows makes
+ * the reader treat each row as its own sentence, so a spreadsheet is
+ * read row by row instead of as one unbroken utterance. The cell
+ * separator is a parameter; the row separator is not, because it is
+ * the one thing the extractor and this module must agree on.
+ */
+export const CSV_ROW_SEPARATOR = '\n\n';
+
 /** Longest line still plausibly a title. Chapter titles are rarely essays. */
 const MAX_HEADING_CHARS = 80;
 /** Fewest non-heading lines a document needs before any heading counts. */
@@ -232,7 +241,7 @@ export function sectionsFromCsvRows(rows: string[][], cellSeparator = ', '): Tex
   const starts: number[] = [];
   let offset = 0;
   for (const [index, row] of rows.entries()) {
-    if (index > 0) offset += 1;
+    if (index > 0) offset += CSV_ROW_SEPARATOR.length;
     starts.push(offset);
     offset += row.join(cellSeparator).length;
   }

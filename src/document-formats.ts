@@ -18,7 +18,7 @@ import {
   type DocumentGrid,
   type DocumentFrame,
 } from './document-html';
-import { sectionsFromCsvRows, sectionsFromPlainText } from './text-sections';
+import { CSV_ROW_SEPARATOR, sectionsFromCsvRows, sectionsFromPlainText } from './text-sections';
 import { rtfParagraphs, parseCsv, type RtfParagraph } from './document-types';
 
 /** What a format extractor produces, before the file identity is attached. */
@@ -423,7 +423,7 @@ async function extractCsv(file: File): Promise<FormatExtraction> {
     throw new Error('CSV file is empty.');
   }
   const rows = parseCsv(csv);
-  const text = rows.map(row => row.join(CSV_CELL_SEPARATOR)).join('\n');
+  const text = rows.map(row => row.join(CSV_CELL_SEPARATOR)).join(CSV_ROW_SEPARATOR);
   const sections = sectionsFromCsvRows(rows, CSV_CELL_SEPARATOR);
   return { text, sections: sections.length ? sections : undefined };
 }

@@ -2185,13 +2185,17 @@ def step_upload_csv_document(cdp_holder):
     # A doubled quote must collapse to one, not stay as "".
     if '""hello""' in text:
         raise AssertionError(f'escaped quotes were not collapsed: {text[:200]!r}')
-    # Every row's cells must be present. The rows are joined with ", " and the
-    # text carries no terminal punctuation between them, so the whole table
-    # reads as ONE sentence — that is the measured behaviour, and the reason
-    # this asserts word count rather than sentence count.
+    # Every row's cells must be present, and each row is its own
+    # sentence: rows are separated by a blank line so the reader
+    # speaks a spreadsheet row by row, not as one unbroken utterance.
+    # The fixture is a header plus three rows.
     if s.get('wordCount', 0) < 20:
         raise AssertionError(
             f'the CSV lost rows: only {s.get("wordCount")} words in {text[:200]!r}')
+    if s.get('sentenceCount', 0) != 4:
+        raise AssertionError(
+            f'the CSV must read as 4 sentences (one per row), got '
+            f'{s.get("sentenceCount")}: {text[:200]!r}')
     for cell in ('Name, Description, Value', 'Dog, Lazy companion, 7', '99'):
         if cell not in text:
             raise AssertionError(f'{cell!r} is missing from the rendered CSV')
@@ -2212,8 +2216,8 @@ def step_upload_csv_document(cdp_holder):
             f'a 3-row CSV must yield no chapters, but the outline offers '
             f'{json.dumps(outline.get("labels"))}')
     print('      ✓ CSV yielded no phantom chapters')
-    print(f'      ✓ CSV rendered: {s.get("wordCount")} words across '
-          f'{s.get("sentenceCount")} sentence(s), quoting intact')
+    print(f'      ✓ CSV rendered: {s.get("wordCount")} words as '
+          f'{s.get("sentenceCount")} sentences, quoting intact')
 
 
 def step_document_view_reading_tools(cdp_holder):

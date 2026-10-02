@@ -18,6 +18,7 @@ import {
   pptxSlideSize,
   pptxSlideBlocks,
 } from './document-formats';
+import { prepareReaderData } from './reader';
 
 /** Parse generated markup and read back what each stamp claims to cover. */
 function stampedTexts(html: string): { text: string; start: number; end: number }[] {
@@ -418,7 +419,16 @@ describe('CSV extraction', () => {
 
   it('keeps the existing row text exactly as it was', async () => {
     const doc = await extractFormat('csv', csv('a,b\n1,2\n3,4'));
-    expect(doc.text).toBe('a, b\n1, 2\n3, 4');
+    expect(doc.text).toBe('a, b\n\n1, 2\n\n3, 4');
+  });
+
+  it('reads each row as its own sentence', async () => {
+    // Rows are separated by a blank line, so the reader segments one
+    // sentence per row instead of reading the whole table as a single
+    // unbroken utterance.
+    const doc = await extractFormat('csv', csv('a,b\n1,2\n3,4\n5,6'));
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['a, b', '1, 2', '3, 4', '5, 6']);
   });
 });
 

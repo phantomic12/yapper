@@ -141,7 +141,7 @@ describe('sectionsFromPlainText', () => {
 
 describe('sectionsFromCsvRows', () => {
   const sep = ', ';
-  const asText = (rows: string[][]): string => rows.map(row => row.join(sep)).join('\n');
+  const asText = (rows: string[][]): string => rows.map(row => row.join(sep)).join('\n\n');
 
   const sorted: string[][] = [
     ['Region', 'Sales'],
