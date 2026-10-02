@@ -111,10 +111,10 @@ describe('XLSX extraction', () => {
     });
 
     const doc = await extractFormat('xlsx', file);
-    expect(doc.text).toBe('Name, , Score\nAda, , 98\n\nOnly');
+    expect(doc.text).toBe('Name, , Score\n\nAda, , 98\n\nOnly');
     expect(doc.sections).toEqual([
-      { title: 'Revenue 2026', start: 0, end: 'Name, , Score\nAda, , 98'.length },
-      { title: 'Scratch', start: 'Name, , Score\nAda, , 98'.length + 2, end: doc.text.length },
+      { title: 'Revenue 2026', start: 0, end: 'Name, , Score\n\nAda, , 98'.length },
+      { title: 'Scratch', start: 'Name, , Score\n\nAda, , 98'.length + 2, end: doc.text.length },
     ]);
     for (const stamp of stampedTexts(doc.html ?? '')) {
       expect(doc.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
@@ -123,6 +123,31 @@ describe('XLSX extraction', () => {
     dom.innerHTML = doc.html ?? '';
     expect(Array.from(dom.querySelectorAll('table caption')).map(c => c.textContent))
       .toEqual(['Revenue 2026', 'Scratch']);
+  });
+
+  it('reads each row as its own sentence', async () => {
+    // Rows are separated by a blank line, so the reader segments
+    // one sentence per row instead of reading a whole sheet as a
+    // single unbroken utterance.
+    const file = await zipFile('rows.xlsx', {
+      'xl/workbook.xml': WORKBOOK_XML,
+      'xl/_rels/workbook.xml.rels': WORKBOOK_RELS_XML,
+      'xl/sharedStrings.xml': `<?xml version="1.0"?>
+        <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <si><t>Name</t></si><si><t>Score</t></si><si><t>Ada</t></si>
+        </sst>`,
+      'xl/worksheets/sheet1.xml': `<?xml version="1.0"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+            <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>98</v></c></row>
+          </sheetData>
+        </worksheet>`,
+    });
+
+    const doc = await extractFormat('xlsx', file);
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Name, Score', 'Ada, 98']);
   });
 });
 
@@ -151,6 +176,16 @@ const SLIDE_XML = `<?xml version="1.0"?>
     </p:sp>
   </p:spTree></p:cSld>
 </p:sld>`;
+
+const CLOSING_SLIDE_XML = `<?xml version="1.0"?>
+  <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+         xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+    <p:cSld><p:spTree><p:sp>
+      <p:nvSpPr><p:cNvPr id="1" name="A"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="342900"/></a:xfrm></p:spPr>
+      <p:txBody><a:p><a:r><a:t>Closing</a:t></a:r></a:p></p:txBody>
+    </p:sp></p:spTree></p:cSld>
+  </p:sld>`;
 
 describe('PPTX slide geometry', () => {
   it('reads the declared slide size', () => {
@@ -198,15 +233,7 @@ describe('PPTX extraction', () => {
     const file = await zipFile('deck.pptx', {
       'ppt/presentation.xml': PRESENTATION_XML,
       'ppt/slides/slide1.xml': SLIDE_XML,
-      'ppt/slides/slide2.xml': `<?xml version="1.0"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-               xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-          <p:cSld><p:spTree><p:sp>
-            <p:nvSpPr><p:cNvPr id="1" name="A"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
-            <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="342900"/></a:xfrm></p:spPr>
-            <p:txBody><a:p><a:r><a:t>Closing</a:t></a:r></a:p></p:txBody>
-          </p:sp></p:spTree></p:cSld>
-        </p:sld>`,
+      'ppt/slides/slide2.xml': CLOSING_SLIDE_XML,
     });
 
     const doc = await extractFormat('pptx', file);
@@ -227,6 +254,22 @@ describe('PPTX extraction', () => {
     expect(dom.querySelectorAll('.dochtml__slide')).toHaveLength(2);
     // Both shapes on slide 1 keep their proportional placement.
     expect(dom.querySelectorAll('.dochtml__slide-shape')).toHaveLength(3);
+  });
+
+  it('reads each slide as its own sentence', async () => {
+    // Slides are separated by a blank line, so the reader segments
+    // one sentence per slide; the paragraphs within a slide keep
+    // joining with spaces, as extraction has always spoken them.
+    const file = await zipFile('deck-sentences.pptx', {
+      'ppt/presentation.xml': PRESENTATION_XML,
+      'ppt/slides/slide1.xml': SLIDE_XML,
+      'ppt/slides/slide2.xml': CLOSING_SLIDE_XML,
+    });
+
+    const doc = await extractFormat('pptx', file);
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text))
+      .toEqual(['Quarterly Review Hello world Second line', 'Closing']);
   });
 });
 

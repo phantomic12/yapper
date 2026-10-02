@@ -543,7 +543,9 @@ async function extractXlsx(file: File): Promise<FormatExtraction> {
     }
     if (gridRows.length) {
       const fallback = `Sheet ${sheetPath.match(/sheet(\d+)\.xml$/)?.[1] ?? grids.length + 1}`;
-      grids.push({ title: sheetTitles[sheetPath] || fallback, rows: gridRows, delimiter: ', ', rowSeparator: '\n' });
+      // Rows join with the grid default (a blank line), so the
+      // reader speaks a spreadsheet row by row, as it does for CSV.
+      grids.push({ title: sheetTitles[sheetPath] || fallback, rows: gridRows, delimiter: ', ' });
     }
   }
 

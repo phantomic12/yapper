@@ -212,7 +212,7 @@ describe('spreadsheet and slide document views', () => {
     expect(dom.querySelector('table caption')?.textContent).toBe('Sheet 1');
   });
 
-  it('keeps legacy spreadsheet text delimiters aligned with stamps', () => {
+  it('keeps custom spreadsheet delimiters aligned with stamps', () => {
     const built = gridsToTextAndHtml([{
       title: 'Sheet 1', rows: [['A', 'B'], ['C', 'D']], delimiter: ', ', rowSeparator: '\n',
     }]);

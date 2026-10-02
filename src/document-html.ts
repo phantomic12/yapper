@@ -155,7 +155,8 @@ export interface DocumentGrid {
   rows: string[][];
   /** Text delimiter for TTS and offsets; legacy XLSX uses comma-space. */
   delimiter?: string;
-  /** Newline style between rows; legacy XLSX uses a single LF. */
+  /** Newline style between rows; defaults to a blank line so each
+   * row reads as its own sentence. */
   rowSeparator?: string;
 }
 

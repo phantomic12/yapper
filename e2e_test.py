@@ -2342,8 +2342,24 @@ def step_document_view_renders_xlsx(cdp_holder):
     stamps = _assert_generic_stamps(cdp, target['id'])
     if 'quick brown fox' not in (state.get('text') or ''):
         raise AssertionError('shared strings did not resolve into the cells')
+    # Rows join with a blank line, so the reader speaks each row
+    # as its own sentence — the row-by-row treatment CSV rows
+    # already get. The fixture is a header row plus one data row.
+    reader: dict = {}
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        reader = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if reader.get('sentenceCount'):
+            break
+        time.sleep(0.3)
+    if reader.get('sentenceCount') != 2:
+        raise AssertionError(
+            f'the sheet must read as 2 sentences (one per row), got '
+            f'{reader.get("sentenceCount")}: '
+            f'{(reader.get("text") or "")[:200]!r}')
     print(f'      ✓ spreadsheet rendered: caption {state.get("captions")}, '
-          f'{state.get("headers")} header cells, {stamps.get("count")} stamps')
+          f'{state.get("headers")} header cells, {stamps.get("count")} stamps, '
+          f'{reader.get("sentenceCount")} row-sentences')
     cdp.screenshot(target['id'], SCREENSHOT_DIR / '11-document-view-xlsx.png')
 
     # Search reads the same text the table shows: "quick" occurs twice
@@ -2434,8 +2450,24 @@ def step_document_view_renders_pptx(cdp_holder):
     if 'Lorem ipsum dolor sit amet.' not in slide['text']:
         raise AssertionError(f'second paragraph lost: {slide["text"][:120]!r}')
     stamps = _assert_generic_stamps(cdp, target['id'])
+    # Slides join with blank lines and a slide's runs with spaces,
+    # so each slide segments as its own sentence. This fixture is
+    # one slide, and its only terminal punctuation ends the slide.
+    reader: dict = {}
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        reader = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if reader.get('sentenceCount'):
+            break
+        time.sleep(0.3)
+    if reader.get('sentenceCount') != 1:
+        raise AssertionError(
+            f'the deck must read as 1 sentence (one per slide), got '
+            f'{reader.get("sentenceCount")}: '
+            f'{(reader.get("text") or "")[:200]!r}')
     print(f'      ✓ presentation rendered: {len(state["slides"])} slide card, '
-          f'{stamps.get("count")} stamps, spoken text intact')
+          f'{stamps.get("count")} stamps, spoken text intact, '
+          f'{reader.get("sentenceCount")} slide-sentence')
     cdp.screenshot(target['id'], SCREENSHOT_DIR / '12-document-view-pptx.png')
 
 
