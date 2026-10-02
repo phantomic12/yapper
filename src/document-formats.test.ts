@@ -618,6 +618,27 @@ describe('DOCX extraction', () => {
   });
 });
 
+describe('DOC binary extraction', () => {
+  it('reads each paragraph as its own sentence', async () => {
+    // The legacy binary format is a best-effort extraction of
+    // printable runs split on paragraph marks. Those parts join
+    // with a blank line so the reader speaks a paragraph at a
+    // time — a single newline would read the whole document as
+    // one unbroken utterance, as the XLSX row join once did.
+    const paragraphs = ['First paragraph of the document', 'Second paragraph follows'];
+    const bytes: number[] = [];
+    paragraphs.forEach((paragraph, index) => {
+      for (const ch of paragraph) bytes.push(ch.charCodeAt(0), 0);
+      if (index < paragraphs.length - 1) bytes.push(0x0a, 0);
+    });
+    const file = new File([new Uint8Array(bytes)], 'test.doc');
+    const doc = await extractFormat('doc', file);
+    expect(doc.text).toBe('First paragraph of the document\n\nSecond paragraph follows');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(paragraphs);
+  });
+});
+
 // The list cases are the ones the fixture cannot cover: it has a single flat
 // list, so nothing here proves that a paragraph AFTER a list stays prose or
 // that a nested item is not attributed to its parent.

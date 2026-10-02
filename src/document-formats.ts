@@ -209,10 +209,14 @@ function extractTextFromDocBinary(bytes: Uint8Array): string {
     parts.push(String.fromCharCode(...current));
   }
 
+  // Each part is a paragraph run, and a single newline is
+  // mid-sentence to the segmenter: the whole document would
+  // speak as one unbroken utterance. A blank line makes each
+  // part its own sentence, as every other format's blocks do.
   return parts
     .map(p => p.trim())
     .filter(p => p.length > 0)
-    .join('\n');
+    .join('\n\n');
 }
 
 // ─── RTF extraction ───────────────────────────────────────────────
