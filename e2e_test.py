@@ -2681,7 +2681,10 @@ def step_audiobook_chapters_export(cdp_holder):
     listing: dict = {}
     start = time.time()
     while time.time() - start < 60:
-        listing = v(cdp.eval(ZIP_LIST_JS, target['id'], timeout=30))
+        # The zip readers are async IIFEs (blob.arrayBuffer()), so
+        # they need awaitPromise — a plain eval returns the Promise
+        # object itself, which serialises to {} and reads as "no zip".
+        listing = v(cdp.eval_async(ZIP_LIST_JS, target['id'], timeout=30))
         if listing.get('ok') and listing.get('entries'):
             break
         time.sleep(0.5)
@@ -2699,8 +2702,8 @@ def step_audiobook_chapters_export(cdp_holder):
                 f'{expected} is missing from the exported bundle: {names}')
     print(f'      ✓ bundle holds {len(names)} files: {", ".join(names)}')
 
-    chapters = v(cdp.eval(ZIP_READ_JS % json.dumps(base + '-chapters.vtt'),
-                          target['id'], timeout=30))
+    chapters = v(cdp.eval_async(ZIP_READ_JS % json.dumps(base + '-chapters.vtt'),
+                                target['id'], timeout=30))
     if not chapters.get('ok'):
         raise AssertionError(f'could not read the chapters VTT: {chapters.get("msg")!r}')
     vtt = chapters['text']
@@ -2714,8 +2717,8 @@ def step_audiobook_chapters_export(cdp_holder):
                 f'chapter {heading!r} never made it into the markers: {vtt[:300]!r}')
     print(f'      ✓ chapters: {vtt.count("-->")} cues, both headings present')
 
-    karaoke = v(cdp.eval(ZIP_READ_JS % json.dumps(base + '-karaoke.html'),
-                         target['id'], timeout=30))
+    karaoke = v(cdp.eval_async(ZIP_READ_JS % json.dumps(base + '-karaoke.html'),
+                               target['id'], timeout=30))
     if not karaoke.get('ok'):
         raise AssertionError(f'could not read the karaoke HTML: {karaoke.get("msg")!r}')
     html = karaoke['text']
