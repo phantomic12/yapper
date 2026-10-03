@@ -55,8 +55,6 @@ export interface DocumentReadingProgress {
   theme?: 'light' | 'sepia' | 'night';
   /** Document font family preference (reflowable views). */
   fontFamily?: 'serif' | 'sans' | 'mono';
-  /** Whether the reflowable view was in paged (column) mode. */
-  paged?: boolean;
 }
 
 const DOCUMENT_PROGRESS_PREFIX = 'yapper.document-progress.v1:';
@@ -79,7 +77,6 @@ export function loadDocumentProgress(key: string): DocumentReadingProgress | nul
       viewMode: value.viewMode === 'text' ? 'text' : 'document',
       theme: value.theme === 'sepia' || value.theme === 'night' ? value.theme : undefined,
       fontFamily: value.fontFamily === 'serif' || value.fontFamily === 'mono' ? value.fontFamily : undefined,
-      paged: value.paged === true ? true : undefined,
     };
   } catch {
     return null;

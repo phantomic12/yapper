@@ -111,10 +111,10 @@ describe('XLSX extraction', () => {
     });
 
     const doc = await extractFormat('xlsx', file);
-    expect(doc.text).toBe('Name, , Score\nAda, , 98\n\nOnly');
+    expect(doc.text).toBe('Name, , Score\n\nAda, , 98\n\nOnly');
     expect(doc.sections).toEqual([
-      { title: 'Revenue 2026', start: 0, end: 'Name, , Score\nAda, , 98'.length },
-      { title: 'Scratch', start: 'Name, , Score\nAda, , 98'.length + 2, end: doc.text.length },
+      { title: 'Revenue 2026', start: 0, end: 'Name, , Score\n\nAda, , 98'.length },
+      { title: 'Scratch', start: 'Name, , Score\n\nAda, , 98'.length + 2, end: doc.text.length },
     ]);
     for (const stamp of stampedTexts(doc.html ?? '')) {
       expect(doc.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
@@ -123,6 +123,31 @@ describe('XLSX extraction', () => {
     dom.innerHTML = doc.html ?? '';
     expect(Array.from(dom.querySelectorAll('table caption')).map(c => c.textContent))
       .toEqual(['Revenue 2026', 'Scratch']);
+  });
+
+  it('reads each row as its own sentence', async () => {
+    // Rows are separated by a blank line, so the reader segments
+    // one sentence per row instead of reading a whole sheet as a
+    // single unbroken utterance.
+    const file = await zipFile('rows.xlsx', {
+      'xl/workbook.xml': WORKBOOK_XML,
+      'xl/_rels/workbook.xml.rels': WORKBOOK_RELS_XML,
+      'xl/sharedStrings.xml': `<?xml version="1.0"?>
+        <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <si><t>Name</t></si><si><t>Score</t></si><si><t>Ada</t></si>
+        </sst>`,
+      'xl/worksheets/sheet1.xml': `<?xml version="1.0"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+            <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>98</v></c></row>
+          </sheetData>
+        </worksheet>`,
+    });
+
+    const doc = await extractFormat('xlsx', file);
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Name, Score', 'Ada, 98']);
   });
 });
 
@@ -151,6 +176,16 @@ const SLIDE_XML = `<?xml version="1.0"?>
     </p:sp>
   </p:spTree></p:cSld>
 </p:sld>`;
+
+const CLOSING_SLIDE_XML = `<?xml version="1.0"?>
+  <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+         xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+    <p:cSld><p:spTree><p:sp>
+      <p:nvSpPr><p:cNvPr id="1" name="A"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="342900"/></a:xfrm></p:spPr>
+      <p:txBody><a:p><a:r><a:t>Closing</a:t></a:r></a:p></p:txBody>
+    </p:sp></p:spTree></p:cSld>
+  </p:sld>`;
 
 describe('PPTX slide geometry', () => {
   it('reads the declared slide size', () => {
@@ -198,15 +233,7 @@ describe('PPTX extraction', () => {
     const file = await zipFile('deck.pptx', {
       'ppt/presentation.xml': PRESENTATION_XML,
       'ppt/slides/slide1.xml': SLIDE_XML,
-      'ppt/slides/slide2.xml': `<?xml version="1.0"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-               xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-          <p:cSld><p:spTree><p:sp>
-            <p:nvSpPr><p:cNvPr id="1" name="A"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
-            <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="342900"/></a:xfrm></p:spPr>
-            <p:txBody><a:p><a:r><a:t>Closing</a:t></a:r></a:p></p:txBody>
-          </p:sp></p:spTree></p:cSld>
-        </p:sld>`,
+      'ppt/slides/slide2.xml': CLOSING_SLIDE_XML,
     });
 
     const doc = await extractFormat('pptx', file);
@@ -227,6 +254,22 @@ describe('PPTX extraction', () => {
     expect(dom.querySelectorAll('.dochtml__slide')).toHaveLength(2);
     // Both shapes on slide 1 keep their proportional placement.
     expect(dom.querySelectorAll('.dochtml__slide-shape')).toHaveLength(3);
+  });
+
+  it('reads each slide as its own sentence', async () => {
+    // Slides are separated by a blank line, so the reader segments
+    // one sentence per slide; the paragraphs within a slide keep
+    // joining with spaces, as extraction has always spoken them.
+    const file = await zipFile('deck-sentences.pptx', {
+      'ppt/presentation.xml': PRESENTATION_XML,
+      'ppt/slides/slide1.xml': SLIDE_XML,
+      'ppt/slides/slide2.xml': CLOSING_SLIDE_XML,
+    });
+
+    const doc = await extractFormat('pptx', file);
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text))
+      .toEqual(['Quarterly Review Hello world Second line', 'Closing']);
   });
 });
 
@@ -575,6 +618,27 @@ describe('DOCX extraction', () => {
   });
 });
 
+describe('DOC binary extraction', () => {
+  it('reads each paragraph as its own sentence', async () => {
+    // The legacy binary format is a best-effort extraction of
+    // printable runs split on paragraph marks. Those parts join
+    // with a blank line so the reader speaks a paragraph at a
+    // time — a single newline would read the whole document as
+    // one unbroken utterance, as the XLSX row join once did.
+    const paragraphs = ['First paragraph of the document', 'Second paragraph follows'];
+    const bytes: number[] = [];
+    paragraphs.forEach((paragraph, index) => {
+      for (const ch of paragraph) bytes.push(ch.charCodeAt(0), 0);
+      if (index < paragraphs.length - 1) bytes.push(0x0a, 0);
+    });
+    const file = new File([new Uint8Array(bytes)], 'test.doc');
+    const doc = await extractFormat('doc', file);
+    expect(doc.text).toBe('First paragraph of the document\n\nSecond paragraph follows');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(paragraphs);
+  });
+});
+
 // The list cases are the ones the fixture cannot cover: it has a single flat
 // list, so nothing here proves that a paragraph AFTER a list stays prose or
 // that a nested item is not attributed to its parent.
@@ -670,5 +734,132 @@ describe('the committed ODT fixture', () => {
     expect((doc.sections ?? []).map(s => s.title)).toEqual([
       'Reader Probe', 'Outline levels',
     ]);
+  });
+});
+
+// Table rows speak as one block — the HTML `tr` trick — in the two
+// formats that used to emit one block per cell. The reader hears a row
+// as a phrase instead of a column of disconnected words, and each row
+// segments as its own sentence.
+describe('table rows as sentences', () => {
+  const docxTable = `<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>Before the table.</w:t></w:r></w:p>
+        <w:tbl>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>Score</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Ada</w:t></w:r></w:p><w:p><w:r><w:t>second line</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>98</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>Solid.</w:t></w:r></w:p></w:tc>
+          </w:tr>
+        </w:tbl>
+        <w:p><w:r><w:t>After the table.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>`;
+
+  it('reads each DOCX row as its own sentence', async () => {
+    const file = await zipFile('table.docx', { 'word/document.xml': docxTable });
+    const doc = await extractFormat('docx', file);
+    // The empty cell is dropped and a cell's own paragraphs join with
+    // spaces — the contract the HTML row established.
+    expect(doc.text).toBe(
+      'Before the table.\n\nName, Score\n\nAda second line, 98, Solid.\n\nAfter the table.');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.', 'Name, Score', 'Ada second line, 98, Solid.', 'After the table.',
+    ]);
+    for (const stamp of stampedTexts(doc.html ?? '')) {
+      expect(doc.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    }
+  });
+
+  const odtTable = `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+       xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+       xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+    <office:body><office:text>
+      <text:p>Before the table.</text:p>
+      <table:table table:name="T">
+        <table:table-row>
+          <table:table-cell><text:p>Name</text:p></table:table-cell>
+          <table:table-cell><text:p>Score</text:p></table:table-cell>
+          <table:table-cell><text:p/></table:table-cell>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell><text:p>Ada</text:p><text:p>second line</text:p></table:table-cell>
+          <table:table-cell><text:p>98</text:p></table:table-cell>
+          <table:table-cell><text:p>Solid.</text:p></table:table-cell>
+        </table:table-row>
+      </table:table>
+      <text:p>After the table.</text:p>
+    </office:text></office:body>
+  </office:document-content>`;
+
+  it('reads each ODT row as its own sentence', async () => {
+    const file = await zipFile('table.odt', { 'content.xml': odtTable });
+    const doc = await extractFormat('odt', file);
+    expect(doc.text).toBe(
+      'Before the table.\n\nName, Score\n\nAda second line, 98, Solid.\n\nAfter the table.');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.', 'Name, Score', 'Ada second line, 98, Solid.', 'After the table.',
+    ]);
+  });
+
+  it('reads a nested DOCX table from its own row, not the enclosing one', async () => {
+    const nested = `<?xml version="1.0" encoding="UTF-8"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+          <w:tbl>
+            <w:tr>
+              <w:tc>
+                <w:p><w:r><w:t>Outer</w:t></w:r></w:p>
+                <w:tbl>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                </w:tbl>
+              </w:tc>
+            </w:tr>
+          </w:tbl>
+        </w:body>
+      </w:document>`;
+    const file = await zipFile('nested.docx', { 'word/document.xml': nested });
+    const doc = await extractFormat('docx', file);
+    // The nested row is its own block, so its cell speaks once — and in
+    // document order, after the row that contains the nested table.
+    expect(doc.text).toBe('Outer\n\nInner');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Outer', 'Inner']);
+  });
+
+  it('reads a nested ODT table from its own row, not the enclosing one', async () => {
+    const nested = `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+         xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+         xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+      <office:body><office:text>
+        <table:table table:name="T">
+          <table:table-row>
+            <table:table-cell>
+              <text:p>Outer</text:p>
+              <table:table>
+                <table:table-row>
+                  <table:table-cell><text:p>Inner</text:p></table:table-cell>
+                </table:table-row>
+              </table:table>
+            </table:table-cell>
+          </table:table-row>
+        </table:table>
+      </office:text></office:body>
+    </office:document-content>`;
+    const file = await zipFile('nested.odt', { 'content.xml': nested });
+    const doc = await extractFormat('odt', file);
+    expect(doc.text).toBe('Outer\n\nInner');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Outer', 'Inner']);
   });
 });

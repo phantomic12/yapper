@@ -233,7 +233,7 @@ function csvGroupingColumn(rows: string[][]): number {
  * put chapter markers in places that mean nothing.
  *
  * The offsets assume the caller's text is the rows joined with `cellSeparator`
- * and newlines — the layout `extractCsv` produces.
+ * and blank lines — the layout `extractCsv` produces.
  */
 export function sectionsFromCsvRows(rows: string[][], cellSeparator = ', '): TextSection[] {
   const column = csvGroupingColumn(rows);

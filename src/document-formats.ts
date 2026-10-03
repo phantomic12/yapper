@@ -119,6 +119,47 @@ function docxParagraphKind(p: Element): DocumentBlock['kind'] {
   return 'p';
 }
 
+/** Is this element inside a table cell? Table rows speak as whole rows. */
+function docxInTableCell(el: Element): boolean {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.tagName === 'w:tc') return true;
+  }
+  return false;
+}
+
+/**
+ * The row that directly owns this paragraph, if any. A nested table's
+ * paragraphs belong to the nested row — which is emitted as its own block —
+ * so counting them here would read that text twice.
+ */
+function docxOwningRow(el: Element): Element | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.tagName === 'w:tr') return node;
+  }
+  return null;
+}
+
+/**
+ * A table row as one block — the HTML `tr` trick carried over: the cells
+ * join with the separator CSV extraction established, so the row speaks
+ * as a phrase where one block per cell would read as a column of
+ * disconnected words. An empty cell is dropped, and a cell's own
+ * paragraphs join with spaces, exactly as the HTML row does. A nested
+ * table's paragraphs are left to the nested row's own block.
+ */
+function docxTableRowBlock(tr: Element): DocumentBlock | null {
+  const cells = Array.from(tr.children)
+    .filter(cell => cell.tagName === 'w:tc')
+    .map(cell => Array.from(cell.getElementsByTagName('w:p'))
+      .filter(p => docxOwningRow(p) === tr)
+      .map(p => collapseWhitespace(docxParagraphRuns(p).map(run => run.text).join('')))
+      .filter(Boolean)
+      .join(' '))
+    .filter(Boolean);
+  const text = cells.join(', ');
+  return text ? { kind: 'p', runs: [{ text }] } : null;
+}
+
 async function extractDocx(file: File): Promise<FormatExtraction> {
   // We use manual XML parsing instead of mammoth because mammoth's internal
   // xmldom wrapper calls DOMParser.parseFromString() without a mimeType,
@@ -132,10 +173,18 @@ async function extractDocx(file: File): Promise<FormatExtraction> {
   const parser = new DOMParser();
   const xml = parser.parseFromString(xmlText, 'application/xml');
   const blocks: DocumentBlock[] = [];
-  for (const p of Array.from(xml.getElementsByTagName('w:p'))) {
-    const runs = docxParagraphRuns(p);
-    if (!runs.length) continue;
-    blocks.push({ kind: docxParagraphKind(p), runs });
+  // Document order, tables included: a row is one block (the HTML `tr`
+  // trick), and the paragraphs inside its cells are skipped — the row's
+  // block already speaks their text.
+  for (const el of Array.from(xml.getElementsByTagName('*'))) {
+    if (el.tagName === 'w:tr') {
+      const row = docxTableRowBlock(el);
+      if (row) blocks.push(row);
+    } else if (el.tagName === 'w:p' && !docxInTableCell(el)) {
+      const runs = docxParagraphRuns(el);
+      if (!runs.length) continue;
+      blocks.push({ kind: docxParagraphKind(el), runs });
+    }
   }
 
   // One pass produces all three, so the markup's stamped ranges and the
@@ -209,10 +258,14 @@ function extractTextFromDocBinary(bytes: Uint8Array): string {
     parts.push(String.fromCharCode(...current));
   }
 
+  // Each part is a paragraph run, and a single newline is
+  // mid-sentence to the segmenter: the whole document would
+  // speak as one unbroken utterance. A blank line makes each
+  // part its own sentence, as every other format's blocks do.
   return parts
     .map(p => p.trim())
     .filter(p => p.length > 0)
-    .join('\n');
+    .join('\n\n');
 }
 
 // ─── RTF extraction ───────────────────────────────────────────────
@@ -543,7 +596,9 @@ async function extractXlsx(file: File): Promise<FormatExtraction> {
     }
     if (gridRows.length) {
       const fallback = `Sheet ${sheetPath.match(/sheet(\d+)\.xml$/)?.[1] ?? grids.length + 1}`;
-      grids.push({ title: sheetTitles[sheetPath] || fallback, rows: gridRows, delimiter: ', ', rowSeparator: '\n' });
+      // Rows join with the grid default (a blank line), so the
+      // reader speaks a spreadsheet row by row, as it does for CSV.
+      grids.push({ title: sheetTitles[sheetPath] || fallback, rows: gridRows, delimiter: ', ' });
     }
   }
 
@@ -715,6 +770,44 @@ function odtInListItem(el: Element): boolean {
   return false;
 }
 
+/** Is this element inside a table row? Rows speak as whole rows. */
+function odtInTableRow(el: Element): boolean {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.localName === 'table-row' || node.localName === 'table-cell') return true;
+  }
+  return false;
+}
+
+/**
+ * The row that directly owns this paragraph or heading, if any — nested
+ * tables keep their content to themselves, read by their own row block.
+ */
+function odtOwningRow(el: Element): Element | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.localName === 'table-row') return node;
+  }
+  return null;
+}
+
+/**
+ * A table row as one block — the HTML `tr` trick carried over: empty
+ * cells dropped, a cell's own paragraphs joined with spaces, and the
+ * cells joined with the separator CSV extraction established. Nested
+ * tables are read by their own row block instead of here.
+ */
+function odtTableRowBlock(tr: Element): DocumentBlock | null {
+  const cells = Array.from(tr.children)
+    .filter(cell => cell.localName === 'table-cell' || cell.localName === 'covered-table-cell')
+    .map(cell => Array.from(cell.getElementsByTagName('*'))
+      .filter(el => (el.localName === 'p' || el.localName === 'h') && odtOwningRow(el) === tr)
+      .map(p => collapseWhitespace(p.textContent ?? ''))
+      .filter(Boolean)
+      .join(' '))
+    .filter(Boolean);
+  const text = cells.join(', ');
+  return text ? { kind: 'p', runs: [{ text }] } : null;
+}
+
 /**
  * ODT's block elements as document blocks.
  *
@@ -727,6 +820,18 @@ export function odtToBlocks(root: Element | Document): DocumentBlock[] {
   const blocks: DocumentBlock[] = [];
   for (const el of Array.from(root.getElementsByTagName('*'))) {
     const name = el.localName;
+    // A table row is one block: its cells join the way the HTML `tr`
+    // does, so the row reads as a phrase rather than a column of
+    // disconnected words.
+    if (name === 'table-row') {
+      const row = odtTableRowBlock(el);
+      if (row) blocks.push(row);
+      continue;
+    }
+    // Cell content is spoken by its row's block above.
+    if (name === 'p' || name === 'h' || name === 'list-item') {
+      if (odtInTableRow(el)) continue;
+    }
     let kind: DocumentBlock['kind'] | null = null;
     if (name === 'p') kind = odtInListItem(el) ? 'li' : 'p';
     else if (name === 'h') {

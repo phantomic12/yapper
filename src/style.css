@@ -1462,8 +1462,8 @@ body {
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
-  background: var(--bg-elevated);
+  padding: 20px 16px;
+  background: var(--bg-surface);
   color: var(--text);
   font-size: 0.95rem;
   line-height: 1.7;
@@ -2579,6 +2579,32 @@ body {
 .docview__thumbnail-page { display: block; font-size: 0.7rem; text-align: left; }
 .docview__thumbnail-preview { display: grid; place-items: start center; min-height: 55px; }
 .docview__thumbnail-canvas { display: block; max-width: 76px; max-height: 100px; }
+/* Thumbnails of page sheets: a scaled clone of the sheet itself, so the
+   rail shows the page's real text and headings, not a placeholder box. */
+.docview__thumbnail--sheet { padding: 5px; }
+.docview__thumbnail--sheet .docview__thumbnail-preview {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  aspect-ratio: 210 / 297;
+  background: #fff;
+}
+.docview__thumbnail--sheet .docpage { box-shadow: none; border: 0; }
+/* The rail carries the page number itself. */
+.docview__thumbnail--sheet .docpage::after { display: none; }
+.docview__thumbnail-scale {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1.65;
+  transform-origin: top left;
+  pointer-events: none;
+}
 .docview__thumbnails[hidden] { display: none; }
 .docview__section[hidden] { display: none; }
 .docview__pages:focus-visible,
@@ -2692,6 +2718,19 @@ body {
   display: block;
   padding: 0;
 }
+/* Page-sheet mode borrows the PDF canvas: centred sheets on a desk-grey
+   field, exactly like the real page view beside it. */
+.docview--html.docview--pages .docview__pages {
+  align-items: center;
+  display: flex;
+  padding: 16px;
+}
+.docview--pages .dochtml {
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
 .dochtml__table {
   width: 100%;
   margin: 0 0 24px;
@@ -2723,6 +2762,7 @@ body {
 .docview--html .docview__bar { flex-wrap: wrap; }
 @media (max-width: 640px) {
   .docview__bar { gap: 4px; padding: 5px; }
+  .docpage { padding: 32px 24px 36px; }
   .docview__search { max-width: 32vw; }
   .docview__search-label { display: none; }
   .docview__thumbnails { flex-basis: 82px; }
@@ -2773,11 +2813,62 @@ body {
 .docview__hl--context,
 .dochtml__hl--context { background: rgba(255, 214, 0, 0.14); box-shadow: none; }
 
-/* Paged (column) layout for reflowable documents. */
-.dochtml__content--paged {
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  column-fill: auto;
+/* ─── Page sheets: the PDF-reader look for reflowable text ─────────
+   Blocks are flowed onto fixed-proportion sheets (see ui/pagination.ts).
+   The page number is generated content in the bottom margin: counters
+   keep it out of the text itself, so what a screen reader — or a test —
+   reads from the document is only the document. */
+.dochtml__content,
+.reader-view,
+.reader-overlay__content {
+  counter-reset: docpage;
+}
+.docview--pages .dochtml__content,
+.reader-view,
+.reader-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.docpage {
+  counter-increment: docpage;
+  position: relative;
+  flex: 0 0 auto;
+  width: min(794px, 100%);
+  padding: 56px 72px 48px;
+  background: #fff;
+  color: #16161a;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+}
+.docpage::after {
+  content: counter(docpage);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: inherit;
+  opacity: 0.55;
+  pointer-events: none;
+}
+/* The text surfaces read on the app's own theme: a page you can read at
+   night, without the document view's separate reading themes. */
+.reader-view .docpage,
+.reader-overlay__content .docpage {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+/* Read state on paper: what has been read fades back, hover lifts. */
+.docpage .reader-sentence--past {
+  background: transparent;
+  opacity: 0.55;
+}
+.docpage .reader-sentence:hover {
+  background: rgba(127, 127, 127, 0.18);
 }
 
 /* Frozen header row: long sheets keep their columns labelled while
@@ -3025,7 +3116,8 @@ body {
    chrome keeps the site theme. PDF pages are tinted with a filter
    because the rasterised pixels are already painted. */
 .docview[data-doc-theme='sepia'] .docview__pages { background: #e9dcbd; }
-.docview[data-doc-theme='sepia'] .docview__page { background: #f7ecd4; }
+.docview[data-doc-theme='sepia'] .docview__page,
+.docview[data-doc-theme='sepia'] .docpage { background: #f7ecd4; color: #3b2f1e; }
 .docview[data-doc-theme='sepia'] .docview__canvas { filter: sepia(0.35) brightness(0.98); }
 .docview[data-doc-theme='sepia'] .dochtml { background: #f7ecd4; color: #3b2f1e; }
 .docview[data-doc-theme='sepia'] .dochtml__table td { border-color: #cdb98e; }
@@ -3035,7 +3127,8 @@ body {
   border-color: #cdb98e;
 }
 .docview[data-doc-theme='night'] .docview__pages { background: #0b0b10; }
-.docview[data-doc-theme='night'] .docview__page { background: #1b1b22; }
+.docview[data-doc-theme='night'] .docview__page,
+.docview[data-doc-theme='night'] .docpage { background: #1b1b22; color: #d6d6e0; }
 .docview[data-doc-theme='night'] .docview__canvas { filter: invert(0.88) hue-rotate(180deg) brightness(0.95); }
 .docview[data-doc-theme='night'] .dochtml { background: #1b1b22; color: #d6d6e0; }
 .docview[data-doc-theme='night'] .dochtml__table td { border-color: #3a3a46; }
@@ -3056,7 +3149,8 @@ body {
    Applied only to very long documents: the browser skips layout and
    paint for blocks far from the viewport, standing in an intrinsic
    height until they scroll near. Highlights force their blocks visible. */
-.dochtml__content--virtual > * {
+.dochtml__content--virtual > *:not(.docpage),
+.dochtml__content--virtual .docpage__body > * {
   content-visibility: auto;
   contain-intrinsic-size: auto 2.4em;
 }

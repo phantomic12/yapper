@@ -241,22 +241,98 @@ describe('HTML document view outline, tabs, and layout', () => {
     expect(onNavigate).toHaveBeenLastCalledWith({ offset: 12, scale: 1 });
   });
 
-  it('cycles the font family and toggles paged layout', () => {
+  it('cycles the font family and reports it for persistence', () => {
     const hostEl = host();
     const onNavigate = vi.fn();
     const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
       text: 'Text',
       onNavigate,
     });
-    expect(view.paged).toBe(false);
-    hostEl.querySelector<HTMLButtonElement>('[data-role="paged"]')!.click();
-    expect(view.paged).toBe(true);
-    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'sans', paged: true });
-    expect(hostEl.querySelector('.dochtml__content')!.classList.contains('dochtml__content--paged')).toBe(true);
-
     hostEl.querySelector<HTMLButtonElement>('[data-role="font-family"]')!.click();
     expect(view.fontFamily).toBe('mono');
-    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'mono', paged: true });
+    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'mono' });
+    // Flow layout by default: no sheets and no page controls to click.
+    expect(hostEl.querySelector('.docpage')).toBeNull();
+    expect(hostEl.querySelector('[data-role="page-prev"]')).toBeNull();
+    expect(hostEl.querySelector('[data-role="toggle-thumbnails"]')).toBeNull();
+    expect(hostEl.querySelector('.docview__thumbnails')).toBeNull();
+    expect(view.pageCount).toBe(0);
+    expect(view.activePage).toBe(0);
+  });
+
+  it('flows blocks onto page sheets with a page counter and page turns', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl,
+      '<p data-off="0:4">Text</p><p data-off="6:10">more</p>', 'Plain', {
+      text: 'Text\n\nmore',
+      paginated: true,
+    });
+    expect(hostEl.classList.contains('docview--pages')).toBe(true);
+    // jsdom has no layout, so the whole document fits one sheet — but it is
+    // a sheet: the runs sit on it and the counter reads its page.
+    const sheets = hostEl.querySelectorAll('.docpage');
+    expect(sheets).toHaveLength(1);
+    expect(sheets[0].querySelectorAll('[data-off]')).toHaveLength(2);
+    expect(sheets[0].getAttribute('aria-label')).toBe('Page 1 of 1');
+    expect(view.pageCount).toBe(1);
+    expect(view.activePage).toBe(1);
+    expect(hostEl.querySelector('.docview__count')?.textContent).toBe('Page 1 of 1');
+    // Page turns walk the sheets and clamp at the ends.
+    view.nextPage();
+    expect(view.activePage).toBe(1);
+    view.prevPage();
+    expect(view.activePage).toBe(1);
+    // The stamped markup survives the flow: runs still resolve to their block.
+    expect(hostEl.querySelector('.dochtml__content [data-off="6:10"]')?.closest('p')).not.toBeNull();
+    // The rail toggle ships with the page chrome.
+    expect(hostEl.querySelector('[data-role="toggle-thumbnails"]')).not.toBeNull();
+  });
+
+  it('re-packs the sheets when the font family changes', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
+      text: 'Text',
+      paginated: true,
+    });
+    const before = hostEl.querySelector('.docpage');
+    hostEl.querySelector<HTMLButtonElement>('[data-role="font-family"]')!.click();
+    // A new family changes glyph widths, so the sheets have to be rebuilt
+    // against it: a stale pack would leave the page cuts aiming at the old
+    // font. jsdom cannot see glyph widths, but it can see the re-pack.
+    const after = hostEl.querySelector('.docpage');
+    expect(after).not.toBeNull();
+    expect(after).not.toBe(before);
+    expect(hostEl.querySelector('.docview__count')?.textContent).toBe('Page 1 of 1');
+    expect(view.pageCount).toBe(1);
+  });
+
+  it('offers a thumbnail rail of the sheets, filled from the real pages', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
+      text: 'Text',
+      paginated: true,
+    });
+    const toggle = hostEl.querySelector<HTMLButtonElement>('[data-role="toggle-thumbnails"]')!;
+    const rail = hostEl.querySelector<HTMLElement>('.docview__thumbnails')!;
+    expect(rail.hasAttribute('hidden')).toBe(true);
+
+    toggle.click();
+    expect(rail.hasAttribute('hidden')).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const thumb = rail.querySelector<HTMLButtonElement>('.docview__thumbnail')!;
+    expect(rail.querySelectorAll('.docview__thumbnail')).toHaveLength(1);
+    expect(thumb.getAttribute('aria-label')).toBe('Go to page 1');
+    expect(thumb.getAttribute('aria-current')).toBe('page');
+    // jsdom has no IntersectionObserver, so the shell fills immediately —
+    // with a clone of the actual sheet, run stamp and all.
+    expect(thumb.querySelector('.docview__thumbnail-preview .docpage')).not.toBeNull();
+    expect(thumb.querySelector('[data-off="0:4"]')).not.toBeNull();
+
+    // Closing frees the clones; the switch reports its own state.
+    toggle.click();
+    expect(rail.hasAttribute('hidden')).toBe(true);
+    expect(rail.children).toHaveLength(0);
+    view.destroy();
   });
 });
 

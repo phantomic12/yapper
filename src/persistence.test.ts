@@ -322,16 +322,14 @@ describe('document highlights', () => {
 });
 
 describe('document progress layout fields', () => {
-  it('round-trips font family and paged mode', () => {
+  it('round-trips font family', () => {
     saveDocumentProgress('progress:test', {
       offset: 10,
       viewMode: 'document',
       fontFamily: 'mono',
-      paged: true,
     });
     const loaded = loadDocumentProgress('progress:test');
     expect(loaded?.fontFamily).toBe('mono');
-    expect(loaded?.paged).toBe(true);
   });
 
   it('drops invalid values', () => {
@@ -339,11 +337,9 @@ describe('document progress layout fields', () => {
       offset: 1,
       viewMode: 'document',
       fontFamily: 'comic',
-      paged: 'yes',
     }));
     const loaded = loadDocumentProgress('progress:bad');
     expect(loaded?.fontFamily).toBeUndefined();
-    expect(loaded?.paged).toBeUndefined();
   });
 });
 

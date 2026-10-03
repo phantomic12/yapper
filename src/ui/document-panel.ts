@@ -36,6 +36,8 @@ import {
   type DocumentReadingProgress,
 } from '../persistence';
 import { mountHtmlView, mountPdfView, type DocumentView } from './document-view';
+import { paginateIntoPages, type PagePagination } from './pagination';
+import { isFlowableMime } from '../document-types';
 import { parseOffsetAttr } from '../document-html';
 import { findMatches, matchSnippet } from './document-search';
 import { countWords, formatStatusBar, positionPercent } from './document-stats';
@@ -191,6 +193,16 @@ export function bindDocumentEvents(state: AppState): void {
    * script. The browser-voice paths leave this null.
    */
   let modelSpeechKind: 'document' | 'review' | null = null;
+  /**
+   * The last read-aloud session's id, kept after the session is stopped.
+   *
+   * Stop nulls `state.readerSession`, but the clips a session already
+   * generated stay in the job list. Export matches those clips by id, so
+   * without remembering it here, "stop early, export a shorter audiobook" —
+   * the point of assembling the bundle from finished clips — found nothing
+   * to assemble and showed a notice instead of a download.
+   */
+  let lastReadSessionId: string | null = null;
   /** Sessions cap here — the same limit the Read button enforces. */
   const MAX_MODEL_READ_CHARS = 20000;
 
@@ -248,6 +260,26 @@ export function bindDocumentEvents(state: AppState): void {
     fill.classList.remove('document-progress-bar__fill--indeterminate');
   }
 
+  /**
+   * The reading surfaces as page sheets.
+   *
+   * The text view and the reading overlay are the places the document is
+   * actually read (and where the live highlight moves), so they lay their
+   * paragraphs out as pages rather than one endless column. The flow is kept
+   * per surface and re-run on every render: paragraphs are rebuilt from
+   * scratch, but the observer that re-pages them when they become visible
+   * does not need to be.
+   */
+  const pageFlows = new Map<HTMLElement, PagePagination>();
+  function paginateTarget(target: HTMLElement) {
+    const flow = pageFlows.get(target);
+    if (flow) {
+      flow.layout();
+    } else {
+      pageFlows.set(target, paginateIntoPages(target));
+    }
+  }
+
   function renderReaderContent(target: HTMLElement, text: string) {
     target.innerHTML = '';
     const { sentences } = prepareReaderData(text, 300);
@@ -280,6 +312,7 @@ export function bindDocumentEvents(state: AppState): void {
       }
       target.appendChild(p);
     }
+    paginateTarget(target);
     return Array.from(target.querySelectorAll('.reader-sentence'));
   }
 
@@ -334,7 +367,6 @@ export function bindDocumentEvents(state: AppState): void {
     scale?: number;
     theme?: DocumentReadingProgress['theme'];
     fontFamily?: DocumentReadingProgress['fontFamily'];
-    paged?: boolean;
   }) {
     if (position?.offset !== undefined) lastProgressOffset = position.offset;
     updateStatusBar();
@@ -346,7 +378,6 @@ export function bindDocumentEvents(state: AppState): void {
       viewMode: docViewMode,
       theme: position?.theme ?? docView?.theme ?? savedProgress?.theme,
       fontFamily: position?.fontFamily ?? docView?.fontFamily ?? savedProgress?.fontFamily,
-      paged: position?.paged ?? docView?.paged ?? savedProgress?.paged,
     };
     clearTimeout(progressTimer);
     progressTimer = setTimeout(() => {
@@ -675,16 +706,19 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   /**
-   * The audiobook bundle: the current reading session's generated clips as
+   * The audiobook bundle: the last read-aloud session's generated clips as
    * one zip — merged WAV, document-wide captions, and a karaoke page. Only
    * what has actually been synthesised goes in; stopping early gives a
    * shorter book, not a broken one.
    */
   async function exportAudiobook() {
-    const session = state.readerSession;
+    // The id, not the session: stopping a read must not strand the clips it
+    // already produced — the bundle is assembled from finished clips, so a
+    // partial read exports as a shorter book.
+    const sessionId = lastReadSessionId;
     const clips = state.currentJobs
       .filter(job => job.status === 'done' && job.audio && job.sampleRate
-        && session && job.readerSessionId === session.getSessionId())
+        && sessionId && job.readerSessionId === sessionId)
       .sort((a, b) => (a.readerIndex ?? 0) - (b.readerIndex ?? 0))
       .map(job => ({
         text: job.text,
@@ -769,15 +803,18 @@ export function bindDocumentEvents(state: AppState): void {
       } else if (doc.html) {
         mountedView = mountHtmlView(mountHost, doc.html, doc.name, {
           onPick: readFromOffset,
+          paginated: isFlowableMime(doc.mimeType),
           sections: doc.sections,
           text: doc.text,
           initialScale: savedProgress?.scale,
           initialTheme: savedProgress?.theme,
           fontFamily: savedProgress?.fontFamily,
-          paged: savedProgress?.paged,
           onNavigate: scheduleProgressSave,
         });
       } else {
+        // No visual form of its own: the paginated text view is the reading
+        // surface, so make sure it is the one on show.
+        applyDocViewMode();
         return;
       }
       if (request !== activeFileRequest || !mountedView) {
@@ -818,6 +855,9 @@ export function bindDocumentEvents(state: AppState): void {
     // Speech about the old document must not follow the new one on screen.
     quickRead.stop();
     reviewRead.stop();
+    // The previous document's clips must not be exportable under this one's
+    // name: the session that produced them is gone.
+    lastReadSessionId = null;
     state.extractedDocument = doc;
     sourceFile = file;
     progressKey = file ? documentProgressKey(file) : null;
@@ -874,8 +914,8 @@ export function bindDocumentEvents(state: AppState): void {
   sampleBtn.addEventListener('click', () => {
     clearReaderError();
     setProgress('Loading sample…');
-    // No file: the sample is a plain-text document, so there is nothing to
-    // render as pages and the switch stays hidden.
+    // No file: the sample is a plain-text document, so it is read on the
+    // paginated text view and the switch stays hidden.
     showDocument({ ...SAMPLE_DOCUMENT }, null);
   });
 
@@ -1140,6 +1180,7 @@ export function bindDocumentEvents(state: AppState): void {
       onStateChange: renderReaderState,
       onHighlight: applyHighlight,
     });
+    lastReadSessionId = state.readerSession.getSessionId();
     state.readerSession.start(fromSentenceIndex);
   }
 

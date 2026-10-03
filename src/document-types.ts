@@ -24,6 +24,25 @@ export function getMimeType(ext: string, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Whether this format's extracted blocks flow onto page sheets.
+ *
+ * Word processors and prose formats read as pages; spreadsheets, CSV and
+ * presentations keep their own shape (tables, slides) because their grid
+ * *is* the document — one sheet per row would hide the thing being looked
+ * at, and a wide table cannot reflow into a page column anyway.
+ */
+export function isFlowableMime(mime: string): boolean {
+  return mime === 'application/msword'
+    || mime === 'application/rtf'
+    || mime === 'application/epub+zip'
+    || mime === 'application/vnd.oasis.opendocument.text'
+    || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    || mime === 'text/html'
+    || mime === 'text/plain'
+    || mime === 'text/markdown';
+}
+
 export const MAX_PDF_PAGES = 500;
 
 // ─── Page geometry ───────────────────────────────────────────────
