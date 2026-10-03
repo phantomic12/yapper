@@ -193,6 +193,16 @@ export function bindDocumentEvents(state: AppState): void {
    * script. The browser-voice paths leave this null.
    */
   let modelSpeechKind: 'document' | 'review' | null = null;
+  /**
+   * The last read-aloud session's id, kept after the session is stopped.
+   *
+   * Stop nulls `state.readerSession`, but the clips a session already
+   * generated stay in the job list. Export matches those clips by id, so
+   * without remembering it here, "stop early, export a shorter audiobook" —
+   * the point of assembling the bundle from finished clips — found nothing
+   * to assemble and showed a notice instead of a download.
+   */
+  let lastReadSessionId: string | null = null;
   /** Sessions cap here — the same limit the Read button enforces. */
   const MAX_MODEL_READ_CHARS = 20000;
 
@@ -696,16 +706,19 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   /**
-   * The audiobook bundle: the current reading session's generated clips as
+   * The audiobook bundle: the last read-aloud session's generated clips as
    * one zip — merged WAV, document-wide captions, and a karaoke page. Only
    * what has actually been synthesised goes in; stopping early gives a
    * shorter book, not a broken one.
    */
   async function exportAudiobook() {
-    const session = state.readerSession;
+    // The id, not the session: stopping a read must not strand the clips it
+    // already produced — the bundle is assembled from finished clips, so a
+    // partial read exports as a shorter book.
+    const sessionId = lastReadSessionId;
     const clips = state.currentJobs
       .filter(job => job.status === 'done' && job.audio && job.sampleRate
-        && session && job.readerSessionId === session.getSessionId())
+        && sessionId && job.readerSessionId === sessionId)
       .sort((a, b) => (a.readerIndex ?? 0) - (b.readerIndex ?? 0))
       .map(job => ({
         text: job.text,
@@ -842,6 +855,9 @@ export function bindDocumentEvents(state: AppState): void {
     // Speech about the old document must not follow the new one on screen.
     quickRead.stop();
     reviewRead.stop();
+    // The previous document's clips must not be exportable under this one's
+    // name: the session that produced them is gone.
+    lastReadSessionId = null;
     state.extractedDocument = doc;
     sourceFile = file;
     progressKey = file ? documentProgressKey(file) : null;
@@ -1164,6 +1180,7 @@ export function bindDocumentEvents(state: AppState): void {
       onStateChange: renderReaderState,
       onHighlight: applyHighlight,
     });
+    lastReadSessionId = state.readerSession.getSessionId();
     state.readerSession.start(fromSentenceIndex);
   }
 
