@@ -288,6 +288,24 @@ describe('HTML document view outline, tabs, and layout', () => {
     expect(hostEl.querySelector('[data-role="toggle-thumbnails"]')).not.toBeNull();
   });
 
+  it('re-packs the sheets when the font family changes', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
+      text: 'Text',
+      paginated: true,
+    });
+    const before = hostEl.querySelector('.docpage');
+    hostEl.querySelector<HTMLButtonElement>('[data-role="font-family"]')!.click();
+    // A new family changes glyph widths, so the sheets have to be rebuilt
+    // against it: a stale pack would leave the page cuts aiming at the old
+    // font. jsdom cannot see glyph widths, but it can see the re-pack.
+    const after = hostEl.querySelector('.docpage');
+    expect(after).not.toBeNull();
+    expect(after).not.toBe(before);
+    expect(hostEl.querySelector('.docview__count')?.textContent).toBe('Page 1 of 1');
+    expect(view.pageCount).toBe(1);
+  });
+
   it('offers a thumbnail rail of the sheets, filled from the real pages', () => {
     const hostEl = host();
     const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {

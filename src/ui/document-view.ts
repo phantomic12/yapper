@@ -1176,7 +1176,13 @@ export function mountHtmlView(
     article.style.fontFamily = FONT_FAMILY_STACKS[fontFamilyState];
     host.querySelector<HTMLButtonElement>('[data-role="font-family"]')
       ?.replaceChildren(FONT_FAMILY_LABELS[fontFamilyState]);
-    if (notify) options.onNavigate?.({ fontFamily: fontFamilyState });
+    if (notify) {
+      // A new family changes glyph widths, so the sheets must be packed
+      // against the font that is actually rendering — the width itself
+      // does not change, so the ResizeObserver never fires for this.
+      relayoutPages();
+      options.onNavigate?.({ fontFamily: fontFamilyState });
+    }
   }
 
   /** The page sheets, when this document is laid out as pages. */
