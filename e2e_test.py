@@ -2220,6 +2220,53 @@ def step_upload_csv_document(cdp_holder):
           f'{s.get("sentenceCount")} sentences, quoting intact')
 
 
+DOC_MIME = 'application/msword'
+
+
+def step_upload_doc_document(cdp_holder):
+    """A legacy .doc speaks a paragraph at a time.
+
+    The fixture is a real OLE2 compound file — the container Word 97-2003
+    documents live in — whose WordDocument stream carries UTF-16LE text
+    with the CR paragraph marks Word uses. Extraction is best-effort byte
+    scraping, so it also lifts the container's own two stream names
+    ("Root Entry", "WordDocument") as short paragraphs before the text;
+    that noise belongs to the format's binary soup, not to the fixture.
+    The assertion that matters is the join: the three document paragraphs
+    must each read as their own sentence, not run together as one
+    unbroken utterance the way a single-newline join produced.
+    """
+    target = cdp_holder['target']
+    cdp = cdp_holder['cdp']
+
+    _inject_served_file(cdp, target['id'], 'test-docs/test.doc', DOC_MIME)
+
+    extract_timeout = float(os.environ.get('YAPPER_EXTRACT_TIMEOUT', '60'))
+    start = time.time()
+    s: dict = {}
+    while time.time() - start < extract_timeout:
+        s = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
+        if s.get('previewVisible') and 'quick brown fox' in s.get('text', ''):
+            break
+        time.sleep(0.5)
+
+    if not s.get('previewVisible'):
+        raise AssertionError(f'the .doc never rendered: {json.dumps(s, default=str)[:300]}')
+    text = s.get('text', '')
+    for needle in ('The quick brown fox jumps over the lazy dog',
+                   'She sells seashells by the seashore',
+                   'How vexingly quick daft zebras jump'):
+        if needle not in text:
+            raise AssertionError(f'{needle!r} did not survive .doc extraction: {text[:200]!r}')
+    # Two container-name paragraphs plus one per document paragraph.
+    if s.get('sentenceCount', 0) != 5:
+        raise AssertionError(
+            f'the .doc must read as 5 sentences (2 stream names, 3 paragraphs), '
+            f'got {s.get("sentenceCount")}: {text[:200]!r}')
+    print(f'      ✓ .doc rendered: {s.get("wordCount")} words as '
+          f'{s.get("sentenceCount")} sentences, one per paragraph')
+
+
 def step_document_view_reading_tools(cdp_holder):
     """The reading toolbox around the document: outline panel, section tabs,
     status bar, recent shelf, search toggles, shortcut help, blackout."""
@@ -2830,6 +2877,9 @@ def main():
         ('document_view_renders_rtf', lambda: step_document_view_renders_rtf(cdp_holder)),
         ('document_view_renders_html', lambda: step_document_view_renders_html(cdp_holder)),
         ('upload_csv_document', lambda: step_upload_csv_document(cdp_holder)),
+        # The legacy binary format, with the same row-by-row respect:
+        # a .doc reads one sentence per paragraph.
+        ('upload_doc_document', lambda: step_upload_doc_document(cdp_holder)),
         # The export, opened up: read a sectioned DOCX, let one clip finish,
         # export the bundle and read the zip back out of the page to confirm
         # the chapter VTT and the karaoke player's nav both made it in.
