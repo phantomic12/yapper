@@ -254,6 +254,8 @@ describe('HTML document view outline, tabs, and layout', () => {
     // Flow layout by default: no sheets and no page controls to click.
     expect(hostEl.querySelector('.docpage')).toBeNull();
     expect(hostEl.querySelector('[data-role="page-prev"]')).toBeNull();
+    expect(hostEl.querySelector('[data-role="toggle-thumbnails"]')).toBeNull();
+    expect(hostEl.querySelector('.docview__thumbnails')).toBeNull();
     expect(view.pageCount).toBe(0);
     expect(view.activePage).toBe(0);
   });
@@ -282,6 +284,37 @@ describe('HTML document view outline, tabs, and layout', () => {
     expect(view.activePage).toBe(1);
     // The stamped markup survives the flow: runs still resolve to their block.
     expect(hostEl.querySelector('.dochtml__content [data-off="6:10"]')?.closest('p')).not.toBeNull();
+    // The rail toggle ships with the page chrome.
+    expect(hostEl.querySelector('[data-role="toggle-thumbnails"]')).not.toBeNull();
+  });
+
+  it('offers a thumbnail rail of the sheets, filled from the real pages', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
+      text: 'Text',
+      paginated: true,
+    });
+    const toggle = hostEl.querySelector<HTMLButtonElement>('[data-role="toggle-thumbnails"]')!;
+    const rail = hostEl.querySelector<HTMLElement>('.docview__thumbnails')!;
+    expect(rail.hasAttribute('hidden')).toBe(true);
+
+    toggle.click();
+    expect(rail.hasAttribute('hidden')).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const thumb = rail.querySelector<HTMLButtonElement>('.docview__thumbnail')!;
+    expect(rail.querySelectorAll('.docview__thumbnail')).toHaveLength(1);
+    expect(thumb.getAttribute('aria-label')).toBe('Go to page 1');
+    expect(thumb.getAttribute('aria-current')).toBe('page');
+    // jsdom has no IntersectionObserver, so the shell fills immediately —
+    // with a clone of the actual sheet, run stamp and all.
+    expect(thumb.querySelector('.docview__thumbnail-preview .docpage')).not.toBeNull();
+    expect(thumb.querySelector('[data-off="0:4"]')).not.toBeNull();
+
+    // Closing frees the clones; the switch reports its own state.
+    toggle.click();
+    expect(rail.hasAttribute('hidden')).toBe(true);
+    expect(rail.children).toHaveLength(0);
+    view.destroy();
   });
 });
 

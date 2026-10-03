@@ -2579,6 +2579,32 @@ body {
 .docview__thumbnail-page { display: block; font-size: 0.7rem; text-align: left; }
 .docview__thumbnail-preview { display: grid; place-items: start center; min-height: 55px; }
 .docview__thumbnail-canvas { display: block; max-width: 76px; max-height: 100px; }
+/* Thumbnails of page sheets: a scaled clone of the sheet itself, so the
+   rail shows the page's real text and headings, not a placeholder box. */
+.docview__thumbnail--sheet { padding: 5px; }
+.docview__thumbnail--sheet .docview__thumbnail-preview {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  aspect-ratio: 210 / 297;
+  background: #fff;
+}
+.docview__thumbnail--sheet .docpage { box-shadow: none; border: 0; }
+/* The rail carries the page number itself. */
+.docview__thumbnail--sheet .docpage::after { display: none; }
+.docview__thumbnail-scale {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  line-height: 1.65;
+  transform-origin: top left;
+  pointer-events: none;
+}
 .docview__thumbnails[hidden] { display: none; }
 .docview__section[hidden] { display: none; }
 .docview__pages:focus-visible,

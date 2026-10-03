@@ -935,7 +935,8 @@ export function mountHtmlView(
       ${paginated ? `
         <button class="docview__nav" type="button" data-role="page-prev" aria-label="Previous page">‹</button>
         <span class="docview__count" role="status" aria-live="polite">Page 1</span>
-        <button class="docview__nav" type="button" data-role="page-next" aria-label="Next page">›</button>` : ''}
+        <button class="docview__nav" type="button" data-role="page-next" aria-label="Next page">›</button>
+        <button class="docview__nav" type="button" data-role="toggle-thumbnails" aria-expanded="false">Thumbnails</button>` : ''}
       ${sections.length > 1 ? `
         <button class="docview__nav" type="button" data-role="section-prev" aria-label="Previous section">‹</button>
         <label class="visually-hidden" for="docview-section">Navigate chapters, sheets, or slides</label>
@@ -957,16 +958,20 @@ export function mountHtmlView(
     ${showTabs ? sectionTabsHtml(sections) : ''}
     <nav class="docview__outline" aria-label="Document outline" hidden></nav>
     <nav class="docview__overview" aria-label="Section overview" hidden></nav>
-    <div class="docview__pages" tabindex="0" role="region" aria-label="${escapeAttr(label)}">
-      <article class="dochtml" aria-label="${escapeAttr(label)}">
-        <div class="dochtml__content"></div>
-        <div class="dochtml__overlay" aria-hidden="true"></div>
-      </article>
+    <div class="docview__body">
+      ${paginated ? '<nav class="docview__thumbnails" aria-label="Page thumbnails" hidden></nav>' : ''}
+      <div class="docview__pages" tabindex="0" role="region" aria-label="${escapeAttr(label)}">
+        <article class="dochtml" aria-label="${escapeAttr(label)}">
+          <div class="dochtml__content"></div>
+          <div class="dochtml__overlay" aria-hidden="true"></div>
+        </article>
+      </div>
     </div>`;
   const article = host.querySelector<HTMLElement>('.dochtml')!;
   const content = host.querySelector<HTMLElement>('.dochtml__content')!;
   const overlay = host.querySelector<HTMLElement>('.dochtml__overlay')!;
   const pageScroller = host.querySelector<HTMLElement>('.docview__pages')!;
+  const thumbnails = host.querySelector<HTMLElement>('.docview__thumbnails');
   const sectionSelect = host.querySelector<HTMLSelectElement>('.docview__section');
   const themeButton = host.querySelector<HTMLButtonElement>('[data-role="theme"]')!;
   const zoomReadout = host.querySelector<HTMLElement>('[data-role="zoom-readout"]')!;
@@ -985,11 +990,14 @@ export function mountHtmlView(
   const virtual = content.children.length > 400;
   if (virtual) content.classList.add('dochtml__content--virtual');
 
-  const stamped = Array.from(content.querySelectorAll<HTMLElement>('[data-off]'))
-    .flatMap(el => {
+  const collectStamped = (): Array<{ el: HTMLElement; start: number; end: number }> =>
+    Array.from(content.querySelectorAll<HTMLElement>('[data-off]')).flatMap(el => {
       const range = parseOffsetAttr(el.dataset.off);
       return range ? [{ el, ...range }] : [];
     });
+  // Re-collected after every repack: cutting a paragraph across sheets
+  // rewrites the stamps on the pieces it lands on.
+  let stamped = collectStamped();
   let destroyed = false;
   let active: HTMLElement[] = [];
   let sectionIndex = 0;
@@ -998,6 +1006,11 @@ export function mountHtmlView(
   let fontFamilyState = initialFontFamily;
   /** The page-sheet flow, when this document is shown as pages. */
   let pagination: PagePagination | null = null;
+  /** Fills thumbnails as they scroll into the rail. */
+  let thumbObserver: IntersectionObserver | null = null;
+  /** While a programmatic page turn is animating, the scroll handler stands
+   *  down so intermediate positions do not rewrite the active page. */
+  let suppressScrollUntil = 0;
   /** The sheet the reader is on, for the counter and the page turns. */
   let activePageState = 1;
   let annotations: DocumentAnnotation[] = [];
@@ -1181,12 +1194,90 @@ export function mountHtmlView(
     const next = host.querySelector<HTMLButtonElement>('[data-role="page-next"]');
     if (prev) prev.disabled = activePageState <= 1;
     if (next) next.disabled = activePageState >= sheets.length;
+    thumbnails?.querySelectorAll<HTMLButtonElement>('.docview__thumbnail').forEach(button => {
+      button.setAttribute('aria-current',
+        Number(button.dataset.page) === activePageState ? 'page' : 'false');
+    });
   }
 
   function goToSheet(page: number): void {
     const sheets = pageSheets();
     const target = Math.max(1, Math.min(sheets.length, page));
     sheets[target - 1]?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    // Claim the page now rather than when the smooth scroll settles: two
+    // quick turns should land two pages ahead, not both re-target the same
+    // one. A manual scroll past this page still corrects and reports.
+    if (target === activePageState) return;
+    activePageState = target;
+    updatePageLabel();
+    suppressScrollUntil = Date.now() + 400;
+    const first = sheets[target - 1]?.querySelector<HTMLElement>('[data-off]');
+    const stamp = first ? parseOffsetAttr(first.dataset.off) : null;
+    options.onNavigate?.({ page: target, offset: stamp?.start });
+  }
+
+  /**
+   * Rebuild the thumbnail rail: one shell per sheet, each filled from the
+   * real page when it scrolls into view — the same laziness the PDF view
+   * gives its rasterised pages, so a long book does not pay for miniatures
+   * nobody looks at. Shells are only built while the rail is open.
+   */
+  function rebuildThumbnails(): void {
+    if (!thumbnails || thumbnails.hidden) return;
+    thumbnails.replaceChildren();
+    thumbObserver?.disconnect();
+    thumbObserver = null;
+    pageSheets().forEach((_, index) => {
+      const page = index + 1;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'docview__thumbnail docview__thumbnail--sheet';
+      button.dataset.page = String(page);
+      button.setAttribute('aria-label', `Go to page ${page}`);
+      if (page === activePageState) button.setAttribute('aria-current', 'page');
+      button.innerHTML = `<span class="docview__thumbnail-page">${page}</span>`
+        + '<span class="docview__thumbnail-preview"></span>';
+      thumbnails.appendChild(button);
+    });
+    const shells = Array.from(
+      thumbnails.querySelectorAll<HTMLButtonElement>('.docview__thumbnail'));
+    if (typeof IntersectionObserver === 'undefined') {
+      shells.forEach(button => fillThumbnail(button, Number(button.dataset.page)));
+      return;
+    }
+    thumbObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const button = entry.target as HTMLButtonElement;
+        thumbObserver?.unobserve(button);
+        fillThumbnail(button, Number(button.dataset.page));
+      }
+    }, { root: thumbnails, rootMargin: '160px' });
+    shells.forEach(button => thumbObserver!.observe(button));
+  }
+
+  /**
+   * Clone the sheet into its thumbnail and scale it down: a real miniature
+   * of the page's own text and headings rather than a placeholder box.
+   */
+  function fillThumbnail(button: HTMLButtonElement, page: number): void {
+    const sheet = pageSheets()[page - 1];
+    const preview = button.querySelector<HTMLElement>('.docview__thumbnail-preview');
+    if (!sheet || !preview) return;
+    const width = sheet.offsetWidth;
+    const clone = sheet.cloneNode(true) as HTMLElement;
+    clone.style.width = `${width}px`;
+    // The miniature reuses the document's own block styles and type size,
+    // so it carries the article's class even though it leaves the article.
+    const scaler = document.createElement('span');
+    scaler.className = 'dochtml docview__thumbnail-scale';
+    scaler.style.width = `${width}px`;
+    scaler.style.fontSize = article.style.fontSize;
+    scaler.appendChild(clone);
+    preview.replaceChildren(scaler);
+    if (width > 0 && preview.clientWidth > 0) {
+      scaler.style.transform = `scale(${preview.clientWidth / width})`;
+    }
   }
 
   /**
@@ -1336,6 +1427,17 @@ export function mountHtmlView(
     const role = button.dataset.role;
     if (role === 'page-prev' || role === 'page-next') {
       goToSheet(activePageState + (role === 'page-next' ? 1 : -1));
+    } else if (role === 'toggle-thumbnails') {
+      if (!thumbnails) return;
+      thumbnails.hidden = !thumbnails.hidden;
+      button.setAttribute('aria-expanded', String(!thumbnails.hidden));
+      if (thumbnails.hidden) {
+        thumbObserver?.disconnect();
+        thumbObserver = null;
+        thumbnails.replaceChildren();
+      } else {
+        rebuildThumbnails();
+      }
     } else if (role === 'section-prev' || role === 'section-next') {
       if (!sections.length) return;
       const direction = role === 'section-next' ? 1 : -1;
@@ -1381,6 +1483,11 @@ export function mountHtmlView(
     goToOffset(sections[Number(tab.dataset.sectionIndex)]?.start ?? 0);
   }, { signal });
 
+  thumbnails?.addEventListener('click', event => {
+    const target = (event.target as HTMLElement).closest<HTMLButtonElement>('.docview__thumbnail');
+    if (target) goToSheet(Number(target.dataset.page));
+  }, { signal });
+
   overviewPanel.addEventListener('click', event => {
     const card = (event.target as HTMLElement).closest<HTMLElement>('[data-section-index]');
     if (!card) return;
@@ -1417,6 +1524,7 @@ export function mountHtmlView(
   // the reader is on, the same contract the PDF view reports.
   pageScroller.addEventListener('scroll', () => {
     if (!paginated || destroyed) return;
+    if (Date.now() < suppressScrollUntil) return;
     const sheets = pageSheets();
     if (!sheets.length) return;
     const mid = pageScroller.getBoundingClientRect().top + pageScroller.clientHeight / 2;
@@ -1443,7 +1551,19 @@ export function mountHtmlView(
   });
   applyLayout(false);
   if (paginated) {
-    pagination = paginateIntoPages(content, { onPageCount: () => updatePageLabel() });
+    pagination = paginateIntoPages(content, {
+      onPageCount: () => {
+        // A repack may have cut paragraphs: refresh the offset bookkeeping
+        // and drop boxes and block markers positioned against the old
+        // layout. Annotations repaint here; the live reading cursor is
+        // repainted by the next highlight tick.
+        stamped = collectStamped();
+        clear();
+        repaintPersistent();
+        updatePageLabel();
+        rebuildThumbnails();
+      },
+    });
   }
   updatePageLabel();
 
@@ -1479,6 +1599,8 @@ export function mountHtmlView(
       search?.dispose();
       pagination?.destroy();
       pagination = null;
+      thumbObserver?.disconnect();
+      thumbObserver = null;
       sectionObserver?.disconnect();
       eventController.abort();
       clear();
