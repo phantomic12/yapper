@@ -1734,7 +1734,12 @@ DOCHTML_STATE_JS = """(function() {
                 cursor = end;
             }
             blocks++;
-            cursor += 2;
+            // A paragraph cut across page sheets continues on the next
+            // block with no blank line between: only a block that ENDS a
+            // paragraph advances the cursor over the separator.
+            if (!block.classList.contains('doc-split-more')) {
+                cursor += 2;
+            }
         }
         return { ok: true, blocks, textLength: Math.max(0, cursor - 2) };
     })();
@@ -2011,8 +2016,15 @@ def step_document_view_renders_epub(cdp_holder):
         raise AssertionError(f'EPUB stamps do not line up: {stamps.get("reason")}')
     if state.get('scriptTags'):
         raise AssertionError('the document view executed markup out of the uploaded EPUB')
-    if 'alert(1)' not in (state.get('paragraphText') or ''):
-        raise AssertionError('the inert <script> string lost its text representation')
+    # The rendered runs, not the 120-char diagnostic slice of the content:
+    # the script line sits deep in chapter one (its run starts at offset 339
+    # of the fixture), so a prefix check could only pass by the chapter not
+    # rendering. What matters is the literal markup surviving as text.
+    rendered = ' '.join(r.get('text') or '' for r in runs)
+    if 'alert(1)' not in rendered:
+        raise AssertionError(
+            f'the inert <script> string lost its text representation: '
+            f'{rendered[:120]!r}')
     if not state.get('headings') or state.get('headings', 0) < 2:
         raise AssertionError(f'chapter headings did not render: {state.get("headings")}')
     if not state.get('listItems') or state.get('listItems', 0) < 2:
@@ -2260,7 +2272,11 @@ def step_upload_doc_document(cdp_holder):
     s: dict = {}
     while time.time() - start < extract_timeout:
         s = v(cdp.eval(READER_STATE_JS, target['id'], timeout=10))
-        if s.get('previewVisible') and 'quick brown fox' in s.get('text', ''):
+        # Wait for THIS file: "quick brown fox" is also a cell in the CSV
+        # fixture read two steps back, so probing on it matched the
+        # previous document's text and asserted against that instead. The
+        # progress label names the file that is actually loaded.
+        if s.get('previewVisible') and 'test.doc' in (s.get('progressText') or ''):
             break
         time.sleep(0.5)
 
@@ -2747,16 +2763,20 @@ def step_audiobook_chapters_export(cdp_holder):
 
     # One finished clip is enough: the bundle assembles from whatever the
     # session has produced, and reading the whole probe would add minutes.
+    # "One clip" means one MORE than before this read: done job cards from
+    # earlier steps (and jobs restored across a reload) are always on screen
+    # and would otherwise satisfy the wait before this session made anything.
+    before = _done_clips(cdp, target['id'])
     _click_trusted(cdp, target['id'], '#read-document-btn')
     clip_timeout = float(os.environ.get('YAPPER_AUDIOBOOK_CLIP_TIMEOUT', '180'))
     start = time.time()
-    done = 0
+    done = before
     while time.time() - start < clip_timeout:
         done = _done_clips(cdp, target['id'])
-        if done:
+        if done > before:
             break
         time.sleep(1.5)
-    if not done:
+    if done <= before:
         raise AssertionError(
             f'no clip finished generating within {clip_timeout}s, so the '
             f'audiobook has nothing to assemble')
