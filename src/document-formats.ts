@@ -128,16 +128,30 @@ function docxInTableCell(el: Element): boolean {
 }
 
 /**
+ * The row that directly owns this paragraph, if any. A nested table's
+ * paragraphs belong to the nested row — which is emitted as its own block —
+ * so counting them here would read that text twice.
+ */
+function docxOwningRow(el: Element): Element | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.tagName === 'w:tr') return node;
+  }
+  return null;
+}
+
+/**
  * A table row as one block — the HTML `tr` trick carried over: the cells
  * join with the separator CSV extraction established, so the row speaks
  * as a phrase where one block per cell would read as a column of
  * disconnected words. An empty cell is dropped, and a cell's own
- * paragraphs join with spaces, exactly as the HTML row does.
+ * paragraphs join with spaces, exactly as the HTML row does. A nested
+ * table's paragraphs are left to the nested row's own block.
  */
 function docxTableRowBlock(tr: Element): DocumentBlock | null {
   const cells = Array.from(tr.children)
     .filter(cell => cell.tagName === 'w:tc')
     .map(cell => Array.from(cell.getElementsByTagName('w:p'))
+      .filter(p => docxOwningRow(p) === tr)
       .map(p => collapseWhitespace(docxParagraphRuns(p).map(run => run.text).join('')))
       .filter(Boolean)
       .join(' '))
@@ -765,15 +779,27 @@ function odtInTableRow(el: Element): boolean {
 }
 
 /**
+ * The row that directly owns this paragraph or heading, if any — nested
+ * tables keep their content to themselves, read by their own row block.
+ */
+function odtOwningRow(el: Element): Element | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.localName === 'table-row') return node;
+  }
+  return null;
+}
+
+/**
  * A table row as one block — the HTML `tr` trick carried over: empty
  * cells dropped, a cell's own paragraphs joined with spaces, and the
- * cells joined with the separator CSV extraction established.
+ * cells joined with the separator CSV extraction established. Nested
+ * tables are read by their own row block instead of here.
  */
 function odtTableRowBlock(tr: Element): DocumentBlock | null {
   const cells = Array.from(tr.children)
     .filter(cell => cell.localName === 'table-cell' || cell.localName === 'covered-table-cell')
     .map(cell => Array.from(cell.getElementsByTagName('*'))
-      .filter(el => el.localName === 'p' || el.localName === 'h')
+      .filter(el => (el.localName === 'p' || el.localName === 'h') && odtOwningRow(el) === tr)
       .map(p => collapseWhitespace(p.textContent ?? ''))
       .filter(Boolean)
       .join(' '))

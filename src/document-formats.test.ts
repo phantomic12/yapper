@@ -809,4 +809,57 @@ describe('table rows as sentences', () => {
       'Before the table.', 'Name, Score', 'Ada second line, 98, Solid.', 'After the table.',
     ]);
   });
+
+  it('reads a nested DOCX table from its own row, not the enclosing one', async () => {
+    const nested = `<?xml version="1.0" encoding="UTF-8"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+          <w:tbl>
+            <w:tr>
+              <w:tc>
+                <w:p><w:r><w:t>Outer</w:t></w:r></w:p>
+                <w:tbl>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                </w:tbl>
+              </w:tc>
+            </w:tr>
+          </w:tbl>
+        </w:body>
+      </w:document>`;
+    const file = await zipFile('nested.docx', { 'word/document.xml': nested });
+    const doc = await extractFormat('docx', file);
+    // The nested row is its own block, so its cell speaks once — and in
+    // document order, after the row that contains the nested table.
+    expect(doc.text).toBe('Outer\n\nInner');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Outer', 'Inner']);
+  });
+
+  it('reads a nested ODT table from its own row, not the enclosing one', async () => {
+    const nested = `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+         xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+         xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+      <office:body><office:text>
+        <table:table table:name="T">
+          <table:table-row>
+            <table:table-cell>
+              <text:p>Outer</text:p>
+              <table:table>
+                <table:table-row>
+                  <table:table-cell><text:p>Inner</text:p></table:table-cell>
+                </table:table-row>
+              </table:table>
+            </table:table-cell>
+          </table:table-row>
+        </table:table>
+      </office:text></office:body>
+    </office:document-content>`;
+    const file = await zipFile('nested.odt', { 'content.xml': nested });
+    const doc = await extractFormat('odt', file);
+    expect(doc.text).toBe('Outer\n\nInner');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual(['Outer', 'Inner']);
+  });
 });
