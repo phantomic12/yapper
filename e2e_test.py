@@ -1710,7 +1710,15 @@ DOCHTML_STATE_JS = """(function() {
         if (!content) return { ok: false, blocks: 0, reason: 'no content' };
         let cursor = 0;
         let blocks = 0;
-        for (const block of content.children) {
+        // The blocks may be flowed onto page sheets (the PDF-reader look);
+        // the invariant is about the blocks themselves, whatever they are
+        // nested in.
+        const top = [...content.children];
+        const sheets = top.filter(el => el.classList && el.classList.contains('docpage'));
+        const blocksInOrder = sheets.length
+            ? sheets.flatMap(sheet => [...sheet.querySelectorAll('.docpage__body > *')])
+            : top;
+        for (const block of blocksInOrder) {
             const spans = [...block.querySelectorAll('[data-off]')];
             if (!spans.length) continue;
             for (const span of spans) {
@@ -1749,6 +1757,7 @@ DOCHTML_STATE_JS = """(function() {
         scriptTags: content ? content.querySelectorAll('script').length : 0,
         paragraphText: content ? (content.textContent || '').slice(0, 120) : '',
         highlightBoxes: host.querySelectorAll('.dochtml__hl').length,
+        pageSheets: content ? content.querySelectorAll('.docpage').length : 0,
         runRects: runs.map(el => {
             const b = el.getBoundingClientRect();
             return { left: b.left, top: b.top, width: b.width, height: b.height };
@@ -1810,6 +1819,8 @@ def step_document_view_renders_docx(cdp_holder):
             'the rendered stamps do not line up with the extracted text: '
             f'{stamps.get("reason")}'
         )
+    if not state.get('pageSheets'):
+        raise AssertionError('the DOCX rendered without page sheets')
     print(f'      ✓ DOCX rendered as a document: {len(runs)} stamped runs across '
           f'{stamps.get("blocks")} blocks, {state["headings"]} headings, '
           f'{state["listItems"]} list items, {state["boldRuns"]} bold / '
@@ -2085,6 +2096,9 @@ def _assert_rendered(state: dict, label: str) -> str:
             f'{label} runs do not tile the extracted text: {state.get("stamps")}')
     if state.get('scriptTags'):
         raise AssertionError(f'{label} executed markup out of the uploaded file')
+    if not state.get('pageSheets'):
+        raise AssertionError(
+            f'{label} rendered no page sheets (pageSheets={state.get("pageSheets")})')
     return ' '.join(r.get('text') or '' for r in state.get('runs') or [])
 
 

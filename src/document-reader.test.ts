@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox,
+  getMimeType, getFileExtension, isFlowableMime, MAX_PDF_PAGES, quadToBbox,
   parseCsv,
   type OcrMode, type QuadWord,
 } from './document-types';
@@ -41,6 +41,32 @@ describe('getMimeType', () => {
 
   it('returns the empty fallback when ext is unknown and no fallback given', () => {
     expect(getMimeType('xyz', '')).toBe('');
+  });
+});
+
+describe('isFlowableMime', () => {
+  it.each([
+    'application/msword',
+    'application/rtf',
+    'application/epub+zip',
+    'application/vnd.oasis.opendocument.text',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/html',
+    'text/plain',
+    'text/markdown',
+  ])('flows %s onto page sheets', mime => {
+    expect(isFlowableMime(mime)).toBe(true);
+  });
+
+  it.each([
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/csv',
+    'application/octet-stream',
+    '',
+  ])('keeps %s in its own layout', mime => {
+    expect(isFlowableMime(mime)).toBe(false);
   });
 });
 

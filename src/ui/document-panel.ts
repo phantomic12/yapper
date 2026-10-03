@@ -36,6 +36,8 @@ import {
   type DocumentReadingProgress,
 } from '../persistence';
 import { mountHtmlView, mountPdfView, type DocumentView } from './document-view';
+import { paginateIntoPages, type PagePagination } from './pagination';
+import { isFlowableMime } from '../document-types';
 import { parseOffsetAttr } from '../document-html';
 import { findMatches, matchSnippet } from './document-search';
 import { countWords, formatStatusBar, positionPercent } from './document-stats';
@@ -248,6 +250,26 @@ export function bindDocumentEvents(state: AppState): void {
     fill.classList.remove('document-progress-bar__fill--indeterminate');
   }
 
+  /**
+   * The reading surfaces as page sheets.
+   *
+   * The text view and the reading overlay are the places the document is
+   * actually read (and where the live highlight moves), so they lay their
+   * paragraphs out as pages rather than one endless column. The flow is kept
+   * per surface and re-run on every render: paragraphs are rebuilt from
+   * scratch, but the observer that re-pages them when they become visible
+   * does not need to be.
+   */
+  const pageFlows = new Map<HTMLElement, PagePagination>();
+  function paginateTarget(target: HTMLElement) {
+    const flow = pageFlows.get(target);
+    if (flow) {
+      flow.layout();
+    } else {
+      pageFlows.set(target, paginateIntoPages(target));
+    }
+  }
+
   function renderReaderContent(target: HTMLElement, text: string) {
     target.innerHTML = '';
     const { sentences } = prepareReaderData(text, 300);
@@ -280,6 +302,7 @@ export function bindDocumentEvents(state: AppState): void {
       }
       target.appendChild(p);
     }
+    paginateTarget(target);
     return Array.from(target.querySelectorAll('.reader-sentence'));
   }
 
@@ -334,7 +357,6 @@ export function bindDocumentEvents(state: AppState): void {
     scale?: number;
     theme?: DocumentReadingProgress['theme'];
     fontFamily?: DocumentReadingProgress['fontFamily'];
-    paged?: boolean;
   }) {
     if (position?.offset !== undefined) lastProgressOffset = position.offset;
     updateStatusBar();
@@ -346,7 +368,6 @@ export function bindDocumentEvents(state: AppState): void {
       viewMode: docViewMode,
       theme: position?.theme ?? docView?.theme ?? savedProgress?.theme,
       fontFamily: position?.fontFamily ?? docView?.fontFamily ?? savedProgress?.fontFamily,
-      paged: position?.paged ?? docView?.paged ?? savedProgress?.paged,
     };
     clearTimeout(progressTimer);
     progressTimer = setTimeout(() => {
@@ -769,15 +790,18 @@ export function bindDocumentEvents(state: AppState): void {
       } else if (doc.html) {
         mountedView = mountHtmlView(mountHost, doc.html, doc.name, {
           onPick: readFromOffset,
+          paginated: isFlowableMime(doc.mimeType),
           sections: doc.sections,
           text: doc.text,
           initialScale: savedProgress?.scale,
           initialTheme: savedProgress?.theme,
           fontFamily: savedProgress?.fontFamily,
-          paged: savedProgress?.paged,
           onNavigate: scheduleProgressSave,
         });
       } else {
+        // No visual form of its own: the paginated text view is the reading
+        // surface, so make sure it is the one on show.
+        applyDocViewMode();
         return;
       }
       if (request !== activeFileRequest || !mountedView) {
@@ -874,8 +898,8 @@ export function bindDocumentEvents(state: AppState): void {
   sampleBtn.addEventListener('click', () => {
     clearReaderError();
     setProgress('Loading sample…');
-    // No file: the sample is a plain-text document, so there is nothing to
-    // render as pages and the switch stays hidden.
+    // No file: the sample is a plain-text document, so it is read on the
+    // paginated text view and the switch stays hidden.
     showDocument({ ...SAMPLE_DOCUMENT }, null);
   });
 

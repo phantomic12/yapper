@@ -241,22 +241,47 @@ describe('HTML document view outline, tabs, and layout', () => {
     expect(onNavigate).toHaveBeenLastCalledWith({ offset: 12, scale: 1 });
   });
 
-  it('cycles the font family and toggles paged layout', () => {
+  it('cycles the font family and reports it for persistence', () => {
     const hostEl = host();
     const onNavigate = vi.fn();
     const view = mountHtmlView(hostEl, '<p data-off="0:4">Text</p>', 'Plain', {
       text: 'Text',
       onNavigate,
     });
-    expect(view.paged).toBe(false);
-    hostEl.querySelector<HTMLButtonElement>('[data-role="paged"]')!.click();
-    expect(view.paged).toBe(true);
-    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'sans', paged: true });
-    expect(hostEl.querySelector('.dochtml__content')!.classList.contains('dochtml__content--paged')).toBe(true);
-
     hostEl.querySelector<HTMLButtonElement>('[data-role="font-family"]')!.click();
     expect(view.fontFamily).toBe('mono');
-    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'mono', paged: true });
+    expect(onNavigate).toHaveBeenLastCalledWith({ fontFamily: 'mono' });
+    // Flow layout by default: no sheets and no page controls to click.
+    expect(hostEl.querySelector('.docpage')).toBeNull();
+    expect(hostEl.querySelector('[data-role="page-prev"]')).toBeNull();
+    expect(view.pageCount).toBe(0);
+    expect(view.activePage).toBe(0);
+  });
+
+  it('flows blocks onto page sheets with a page counter and page turns', () => {
+    const hostEl = host();
+    const view = mountHtmlView(hostEl,
+      '<p data-off="0:4">Text</p><p data-off="6:10">more</p>', 'Plain', {
+      text: 'Text\n\nmore',
+      paginated: true,
+    });
+    expect(hostEl.classList.contains('docview--pages')).toBe(true);
+    // jsdom has no layout, so the whole document fits one sheet — but it is
+    // a sheet: the runs sit on it and the counter reads its page.
+    const sheets = hostEl.querySelectorAll('.docpage');
+    expect(sheets).toHaveLength(1);
+    expect(sheets[0].querySelectorAll('[data-off]')).toHaveLength(2);
+    expect(sheets[0].getAttribute('aria-label')).toBe('Page 1 of 1');
+    expect(view.pageCount).toBe(1);
+    expect(view.activePage).toBe(1);
+    expect(hostEl.querySelector('.docview__count')?.textContent).toBe('Page 1 of 1');
+    // Page turns walk the sheets and clamp at the ends.
+    view.nextPage();
+    expect(view.activePage).toBe(1);
+    view.prevPage();
+    expect(view.activePage).toBe(1);
+    // The stamped markup survives the flow: runs still resolve to their block.
+    expect(hostEl.querySelector('.dochtml__content [data-off="6:10"]')?.closest('p')).not.toBeNull();
   });
 });
 
