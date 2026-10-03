@@ -736,3 +736,77 @@ describe('the committed ODT fixture', () => {
     ]);
   });
 });
+
+// Table rows speak as one block — the HTML `tr` trick — in the two
+// formats that used to emit one block per cell. The reader hears a row
+// as a phrase instead of a column of disconnected words, and each row
+// segments as its own sentence.
+describe('table rows as sentences', () => {
+  const docxTable = `<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>Before the table.</w:t></w:r></w:p>
+        <w:tbl>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>Score</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p></w:p></w:tc>
+          </w:tr>
+          <w:tr>
+            <w:tc><w:p><w:r><w:t>Ada</w:t></w:r></w:p><w:p><w:r><w:t>second line</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>98</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>Solid.</w:t></w:r></w:p></w:tc>
+          </w:tr>
+        </w:tbl>
+        <w:p><w:r><w:t>After the table.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>`;
+
+  it('reads each DOCX row as its own sentence', async () => {
+    const file = await zipFile('table.docx', { 'word/document.xml': docxTable });
+    const doc = await extractFormat('docx', file);
+    // The empty cell is dropped and a cell's own paragraphs join with
+    // spaces — the contract the HTML row established.
+    expect(doc.text).toBe(
+      'Before the table.\n\nName, Score\n\nAda second line, 98, Solid.\n\nAfter the table.');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.', 'Name, Score', 'Ada second line, 98, Solid.', 'After the table.',
+    ]);
+    for (const stamp of stampedTexts(doc.html ?? '')) {
+      expect(doc.text.slice(stamp.start, stamp.end)).toBe(stamp.text);
+    }
+  });
+
+  const odtTable = `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+       xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+       xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+    <office:body><office:text>
+      <text:p>Before the table.</text:p>
+      <table:table table:name="T">
+        <table:table-row>
+          <table:table-cell><text:p>Name</text:p></table:table-cell>
+          <table:table-cell><text:p>Score</text:p></table:table-cell>
+          <table:table-cell><text:p/></table:table-cell>
+        </table:table-row>
+        <table:table-row>
+          <table:table-cell><text:p>Ada</text:p><text:p>second line</text:p></table:table-cell>
+          <table:table-cell><text:p>98</text:p></table:table-cell>
+          <table:table-cell><text:p>Solid.</text:p></table:table-cell>
+        </table:table-row>
+      </table:table>
+      <text:p>After the table.</text:p>
+    </office:text></office:body>
+  </office:document-content>`;
+
+  it('reads each ODT row as its own sentence', async () => {
+    const file = await zipFile('table.odt', { 'content.xml': odtTable });
+    const doc = await extractFormat('odt', file);
+    expect(doc.text).toBe(
+      'Before the table.\n\nName, Score\n\nAda second line, 98, Solid.\n\nAfter the table.');
+    const { sentences } = prepareReaderData(doc.text);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.', 'Name, Score', 'Ada second line, 98, Solid.', 'After the table.',
+    ]);
+  });
+});
