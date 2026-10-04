@@ -64,6 +64,11 @@ export interface ReaderOptions {
   lookahead?: number;
   /** Playback speed passed to the engine. */
   speed?: number;
+  /**
+   * Character ranges of the text that must be spoken as one sentence —
+   * table rows, so a period inside a cell cannot split the row.
+   */
+  atomicRanges?: ReadonlyArray<readonly [number, number]>;
   /** Called whenever the reader state changes. */
   onStateChange?: (state: ReaderState) => void;
   /** Called continuously while audio plays with the current sentence/word. */
@@ -98,7 +103,7 @@ export class DocumentReaderSession {
       ...options,
     };
     this.sessionId = `read-${Math.random().toString(36).slice(2)}-${Date.now()}`;
-    const { sentences, chunks } = prepareReaderData(fullText.trim(), this.options.chunkSize);
+    const { sentences, chunks } = prepareReaderData(fullText.trim(), this.options.chunkSize, this.options.atomicRanges);
     this.allSentences = sentences;
     this.chunks = chunks;
     this.state = {
@@ -416,9 +421,19 @@ export function pickHighlightedWord(
   return Math.min(Math.floor(ratio * totalWords), totalWords - 1);
 }
 
-/** Splits raw text into sentences and reading-order chunks. */
-export function prepareReaderData(text: string, maxChars: number = 300): PreparedReaderData {
-  const sentences = segmentSentences(text);
+/** Splits raw text into sentences and reading-order chunks.
+ *
+ * `atomicRanges` are character ranges of `text` that must stay whole —
+ * table rows. Without them a period inside a cell cuts the row it sits in
+ * into two reader sentences; the blank line between rows is what separates
+ * rows, and nothing inside a row should.
+ */
+export function prepareReaderData(
+  text: string,
+  maxChars: number = 300,
+  atomicRanges?: ReadonlyArray<readonly [number, number]>,
+): PreparedReaderData {
+  const sentences = segmentSentences(text, atomicRanges);
   assignOffsets(sentences, text);
   const chunks = buildChunks(sentences, maxChars);
   return { sentences, chunks };
@@ -504,13 +519,106 @@ function isAbbreviation(token: string): boolean {
   return ABBREVIATIONS.has(token.replace(/\.+$/, '').toLowerCase());
 }
 
-function segmentSentences(text: string): ReaderSentence[] {
-  const paragraphs = text.split(/\n\s*\n/);
+/** Where one paragraph sits in the source: [start, end), separators excluded. */
+interface ParagraphSpan {
+  start: number;
+  end: number;
+}
+
+/**
+ * Split the text into paragraphs the way the blank-line rule always has,
+ * but keep each one's offsets: atomic ranges are expressed in source
+ * coordinates, so a piece has to say where it came from to be matched
+ * against them.
+ */
+function paragraphSpans(text: string): ParagraphSpan[] {
+  const spans: ParagraphSpan[] = [];
+  const separator = /\n\s*\n/g;
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = separator.exec(text))) {
+    spans.push({ start, end: match.index });
+    start = match.index + match[0].length;
+  }
+  spans.push({ start, end: text.length });
+  return spans;
+}
+
+/**
+ * The atomic range holding each paragraph, or -1.
+ *
+ * Every extractor emits its ranges in document order, but a sorted copy
+ * makes the walk safe against any producer — and lets one pointer per side
+ * match them in a single pass, because a spreadsheet can carry ten
+ * thousand rows and as many paragraphs to match against.
+ */
+function atomicOwners(
+  spans: ParagraphSpan[],
+  atomicRanges?: ReadonlyArray<readonly [number, number]>,
+): number[] {
+  const owner = new Array<number>(spans.length).fill(-1);
+  if (!atomicRanges?.length) return owner;
+  const ranges = [...atomicRanges].sort((a, b) => a[0] - b[0]);
+  let range = 0;
+  for (let i = 0; i < spans.length; i++) {
+    const span = spans[i];
+    // Ranges are disjoint and both sides ascend, so a range that ends
+    // before this paragraph starts can never hold a later one either.
+    while (range < ranges.length && ranges[range][1] < span.start) range++;
+    if (range < ranges.length
+      && ranges[range][0] <= span.start
+      && span.end <= ranges[range][1]) {
+      owner[i] = range;
+    }
+  }
+  return owner;
+}
+
+function segmentSentences(
+  text: string,
+  atomicRanges?: ReadonlyArray<readonly [number, number]>,
+): ReaderSentence[] {
+  const spans = paragraphSpans(text);
+  const owner = atomicOwners(spans, atomicRanges);
+  const paragraphs = spans.map(span => text.slice(span.start, span.end));
   let globalIndex = 0;
   const sentences: ReaderSentence[] = [];
+  /**
+   * The atomic row currently open. A cell can hold a blank line, which
+   * makes one row several paragraphs — they still speak as one sentence,
+   * so the pieces accumulate here until the row ends.
+   */
+  let open: { owner: number; start: number; end: number; paragraphIndex: number } | null = null;
+  const flushOpen = () => {
+    if (!open) return;
+    const sentence = text.slice(open.start, open.end).trim();
+    const words = sentence.match(/\S+/g) ?? [sentence];
+    sentences.push({ text: sentence, words, globalIndex, paragraphIndex: open.paragraphIndex });
+    globalIndex++;
+    open = null;
+  };
 
   for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
     const raw = paragraphs[paragraphIndex].trim();
+    if (owner[paragraphIndex] !== -1) {
+      // A marked paragraph speaks whole: the punctuation inside a table row
+      // is the row's own business, not a sentence boundary.
+      if (open && open.owner === owner[paragraphIndex]) {
+        if (raw) open.end = spans[paragraphIndex].end;
+        continue;
+      }
+      flushOpen();
+      if (raw) {
+        open = {
+          owner: owner[paragraphIndex],
+          start: spans[paragraphIndex].start,
+          end: spans[paragraphIndex].end,
+          paragraphIndex,
+        };
+      }
+      continue;
+    }
+    flushOpen();
     if (!raw) continue;
 
     // Split on sentence-ending punctuation followed by a capital letter /
@@ -519,6 +627,11 @@ function segmentSentences(text: string): ReaderSentence[] {
     // a placeholder.
     const PROTECTED = '\u0001';
     let protectedText = raw;
+    // A period between digits is a decimal point, not a terminator —
+    // "3.5" would otherwise split into "3." and "5", chopping one number
+    // across two reader sentences ("Version 3." / "5 is out."). Same
+    // placeholder, same restore as the abbreviation guard below.
+    protectedText = protectedText.replace(/(?<=\d)\.(?=\d)/g, PROTECTED);
     // Protect abbreviations like "Mr." / "U.S." by replacing their dot with
     // a placeholder, then restoring it after splitting. The lookahead must
     // include digits (dates: "Jan. 5, 2024"), CJK chars (mixed-script text),
@@ -540,6 +653,7 @@ function segmentSentences(text: string): ReaderSentence[] {
       globalIndex++;
     }
   }
+  flushOpen();
 
   // Fallback: if no sentences were produced, treat the whole text as one sentence.
   if (sentences.length === 0 && text.trim()) {

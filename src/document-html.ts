@@ -27,6 +27,13 @@ export interface DocumentBlock {
   frame?: DocumentFrame;
   /** Per-block text alignment (PPTX `algn`). */
   align?: 'left' | 'center' | 'right';
+  /**
+   * One reader sentence: the block must never be split at interior
+   * punctuation. Table rows carry it, so a period inside a cell cannot
+   * cut the row into two sentences — the blank line between rows is what
+   * separates them, and the punctuation inside a row is the row's own.
+   */
+  atomic?: boolean;
 }
 
 /** Percent-of-slide geometry for one presentation shape. */
@@ -109,6 +116,7 @@ export function blocksToTextHtmlAndSections(blocks: DocumentBlock[]): {
   text: string;
   html: string;
   sections: DocumentSection[];
+  atomicRanges: Array<[number, number]>;
 } {
   const kept = blocks.filter(block => block.runs.map(run => run.text).join('').trim().length > 0);
   const levels = sectionHeadingLevels(kept);
@@ -116,6 +124,9 @@ export function blocksToTextHtmlAndSections(blocks: DocumentBlock[]): {
   let text = '';
   const htmlParts: string[] = [];
   const headings: Array<{ title: string; start: number }> = [];
+  // Ranges of `text` that speak as one sentence (`DocumentBlock.atomic`),
+  // collected in the same pass as the text so the offsets cannot drift.
+  const atomicRanges: Array<[number, number]> = [];
 
   for (const [index, block] of kept.entries()) {
     if (index > 0) {
@@ -128,6 +139,7 @@ export function blocksToTextHtmlAndSections(blocks: DocumentBlock[]): {
     htmlParts.push(stamped.html);
     offset = stamped.end;
     text += block.runs.map(run => run.text).join('');
+    if (block.atomic) atomicRanges.push([blockStart, offset]);
     if (levels.has(block.kind)) {
       headings.push({ title: block.runs.map(run => run.text).join('').trim(), start: blockStart });
     }
@@ -141,13 +153,17 @@ export function blocksToTextHtmlAndSections(blocks: DocumentBlock[]): {
       end: headings[index + 1]?.start ?? text.length,
     }));
 
-  return { text, html: htmlParts.join(''), sections };
+  return { text, html: htmlParts.join(''), sections, atomicRanges };
 }
 
 /** Build extracted text and stamped markup from one list of blocks. */
-export function blocksToTextAndHtml(blocks: DocumentBlock[]): { text: string; html: string } {
-  const { text, html } = blocksToTextHtmlAndSections(blocks);
-  return { text, html };
+export function blocksToTextAndHtml(blocks: DocumentBlock[]): {
+  text: string;
+  html: string;
+  atomicRanges: Array<[number, number]>;
+} {
+  const { text, html, atomicRanges } = blocksToTextHtmlAndSections(blocks);
+  return { text, html, atomicRanges };
 }
 
 export interface DocumentGrid {
@@ -180,10 +196,14 @@ export function gridsToTextAndHtml(grids: DocumentGrid[]): {
   text: string;
   html: string;
   sections: Array<{ title: string; start: number; end: number }>;
+  atomicRanges: Array<[number, number]>;
 } {
   const textParts: string[] = [];
   const htmlParts: string[] = [];
   const sections: Array<{ title: string; start: number; end: number }> = [];
+  // Every row is one sentence, punctuation inside a cell or not: the range
+  // of each row as it lands in `text`, collected alongside the stamps.
+  const atomicRanges: Array<[number, number]> = [];
   let offset = 0;
   const kept = grids.map(grid => ({
     ...grid,
@@ -198,6 +218,7 @@ export function gridsToTextAndHtml(grids: DocumentGrid[]): {
     grid.rows.forEach((row, rowIndex) => {
       const cells: string[] = [];
       const values: string[] = [];
+      const rowStart = offset;
       row.forEach((value, cellIndex) => {
         if (cellIndex) offset += (grid.delimiter ?? '\t').length;
         const cellStart = offset;
@@ -209,7 +230,9 @@ export function gridsToTextAndHtml(grids: DocumentGrid[]): {
         cells.push(`<${tag}${scope}>${content}</${tag}>`);
       });
       renderedRows.push(`<tr>${cells.join('')}</tr>`);
-      gridText.push(values.join(grid.delimiter ?? '\t'));
+      const rowText = values.join(grid.delimiter ?? '\t');
+      gridText.push(rowText);
+      atomicRanges.push([rowStart, rowStart + rowText.length]);
       if (rowIndex < grid.rows.length - 1) offset += (grid.rowSeparator ?? '\n\n').length;
     });
     const title = grid.title ? `<caption>${escapeHtmlText(grid.title)}</caption>` : '';
@@ -220,7 +243,7 @@ export function gridsToTextAndHtml(grids: DocumentGrid[]): {
     offset = start + text.length;
   });
 
-  return { text: textParts.join('\n\n'), html: htmlParts.join(''), sections };
+  return { text: textParts.join('\n\n'), html: htmlParts.join(''), sections, atomicRanges };
 }
 
 function sameFrame(a: DocumentFrame | null, b: DocumentFrame | null): boolean {

@@ -189,8 +189,8 @@ describe('blocksToTextAndHtml', () => {
   });
 
   it('handles no blocks without pretending there is text', () => {
-    expect(blocksToTextAndHtml([])).toEqual({ text: '', html: '' });
-    expect(blocksToTextAndHtml([p(''), p('  ')])).toEqual({ text: '', html: '' });
+    expect(blocksToTextAndHtml([])).toEqual({ text: '', html: '', atomicRanges: [] });
+    expect(blocksToTextAndHtml([p(''), p('  ')])).toEqual({ text: '', html: '', atomicRanges: [] });
   });
 });
 
@@ -339,5 +339,28 @@ describe('escapeHtmlText', () => {
     expect(escapeHtmlText('Hello, world — 42% of “quotes”')).toBe(
       'Hello, world — 42% of “quotes”',
     );
+  });
+});
+
+describe('atomic ranges', () => {
+  it('reports an atomic block\'s range against the text it produced', () => {
+    const row = 'Ada. Then the rest, 98';
+    const built = blocksToTextHtmlAndSections([
+      p('Intro.'),
+      { kind: 'p', runs: [{ text: row }], atomic: true },
+      p('Outro.'),
+    ]);
+    const start = built.text.indexOf('Ada');
+    expect(built.atomicRanges).toEqual([[start, start + row.length]]);
+    expect(built.text.slice(start, start + row.length)).toBe(row);
+  });
+
+  it('reports every grid row\'s range so each row can stay whole', () => {
+    const built = gridsToTextAndHtml([{ title: '', rows: [['a. b', 'c'], ['d', 'e']], delimiter: ', ' }]);
+    expect(built.text).toBe('a. b, c\n\nd, e');
+    expect(built.atomicRanges).toEqual([[0, 7], [9, 13]]);
+    for (const [start, end] of built.atomicRanges) {
+      expect(built.text.slice(start, end)).not.toContain('\n');
+    }
   });
 });

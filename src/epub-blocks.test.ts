@@ -98,4 +98,16 @@ describe('epubBlocks', () => {
       expect(text.slice(start, end)).toBe(el.textContent);
     }
   });
+
+  it('marks a table cell atomic so sentence punctuation cannot split it', () => {
+    // EPUB tables come out cell by cell rather than row by row, but the
+    // contract is the same as everywhere else: a cell is one sentence.
+    const html = '<html><body><table><tr>'
+      + '<td>Handled the first pass. Then the second, 98</td></tr></table></body></html>';
+    const blocks = epubBlocks(htmlElement(html));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].atomic).toBe(true);
+    const { text, atomicRanges } = blocksToTextAndHtml(blocks);
+    expect(atomicRanges).toEqual([[0, text.length]]);
+  });
 });

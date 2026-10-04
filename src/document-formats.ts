@@ -26,6 +26,12 @@ export interface FormatExtraction {
   text: string;
   html?: string;
   sections?: Array<{ title: string; start: number; end: number }>;
+  /**
+   * Ranges of `text` that must be spoken as one sentence — table rows.
+   * They are what keeps a period inside a cell from splitting the row it
+   * sits in; produced together with `text` so the offsets cannot drift.
+   */
+  atomicRanges?: Array<[number, number]>;
 }
 
 export type FormatKind = 'docx' | 'doc' | 'odt' | 'rtf' | 'xlsx' | 'pptx' | 'csv' | 'html' | 'text';
@@ -157,7 +163,7 @@ function docxTableRowBlock(tr: Element): DocumentBlock | null {
       .join(' '))
     .filter(Boolean);
   const text = cells.join(', ');
-  return text ? { kind: 'p', runs: [{ text }] } : null;
+  return text ? { kind: 'p', runs: [{ text }], atomic: true } : null;
 }
 
 async function extractDocx(file: File): Promise<FormatExtraction> {
@@ -191,8 +197,13 @@ async function extractDocx(file: File): Promise<FormatExtraction> {
   // section offsets are guaranteed to be offsets into the text the reader is
   // going to segment. DOCX declares its own heading styles, so they become
   // the document's chapters.
-  const { text, html, sections } = blocksToTextHtmlAndSections(blocks);
-  return { text, html: html || undefined, sections: sections.length ? sections : undefined };
+  const { text, html, sections, atomicRanges } = blocksToTextHtmlAndSections(blocks);
+  return {
+    text,
+    html: html || undefined,
+    sections: sections.length ? sections : undefined,
+    atomicRanges: atomicRanges.length ? atomicRanges : undefined,
+  };
 }
 
 // ─── DOC (legacy Word binary) extraction ──────────────────────────
@@ -432,7 +443,8 @@ export function htmlToBlocks(root: Element): DocumentBlock[] {
     if (el.querySelector(HTML_BLOCKS)) continue;
     // A table row is one block: its cells are joined so the row speaks as a
     // phrase, with the separator CSV extraction already established.
-    const runs = el.tagName.toLowerCase() === 'tr'
+    const isRow = el.tagName.toLowerCase() === 'tr';
+    const runs = isRow
       ? [{ text: Array.from(el.querySelectorAll('td, th'))
         .map(cell => collapseWhitespace(cell.textContent ?? ''))
         .filter(Boolean)
@@ -440,7 +452,7 @@ export function htmlToBlocks(root: Element): DocumentBlock[] {
       : htmlRuns(el);
     const kept = runs.filter(run => run.text.trim().length > 0);
     if (!kept.length) continue;
-    blocks.push({ kind: htmlBlockKind(el), runs: kept });
+    blocks.push({ kind: htmlBlockKind(el), runs: kept, ...(isRow ? { atomic: true } : {}) });
   }
   return blocks;
 }
@@ -452,7 +464,7 @@ async function extractHtml(file: File): Promise<FormatExtraction> {
   const body = doc.body;
   if (!body) throw new Error('Could not extract text from HTML file (no body content).');
 
-  const { text, html: markup, sections } = blocksToTextHtmlAndSections(htmlToBlocks(body));
+  const { text, html: markup, sections, atomicRanges } = blocksToTextHtmlAndSections(htmlToBlocks(body));
   if (!text.trim()) {
     // No block elements at all — a page of bare text nodes. Fall back to the
     // flattened body so a minimal HTML file still reads aloud.
@@ -460,7 +472,12 @@ async function extractHtml(file: File): Promise<FormatExtraction> {
     if (!fallback) throw new Error('Could not extract text from HTML file (no body content).');
     return { text: fallback };
   }
-  return { text, html: markup || undefined, sections: sections.length ? sections : undefined };
+  return {
+    text,
+    html: markup || undefined,
+    sections: sections.length ? sections : undefined,
+    atomicRanges: atomicRanges.length ? atomicRanges : undefined,
+  };
 }
 
 // ─── CSV extraction ───────────────────────────────────────────────
@@ -476,9 +493,20 @@ async function extractCsv(file: File): Promise<FormatExtraction> {
     throw new Error('CSV file is empty.');
   }
   const rows = parseCsv(csv);
-  const text = rows.map(row => row.join(CSV_CELL_SEPARATOR)).join(CSV_ROW_SEPARATOR);
+  // Every row's range in the text, in the same pass that builds it: the
+  // reader keeps a row whole even when a cell contains sentence punctuation.
+  const atomicRanges: Array<[number, number]> = [];
+  let offset = 0;
+  const text = rows.map((row, index) => {
+    if (index) offset += CSV_ROW_SEPARATOR.length;
+    const start = offset;
+    const rowText = row.join(CSV_CELL_SEPARATOR);
+    offset += rowText.length;
+    atomicRanges.push([start, offset]);
+    return rowText;
+  }).join(CSV_ROW_SEPARATOR);
   const sections = sectionsFromCsvRows(rows, CSV_CELL_SEPARATOR);
-  return { text, sections: sections.length ? sections : undefined };
+  return { text, sections: sections.length ? sections : undefined, atomicRanges };
 }
 
 // ─── XLSX extraction ──────────────────────────────────────────────
@@ -604,7 +632,12 @@ async function extractXlsx(file: File): Promise<FormatExtraction> {
 
   const built = gridsToTextAndHtml(grids);
   if (!built.text) throw new Error('XLSX file contains no text data.');
-  return { text: built.text, html: built.html, sections: built.sections };
+  return {
+    text: built.text,
+    html: built.html,
+    sections: built.sections,
+    atomicRanges: built.atomicRanges,
+  };
 }
 
 // ─── PPTX extraction ──────────────────────────────────────────────
@@ -805,7 +838,7 @@ function odtTableRowBlock(tr: Element): DocumentBlock | null {
       .join(' '))
     .filter(Boolean);
   const text = cells.join(', ');
-  return text ? { kind: 'p', runs: [{ text }] } : null;
+  return text ? { kind: 'p', runs: [{ text }], atomic: true } : null;
 }
 
 /**
@@ -861,9 +894,14 @@ async function extractOdt(file: File): Promise<FormatExtraction> {
 
   const parser = new DOMParser();
   const xml = parser.parseFromString(xmlText, 'application/xml');
-  const { text, html, sections } = blocksToTextHtmlAndSections(odtToBlocks(xml));
+  const { text, html, sections, atomicRanges } = blocksToTextHtmlAndSections(odtToBlocks(xml));
   if (!text.trim()) throw new Error('Could not extract text from ODT file (file may be empty).');
-  return { text, html: html || undefined, sections: sections.length ? sections : undefined };
+  return {
+    text,
+    html: html || undefined,
+    sections: sections.length ? sections : undefined,
+    atomicRanges: atomicRanges.length ? atomicRanges : undefined,
+  };
 }
 
 // ─── Format dispatch ────────────────────────────────────────

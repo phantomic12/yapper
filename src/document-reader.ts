@@ -60,6 +60,12 @@ export interface ExtractedDocument {
   html?: string;
   /** Named navigation targets into the extracted text (EPUB chapters, slides). */
   sections?: Array<{ title: string; start: number; end: number }>;
+  /**
+   * Ranges of `text` the reader speaks as one sentence — table rows (or
+   * cells, for EPUB). Produced together with `text`, so a period inside a
+   * cell can never split the row it sits in. See `FormatExtraction`.
+   */
+  atomicRanges?: Array<[number, number]>;
   /** Detected / declared MIME type. */
   mimeType: string;
   /** File name. */
@@ -796,7 +802,10 @@ export function epubBlocks(root: EpubLoaded): DocumentBlock[] {
           : /^H[3-6]$/.test(el.tagName) ? 'h3'
             : el.tagName === 'LI' ? 'li'
               : 'p';
-    blocks.push({ kind, runs: [{ text }] });
+    // A table cell speaks as one unit — the contract rows have everywhere
+    // else — so sentence punctuation inside it cannot cut it in two.
+    const isCell = el.tagName === 'TD';
+    blocks.push({ kind, runs: [{ text }], ...(isCell ? { atomic: true } : {}) });
   }
 
   // A chapter whose markup uses none of those elements still has words in it.
@@ -836,9 +845,9 @@ async function extractEpub(file: File): Promise<Omit<ExtractedDocument, 'mimeTyp
     }
   }
 
-  const { text, html } = blocksToTextAndHtml(all);
+  const { text, html, atomicRanges } = blocksToTextAndHtml(all);
   const sections = epubSectionsFromChapters(chapters, toc);
-  return { text, html: html || undefined, sections };
+  return { text, html: html || undefined, sections, atomicRanges: atomicRanges.length ? atomicRanges : undefined };
 }
 
 function flattenEpubToc(items: EpubNavigationItem[]): EpubNavigationItem[] {
