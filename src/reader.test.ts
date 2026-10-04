@@ -31,6 +31,60 @@ describe('prepareReaderData — sentence segmentation', () => {
     expect(sentences.map(s => s.text)).toEqual(['On Jan. 5, 2024, the meeting was held.']);
   });
 
+  it('keeps decimals like "3.5" inside one sentence', () => {
+    const text = 'Version 3.5 is out. Grab it now.';
+    const { sentences } = prepareReaderData(text);
+    expect(sentences.map(s => s.text)).toEqual(['Version 3.5 is out.', 'Grab it now.']);
+    // The protected-then-restored text must still locate in the source.
+    for (const s of sentences) {
+      expect(text.slice(s.start!, s.end!)).toBe(s.text);
+    }
+  });
+
+  it('still splits when a sentence ends with a number', () => {
+    const { sentences } = prepareReaderData('The ratio held at 3.5. Next came the drop.');
+    expect(sentences.map(s => s.text)).toEqual(['The ratio held at 3.5.', 'Next came the drop.']);
+  });
+
+  it('keeps multi-part version numbers whole', () => {
+    const { sentences } = prepareReaderData('Upgrading 3.5.1 was painless.');
+    expect(sentences.map(s => s.text)).toEqual(['Upgrading 3.5.1 was painless.']);
+  });
+
+  it('protects a decimal and an abbreviation in the same sentence', () => {
+    const { sentences } = prepareReaderData('Mr. Smith paid 3.5 dollars. He left.');
+    expect(sentences.map(s => s.text)).toEqual(['Mr. Smith paid 3.5 dollars.', 'He left.']);
+  });
+
+  it('keeps a marked row whole when a cell contains sentence punctuation', () => {
+    const text = 'Before the table.\n\nAda handled the first pass. Then the second, 98\n\nAfter the table.';
+    const row = 'Ada handled the first pass. Then the second, 98';
+    const start = text.indexOf('Ada');
+    const { sentences } = prepareReaderData(text, 300, [[start, start + row.length]]);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.',
+      row,
+      'After the table.',
+    ]);
+    // Offsets still slice back to exactly the sentence, merged or not.
+    for (const s of sentences) {
+      expect(text.slice(s.start!, s.end!)).toBe(s.text);
+    }
+  });
+
+  it('merges the pieces of one marked range when a cell holds a blank line', () => {
+    const text = 'One. Two.\n\nfirst row piece. still the row\n\nsecond row piece, 98\n\nTail paragraph.';
+    const start = text.indexOf('first row piece');
+    const end = text.indexOf('second row piece, 98') + 'second row piece, 98'.length;
+    const { sentences } = prepareReaderData(text, 300, [[start, end]]);
+    expect(sentences.map(s => s.text)).toEqual([
+      // Ordinary paragraphs either side of the range still split normally.
+      'One.', 'Two.',
+      'first row piece. still the row\n\nsecond row piece, 98',
+      'Tail paragraph.',
+    ]);
+  });
+
   it('splits on Chinese/CJK punctuation', () => {
     const { sentences } = prepareReaderData('你好。世界！你好吗？');
     expect(sentences.map(s => s.text)).toEqual(['你好。', '世界！', '你好吗？']);

@@ -149,6 +149,32 @@ describe('XLSX extraction', () => {
     const { sentences } = prepareReaderData(doc.text);
     expect(sentences.map(s => s.text)).toEqual(['Name, Score', 'Ada, 98']);
   });
+
+  it('keeps a row in one sentence when a cell ends mid-sentence', async () => {
+    const file = await zipFile('punct.xlsx', {
+      'xl/workbook.xml': WORKBOOK_XML,
+      'xl/_rels/workbook.xml.rels': WORKBOOK_RELS_XML,
+      'xl/sharedStrings.xml': `<?xml version="1.0"?>
+        <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <si><t>Name</t></si><si><t>Score</t></si>
+          <si><t>Ada handled the first pass. Then the second</t></si>
+        </sst>`,
+      'xl/worksheets/sheet1.xml': `<?xml version="1.0"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+            <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>98</v></c></row>
+          </sheetData>
+        </worksheet>`,
+    });
+
+    const doc = await extractFormat('xlsx', file);
+    const { sentences } = prepareReaderData(doc.text, 300, doc.atomicRanges);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Name, Score',
+      'Ada handled the first pass. Then the second, 98',
+    ]);
+  });
 });
 
 const PRESENTATION_XML = `<?xml version="1.0"?>
@@ -473,6 +499,18 @@ describe('CSV extraction', () => {
     const { sentences } = prepareReaderData(doc.text);
     expect(sentences.map(s => s.text)).toEqual(['a, b', '1, 2', '3, 4', '5, 6']);
   });
+
+  it('keeps a row in one sentence when a cell ends mid-sentence', async () => {
+    // The blank line separates rows; it must not be the only thing keeping
+    // a row whole — sentence punctuation inside a cell must not split it.
+    const doc = await extractFormat('csv', csv('name,score\nAda,first pass. then the second\n3,98'));
+    const { sentences } = prepareReaderData(doc.text, 300, doc.atomicRanges);
+    expect(sentences.map(s => s.text)).toEqual([
+      'name, score',
+      'Ada, first pass. then the second',
+      '3, 98',
+    ]);
+  });
 });
 
 describe('HTML extraction', () => {
@@ -528,6 +566,14 @@ describe('HTML extraction', () => {
       + '<tr><td>alpha</td><td>1</td></tr></table>',
     ));
     expect(doc.text).toBe('Data\n\nName, Value\n\nalpha, 1');
+  });
+
+  it('keeps a row in one sentence when a cell ends mid-sentence', async () => {
+    const doc = await extractFormat('html', page(
+      '<table><tr><td>Ada handled the first pass. Then the second</td><td>98</td></tr></table>',
+    ));
+    const { sentences } = prepareReaderData(doc.text, 300, doc.atomicRanges);
+    expect(sentences.map(s => s.text)).toEqual(['Ada handled the first pass. Then the second, 98']);
   });
 
   it('never reads script, style, or head content as prose', async () => {
@@ -861,5 +907,66 @@ describe('table rows as sentences', () => {
     expect(doc.text).toBe('Outer\n\nInner');
     const { sentences } = prepareReaderData(doc.text);
     expect(sentences.map(s => s.text)).toEqual(['Outer', 'Inner']);
+  });
+
+  it('keeps a DOCX row in one sentence when a cell ends mid-sentence', async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+          <w:p><w:r><w:t>Before the table.</w:t></w:r></w:p>
+          <w:tbl>
+            <w:tr>
+              <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
+              <w:tc><w:p><w:r><w:t>Score</w:t></w:r></w:p></w:tc>
+            </w:tr>
+            <w:tr>
+              <w:tc><w:p><w:r><w:t>Ada handled the first pass. Then the second</w:t></w:r></w:p></w:tc>
+              <w:tc><w:p><w:r><w:t>98</w:t></w:r></w:p></w:tc>
+            </w:tr>
+          </w:tbl>
+          <w:p><w:r><w:t>After the table.</w:t></w:r></w:p>
+        </w:body>
+      </w:document>`;
+    const file = await zipFile('punct.docx', { 'word/document.xml': xml });
+    const doc = await extractFormat('docx', file);
+    // The row's period is the row's own, not a sentence boundary: the
+    // ranges extraction reported are what keep the reader from splitting it.
+    const { sentences } = prepareReaderData(doc.text, 300, doc.atomicRanges);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.',
+      'Name, Score',
+      'Ada handled the first pass. Then the second, 98',
+      'After the table.',
+    ]);
+  });
+
+  it('keeps an ODT row in one sentence when a cell ends mid-sentence', async () => {
+    const xml = `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+         xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+         xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+      <office:body><office:text>
+        <text:p>Before the table.</text:p>
+        <table:table table:name="T">
+          <table:table-row>
+            <table:table-cell><text:p>Name</text:p></table:table-cell>
+            <table:table-cell><text:p>Score</text:p></table:table-cell>
+          </table:table-row>
+          <table:table-row>
+            <table:table-cell><text:p>Ada handled the first pass. Then the second</text:p></table:table-cell>
+            <table:table-cell><text:p>98</text:p></table:table-cell>
+          </table:table-row>
+        </table:table>
+        <text:p>After the table.</text:p>
+      </office:text></office:body>
+    </office:document-content>`;
+    const file = await zipFile('punct.odt', { 'content.xml': xml });
+    const doc = await extractFormat('odt', file);
+    const { sentences } = prepareReaderData(doc.text, 300, doc.atomicRanges);
+    expect(sentences.map(s => s.text)).toEqual([
+      'Before the table.',
+      'Name, Score',
+      'Ada handled the first pass. Then the second, 98',
+      'After the table.',
+    ]);
   });
 });

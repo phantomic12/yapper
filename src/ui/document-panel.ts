@@ -280,9 +280,13 @@ export function bindDocumentEvents(state: AppState): void {
     }
   }
 
-  function renderReaderContent(target: HTMLElement, text: string) {
+  function renderReaderContent(
+    target: HTMLElement,
+    text: string,
+    atomicRanges?: ReadonlyArray<readonly [number, number]>,
+  ) {
     target.innerHTML = '';
-    const { sentences } = prepareReaderData(text, 300);
+    const { sentences } = prepareReaderData(text, 300, atomicRanges);
     if (target === readerView) readerSentences = sentences;
     const sentenceByPara = new Map<number, ReaderSentence[]>();
     for (const s of sentences) {
@@ -316,12 +320,12 @@ export function bindDocumentEvents(state: AppState): void {
     return Array.from(target.querySelectorAll('.reader-sentence'));
   }
 
-  function renderReaderView(text: string) {
-    return renderReaderContent(readerView, text);
+  function renderReaderView(text: string, atomicRanges?: ReadonlyArray<readonly [number, number]>) {
+    return renderReaderContent(readerView, text, atomicRanges);
   }
 
-  function renderOverlay(text: string) {
-    return renderReaderContent(readerOverlayContent, text);
+  function renderOverlay(text: string, atomicRanges?: ReadonlyArray<readonly [number, number]>) {
+    return renderReaderContent(readerOverlayContent, text, atomicRanges);
   }
 
   function findOverlaySentence(globalIndex: number): HTMLElement | null {
@@ -890,7 +894,7 @@ export function bindDocumentEvents(state: AppState): void {
       renderRecentDocuments();
     }
     updateStatusBar();
-    renderReaderView(doc.text);
+    renderReaderView(doc.text, doc.atomicRanges);
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
     options.style.display = '';
@@ -1161,6 +1165,15 @@ export function bindDocumentEvents(state: AppState): void {
   function beginReading(fromSentenceIndex: number, overlay: boolean) {
     const text = state.extractedDocument?.text?.trim();
     if (!text) return;
+    // The row ranges are offsets into the untrimmed extraction text, and
+    // `text` above had its outer whitespace trimmed off — so slide them by
+    // exactly that much. (The reader view renders the untrimmed text and
+    // passes the ranges as they are; the sentence lists match either way,
+    // because paragraphs are trimmed individually on both paths.)
+    const raw = state.extractedDocument?.text ?? '';
+    const lead = raw.length - raw.trimStart().length;
+    const atomicRanges = state.extractedDocument?.atomicRanges
+      ?.map(([start, end]): [number, number] => [start - lead, end - lead]);
     if (text.length > MAX_MODEL_READ_CHARS) {
       showReaderNotice('Text is too long to read in one session. Paste a shorter excerpt.');
       return;
@@ -1171,7 +1184,7 @@ export function bindDocumentEvents(state: AppState): void {
     reviewRead.stop();
     clearHighlight();
     clearReaderError();
-    renderOverlay(text);
+    renderOverlay(text, atomicRanges);
     modelSpeechKind = 'document';
     state.readerSession = new DocumentReaderSession(state.engine!, text, {
       chunkSize: 300,
@@ -1179,6 +1192,7 @@ export function bindDocumentEvents(state: AppState): void {
       speed: state.currentSpeed,
       onStateChange: renderReaderState,
       onHighlight: applyHighlight,
+      atomicRanges,
     });
     lastReadSessionId = state.readerSession.getSessionId();
     state.readerSession.start(fromSentenceIndex);
