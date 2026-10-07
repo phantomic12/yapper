@@ -114,6 +114,9 @@ textarea:focus-visible,
 
 body {
   min-height: 100vh;
+  /* iOS Safari's dynamic toolbar makes 100vh taller than the visible area;
+     dvh tracks the real viewport. Older engines ignore it and keep 100vh. */
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }

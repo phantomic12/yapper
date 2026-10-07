@@ -266,6 +266,45 @@ describe('DocumentReaderSession — pause and resume', () => {
   });
 });
 
+describe('DocumentReaderSession — iOS autoplay priming', () => {
+  /** The session's private <audio>, reached the way the priming tests need. */
+  function audioOf(session: DocumentReaderSession): HTMLAudioElement {
+    return (session as unknown as { audio: HTMLAudioElement }).audio;
+  }
+
+  it('start() primes the element with the silent clip inside the gesture', () => {
+    const session = idleSession();
+    session.start();
+    expect(audioOf(session).src).toContain('data:audio/wav');
+  });
+
+  it('a finished prime clip retries playback instead of advancing chunks', () => {
+    const session = idleSession();
+    session.start();
+    const audio = audioOf(session);
+    expect(session.getState().currentIndex).toBe(0);
+
+    // The silent WAV ends almost immediately; without the src guard this
+    // 'ended' would advance() past chunk 0 and swallow the first chunk.
+    audio.dispatchEvent(new Event('ended'));
+    expect(session.getState().currentIndex).toBe(0);
+  });
+
+  it('a finished chunk still advances once its real URL is playing', () => {
+    const session = idleSession();
+    session.start();
+    const audio = audioOf(session);
+
+    // Simulate the first chunk landing: mark its job done with a URL and
+    // point the element at it, then end it — this is a real boundary.
+    const chunk = session.getChunks()[0];
+    chunk.job = { id: 'job-1', status: 'done', url: 'blob:chunk-0' } as never;
+    audio.src = 'blob:chunk-0';
+    audio.dispatchEvent(new Event('ended'));
+    expect(session.getState().currentIndex).toBe(1);
+  });
+});
+
 describe('sentence character offsets', () => {
   it('slices each range back to exactly the sentence text', () => {
     const text = 'The first sentence. The second one. And a third.';
