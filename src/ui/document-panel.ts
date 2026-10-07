@@ -95,7 +95,9 @@ export function updateDocumentSectionVisibility(state: AppState): void {
   const canRead = !!(state.engine && state.engine.getEngineState() === 'ready');
   if (needModel) needModel.style.display = canRead ? 'none' : '';
   readBtn.disabled = !canRead;
-  readBtn.title = canRead ? 'Read extracted text aloud' : 'Load a model above before reading';
+  readBtn.title = canRead
+    ? 'Read extracted text aloud'
+    : 'Load a model on the Studio page to read aloud';
 }
 
 // ─── Document upload + reader ──────────────────────────────────────
@@ -155,6 +157,10 @@ export function bindDocumentEvents(state: AppState): void {
   const shortcutHelp = document.getElementById('shortcut-help') as HTMLElement;
   const shortcutHelpClose = document.getElementById('shortcut-help-close') as HTMLButtonElement;
   const blackout = document.getElementById('blackout') as HTMLElement;
+  const readerSection = readerView.closest('.reader-page') as HTMLElement;
+  const readerTools = document.getElementById('reader-tools') as HTMLDetailsElement;
+  const closeDocBtn = document.getElementById('close-document-btn') as HTMLButtonElement;
+  const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
 
   /**
    * The file the reader is currently showing, kept so the document view can
@@ -454,6 +460,9 @@ export function bindDocumentEvents(state: AppState): void {
     bookmarkForm.hidden = !opening;
     bookmarkAddBtn.setAttribute('aria-expanded', String(opening));
     if (opening) {
+      // The form lives inside the collapsed tools section — open it so the
+      // click visibly did something.
+      readerTools.open = true;
       const snippet = state.extractedDocument?.text
         .slice(lastProgressOffset, lastProgressOffset + 32).trim();
       bookmarkName.value = snippet
@@ -897,6 +906,9 @@ export function bindDocumentEvents(state: AppState): void {
     renderReaderView(doc.text, doc.atomicRanges);
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
+    // The reader takes over the page: upload chrome and session shelf hide,
+    // the document fills the viewport (see .reader-page--document-open).
+    setDocOpen(true);
     options.style.display = '';
     // The sample offer has done its job once there is a document to look at.
     sampleEl.hidden = true;
@@ -1020,6 +1032,66 @@ export function bindDocumentEvents(state: AppState): void {
     const file = input.files?.[0];
     if (file) handleFile(file);
   });
+
+  /**
+   * Whether the reader page is showing a document or the upload view.
+   * CSS does the hiding (`.reader-page--document-open`); this flag exists
+   * only so the two states are flipped in one place.
+   */
+  function setDocOpen(open: boolean) {
+    readerSection.classList.toggle('reader-page--document-open', open);
+  }
+
+  /**
+   * Put the document down: speech stops, the view unmounts, and the page
+   * returns to the upload state. Session documents and the recents shelf
+   * deliberately survive — closing a document is not forgetting it.
+   */
+  function closeDocument() {
+    activeFileRequest++;
+    stopAllSpeech();
+    destroyDocView();
+    hasDocView = false;
+    applyDocViewMode();
+    state.extractedDocument = null;
+    sourceFile = null;
+    progressKey = null;
+    savedProgress = null;
+    lastProgressOffset = 0;
+    clearTimeout(progressTimer);
+    pendingGoToOffset = null;
+    pendingHighlight = null;
+    highlightForm.hidden = true;
+    bookmarkForm.hidden = true;
+    bookmarksKey = null;
+    bookmarks = [];
+    renderBookmarks();
+    highlightsKey = null;
+    highlights = [];
+    renderHighlights();
+    classifiedBlocks = [];
+    readerSentences = [];
+    readerView.innerHTML = '';
+    readerOverlayContent.innerHTML = '';
+    readerStatus.textContent = '';
+    readerOverlayStatus.textContent = '';
+    // renderClassification re-reveals this on the next open.
+    classifyPanel.hidden = true;
+    readerTools.open = false;
+    preview.style.display = 'none';
+    options.style.display = 'none';
+    layoutDetails.style.display = 'none';
+    sampleEl.hidden = false;
+    clearProgress();
+    clearReaderError();
+    updateStatusBar();
+    // Re-picking the same file must still fire 'change'.
+    input.value = '';
+    setDocOpen(false);
+    drop.focus();
+  }
+
+  closeDocBtn.addEventListener('click', closeDocument);
 
   // Show/hide the OCR mode selector when the OCR toggle changes.
   ocrToggle.addEventListener('change', () => {
@@ -1270,6 +1342,9 @@ export function bindDocumentEvents(state: AppState): void {
       return;
     }
     pendingHighlight = range;
+    // The form lives inside the collapsed tools section — open it so the
+    // click visibly did something.
+    readerTools.open = true;
     highlightForm.hidden = false;
     highlightAddBtn.setAttribute('aria-expanded', 'true');
     highlightNote.focus();
