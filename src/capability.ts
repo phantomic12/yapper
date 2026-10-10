@@ -142,6 +142,43 @@ async function probeAdapterFeature(feature: string): Promise<boolean> {
   }
 }
 
+// ─── WASM SIMD probe ─────────────────────────────────────────────
+// onnxruntime-web ships a single SIMD build (`ort-wasm-simd-threaded.*`),
+// so a browser without the v128 extension cannot run any model — the
+// load fails deep inside ORT with "no available backend found", which
+// names nothing the user can act on. The probe is a hand-assembled
+// 30-byte module: one function `() -> v128` running `i32x4.splat`. On
+// iOS <16.4 / Safari <16.4 validation returns false and the load path
+// can say plainly that the browser is too old.
+
+const SIMD_PROBE_MODULE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0,
+  10, 8, 1, 6, 0, 65, 0, 253, 15, 11,
+]);
+
+/** True when WebAssembly supports the v128 SIMD extension ORT requires. */
+export function wasmSimdSupported(): boolean {
+  try {
+    return typeof WebAssembly !== 'undefined'
+      && WebAssembly.validate(SIMD_PROBE_MODULE);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * User-facing explanation when the SIMD gate fails. Names the capability
+ * and the real floor: Safari/iOS 16.4 added both WASM SIMD and regex
+ * lookbehind, so every path in this app shares the same minimum version.
+ */
+export function wasmSimdUnsupportedMessage(): string {
+  return (
+    'This browser cannot run the speech engine: it lacks WebAssembly SIMD ' +
+    '(needs iOS 16.4+ / Safari 16.4+, Chrome 91+, Edge 91+, or Firefox 89+). ' +
+    'Update your browser or OS to use Yapper.'
+  );
+}
+
 // ─── Effective acceleration ───────────────────────────────────────
 // The capability banner answers "is there WebGPU?". It cannot answer
 // "where will this model actually run?", and those differ: an adapter can

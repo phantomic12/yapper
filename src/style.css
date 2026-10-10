@@ -114,6 +114,9 @@ textarea:focus-visible,
 
 body {
   min-height: 100vh;
+  /* iOS Safari's dynamic toolbar makes 100vh taller than the visible area;
+     dvh tracks the real viewport. Older engines ignore it and keep 100vh. */
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -2011,6 +2014,63 @@ body::before {
 }
 
 .link-btn:hover {
+  color: var(--text);
+}
+
+/* ─── Reader: document-open mode ─────────────────────────────
+   Once a document is open the reader IS the page: the upload chrome and
+   the session shelf step back, the controls pin to the top, and the
+   document fills the viewport under them. Structure, notes and exports
+   live in the collapsed tools section at the bottom instead of stacking
+   a second transcript above the pages. */
+.reader-page--document-open .reader-page__hero,
+.reader-page--document-open .document-drop,
+.reader-page--document-open .document-sample,
+.reader-page--document-open .document-need-model,
+.reader-page--document-open .document-options,
+.reader-page--document-open .docrecent,
+.reader-page--document-open .docsearch {
+  display: none;
+}
+
+/* The action bar stays put while the pages scroll under it. */
+.reader-page--document-open .document-actions {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  margin-top: 0;
+  padding: 8px 0;
+  background: var(--bg);
+}
+
+/* The document fills the page rather than reading as one small inset
+   panel among many. Page-level scroll takes over — the sticky bar above
+   keeps the controls in reach. */
+.reader-page--document-open .reader-view {
+  max-height: none;
+  min-height: 70vh;
+}
+
+.reader-page--document-open .document-view {
+  height: calc(100dvh - 230px);
+  min-height: 420px;
+}
+
+.reader-tools {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.reader-tools > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 0;
+}
+
+.reader-tools > summary:hover {
   color: var(--text);
 }
 

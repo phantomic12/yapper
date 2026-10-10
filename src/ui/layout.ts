@@ -322,9 +322,37 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
+              <button class="document-btn" id="close-document-btn" type="button" title="Close this document and pick another">Close document</button>
+              <!-- Position, size and reading time of the open document —
+                   inside the pinned bar so it stays visible while pages
+                   scroll. -->
+              <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
               <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
             </div>
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
+
+            <div class="docview-switch" role="group" aria-label="How to show the document">
+              <span class="section-label docview-switch__label">View</span>
+              <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
+                      id="docview-btn-document">Document</button>
+              <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
+                      id="docview-btn-text">Text</button>
+            </div>
+            <!-- The real thing: pages as they appear in the file. Populated only
+                 for formats we can render; see document-view.ts. -->
+            <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
+            <!-- Always populated, even when hidden: it is the accessible view of
+                 the document and the one a screen reader reads, so it is never
+                 left empty just because the visual view is on top. -->
+            <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
+            <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+
+            <!-- Secondary affordances stay reachable but collapsed: the
+                 document itself is the interface here, so the structure list,
+                 notes and exports live one tap deeper rather than stacking a
+                 second transcript on top of the reader. -->
+            <details class="reader-tools" id="reader-tools">
+              <summary>Structure, notes &amp; export</summary>
 
             <!-- Classified document structure -->
             <div class="classify-panel" id="classify-panel" hidden>
@@ -395,24 +423,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               </div>
             </div>
 
-            <!-- Position, size and reading time of the open document. -->
-            <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
-
-            <div class="docview-switch" role="group" aria-label="How to show the document">
-              <span class="section-label docview-switch__label">View</span>
-              <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
-                      id="docview-btn-document">Document</button>
-              <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
-                      id="docview-btn-text">Text</button>
-            </div>
-            <!-- The real thing: pages as they appear in the file. Populated only
-                 for formats we can render; see document-view.ts. -->
-            <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
-            <!-- Always populated, even when hidden: it is the accessible view of
-                 the document and the one a screen reader reads, so it is never
-                 left empty just because the visual view is on top. -->
-            <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
-            <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+            </details>
           </div>
 
           <details class="layout-details" id="layout-details" style="display:none">
