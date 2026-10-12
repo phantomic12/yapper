@@ -1112,13 +1112,9 @@ export function bindDocumentEvents(state: AppState): void {
     showStatus('success', `Queued ${kindLabel(block.kind).toLowerCase()} for speech.`);
   });
 
+  // Pointer users get the whole drop zone; keyboard users get the (clipped,
+  // focusable) file input itself, which opens the picker natively on Enter.
   drop.addEventListener('click', () => input.click());
-  drop.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      input.click();
-    }
-  });
 
   drop.addEventListener('dragover', (e) => {
     e.preventDefault();

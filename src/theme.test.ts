@@ -184,6 +184,6 @@ describe('bindThemeToggle', () => {
     const button = document.getElementById('theme-toggle')!;
     expect(button.getAttribute('aria-label')).toContain('following system');
     button.click();
-    expect(button.getAttribute('aria-label')).toContain('light');
+    expect(button.getAttribute('aria-label')).toContain('switch to dark');
   });
 });

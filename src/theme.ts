@@ -96,10 +96,15 @@ export function bindThemeToggle(): void {
   let choice = readStoredTheme();
   applyTheme(choice);
 
-  const labelFor = (c: ThemeChoice): string =>
-    c === 'system'
-      ? `Theme: following system (${resolveTheme('system')}). Activate to switch to ${resolveTheme('system') === 'dark' ? 'light' : 'dark'}.`
-      : `Theme: ${c}. Activate to switch to ${c === 'dark' ? 'light' : 'dark'}.`;
+  // The accessible name must contain the visible label (WCAG 2.5.3): the
+  // visible word — Auto/Dark/Light — opens the aria-label, not just the
+  // title, so voice-command users can say what they see.
+  const labelFor = (c: ThemeChoice): string => {
+    const name = c === 'system' ? 'Auto' : c === 'dark' ? 'Dark' : 'Light';
+    return c === 'system'
+      ? `${name} theme: following system (${resolveTheme('system')}). Activate to switch to ${resolveTheme('system') === 'dark' ? 'light' : 'dark'}.`
+      : `${name} theme. Activate to switch to ${c === 'dark' ? 'light' : 'dark'}.`;
+  };
 
   const paint = (): void => {
     button.textContent = choice === 'system' ? 'Auto' : choice === 'dark' ? 'Dark' : 'Light';

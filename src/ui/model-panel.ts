@@ -142,12 +142,12 @@ function renderVoiceCard(
   // shows them: a screen reader lands on one card, not on the whole group.
   const spoken = traits ? `${name}, ${traits}` : name;
   return `
-    <div class="voice-card ${selected ? 'voice-card--selected' : ''}" data-voice-id="${voiceId}" role="radio"
-         tabindex="${selected ? 0 : -1}" aria-checked="${selected}" aria-label="${escapeHtml(spoken)}">
-      <button class="voice-card__pick" type="button" tabindex="-1" aria-label="Select ${escapeHtml(spoken)}">
+    <div class="voice-card ${selected ? 'voice-card--selected' : ''}" data-voice-id="${voiceId}">
+      <div class="voice-card__pick" role="radio"
+           tabindex="${selected ? 0 : -1}" aria-checked="${selected}" aria-label="Select ${escapeHtml(spoken)}">
         <span class="voice-card__name">${escapeHtml(name)}</span>
         ${detail ? `<span class="voice-card__desc">${escapeHtml(detail)}</span>` : ''}
-      </button>
+      </div>
       ${aliasNote ? `<span class="voice-card__source" data-advanced>${escapeHtml(aliasNote)}</span>` : ''}
       ${previewable
         ? `<button class="voice-card__play" type="button" data-action="preview" data-label="Hear ${escapeHtml(name)}"
@@ -232,8 +232,9 @@ export function syncVoiceSelection(state: AppState): void {
   document.querySelectorAll<HTMLElement>('.voice-card').forEach(card => {
     const selected = card.dataset.voiceId === state.selectedVoiceId;
     card.classList.toggle('voice-card--selected', selected);
-    card.setAttribute('aria-checked', String(selected));
-    card.tabIndex = selected ? 0 : -1;
+    const pick = card.querySelector<HTMLElement>('.voice-card__pick');
+    pick?.setAttribute('aria-checked', String(selected));
+    if (pick) pick.tabIndex = selected ? 0 : -1;
   });
   const customVoice = state.selectedModel.voices?.find(v => v.id === 'custom');
   if (customVoice) {
@@ -352,17 +353,18 @@ function bindVoiceCardEvents(state: AppState, grid: HTMLElement): void {
     card.addEventListener('keydown', (e) => {
       const target = e.target as HTMLElement;
       // Arrows roam the picker; the play button handles its own Enter/Space.
-      if (target !== card) return;
+      const pick = card.querySelector<HTMLElement>('.voice-card__pick');
+      if (target !== pick) return;
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        const cards = Array.from(grid.querySelectorAll<HTMLElement>('.voice-card'));
-        const idx = cards.indexOf(card);
+        const picks = Array.from(grid.querySelectorAll<HTMLElement>('.voice-card__pick'));
+        const idx = picks.indexOf(pick!);
         const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
-        const next = cards[(idx + step + cards.length) % cards.length];
+        const next = picks[(idx + step + picks.length) % picks.length];
         if (next) {
           next.focus();
           next.tabIndex = 0;
-          card.tabIndex = -1;
+          pick!.tabIndex = -1;
         }
       } else if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -380,15 +382,13 @@ export function bindModelPanelEvents(
 ): void {
   modelLoadedHook = opts.onModelLoaded ?? null;
 
-  // Bind model card clicks and keyboard nav. The card is a div with
-  // role="radio" (you can't put a <button> inside a <button> — the
-  // browser's HTML parser auto-closes the outer button and hoists the
-  // inner one out as a sibling, breaking the layout). The inner
-  // <button class="model-card__pick"> is what receives the actual
-  // pointer click; the card div owns the keyboard arrow navigation.
+  // Bind model card clicks and keyboard nav. The card is a layout
+  // container; the pick area inside it carries role="radio" so the
+  // "Try sample" button can sit beside it without nesting interactive
+  // elements. The card owns the keyboard arrow navigation.
   document.querySelectorAll<HTMLElement>('.model-card').forEach(card => {
-    const pickBtn = card.querySelector<HTMLButtonElement>('[data-action="pick"]');
-    pickBtn?.addEventListener('click', (e) => {
+    const pickEl = card.querySelector<HTMLElement>('[data-action="pick"]');
+    pickEl?.addEventListener('click', (e) => {
       e.stopPropagation();
       const modelId = card.dataset.modelId!;
       const newModel = MODELS.find(m => m.id === modelId);
@@ -402,6 +402,11 @@ export function bindModelPanelEvents(
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
         focusVisibleModelCard(card, -1);
+      } else if ((e.key === 'Enter' || e.key === ' ') && e.target === pickEl) {
+        // The pick area is role="radio" now, not a button — Enter/Space must
+        // activate it by hand.
+        e.preventDefault();
+        pickEl?.click();
       }
     });
   });
@@ -471,7 +476,7 @@ function selectModel(state: AppState, newModel: TTSModel): void {
   document.querySelectorAll<HTMLElement>('.model-card').forEach(c => {
     const isSel = c.dataset.modelId === newModel.id;
     c.classList.toggle('model-card--selected', isSel);
-    c.setAttribute('aria-checked', String(isSel));
+    c.querySelector('.model-card__pick')?.setAttribute('aria-checked', String(isSel));
   });
   updateQualitySelection(state);
   renderVoiceSection(state);
@@ -622,7 +627,7 @@ function focusVisibleModelCard(current: HTMLElement, direction: 1 | -1): void {
     .filter(c => c.style.display !== 'none');
   const idx = visible.indexOf(current);
   const next = visible[idx + direction];
-  next?.focus();
+  next?.querySelector<HTMLElement>('.model-card__pick')?.focus();
 }
 
 export function handleEngineStateChange(

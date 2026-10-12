@@ -148,8 +148,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
            region that happens to contain it today. -->
       <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
         ${visibleModels().map(m => `
-          <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}">
-            <button class="model-card__pick" type="button" data-action="pick" aria-label="Select ${m.name}">
+          <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}">
+            <div class="model-card__pick" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}" data-action="pick" aria-label="Select ${m.name}">
               <div class="model-card__name">${m.name}</div>
               <div class="model-card__desc">${m.description}</div>
               <div class="model-card__meta">
@@ -159,7 +159,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                 <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
               </div>
               <div class="model-card__status" data-role="model-status">Selected</div>
-            </button>
+            </div>
             <button class="model-card__sample" data-action="sample" data-model-id="${m.id}" type="button" title="Generate a sample using the currently loaded model" hidden>Try sample</button>
           </div>
         `).join('')}
@@ -257,7 +257,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </p>
           </div>
 
-          <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
+          <div class="document-drop" id="document-drop">
             <input
               type="file"
               id="document-upload"

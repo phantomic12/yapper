@@ -7,7 +7,8 @@
   --border-focus: #6366f1;
   --text: #e8e8f0;
   --text-muted: #8888aa;
-  --text-dim: #55556a;
+  /* Was #55556a — ~2.5:1 on these surfaces, below WCAG AA 4.5:1. */
+  --text-dim: #8a8aa5;
   --accent: #6366f1;
   --accent-hover: #818cf8;
   --accent-glow: rgba(99, 102, 241, 0.15);
@@ -39,9 +40,7 @@
   --border-focus: #4f46e5;
   --text: #17171f;
   --text-muted: #55556d;
-  /* Darker than the dark theme's --text-dim on purpose: that value is
-     #55556a, which only clears 4.5:1 against a near-black surface. On white
-     it needs to drop to ~5.2:1 to stay legible as small text. */
+  /* ~5.2:1 on white — clears WCAG AA 4.5:1 for small text. */
   --text-dim: #6b6b82;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
@@ -300,9 +299,8 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.model-card__pick:focus { outline: none; }
-.model-card:focus { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-.model-card:focus:not(:focus-visible) { outline: none; }
+/* Focus lives on .model-card__pick (role=radio); the global :focus-visible
+   ring applies. */
 
 .model-card:hover {
   border-color: var(--border-focus);
@@ -840,8 +838,6 @@ body {
   background: var(--accent-glow);
   border-color: var(--accent);
 }
-.voice-card:focus { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-.voice-card:focus:not(:focus-visible) { outline: none; }
 .voice-card__pick {
   display: flex;
   flex-direction: column;
@@ -856,7 +852,8 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.voice-card__pick:focus { outline: none; }
+/* Focus lives on the pick element (role=radio); the global :focus-visible
+   ring applies. */
 .voice-card__name {
   font-weight: 600;
   font-size: 0.9rem;
@@ -1419,7 +1416,9 @@ body {
   border-color: var(--border-focus);
   background: var(--bg-surface);
 }
-.document-drop:focus-visible {
+/* The file input inside is the focusable control (the zone itself is not
+   interactive to the keyboard), so its ring shows on the zone. */
+.document-drop:focus-within {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
