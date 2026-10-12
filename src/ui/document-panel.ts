@@ -31,9 +31,13 @@ import {
   documentHighlightsKey,
   loadRecentDocuments,
   recordRecentDocument,
+  documentWordListKey,
+  loadDocumentWordList,
+  saveDocumentWordList,
   type DocumentBookmark,
   type DocumentHighlight,
   type DocumentReadingProgress,
+  type DocumentWordEntry,
 } from '../persistence';
 import { mountHtmlView, mountPdfView, type DocumentView } from './document-view';
 import { paginateIntoPages, type PagePagination } from './pagination';
@@ -51,6 +55,8 @@ import {
   type ReviewScriptText,
   type ReviewSegment,
 } from './document-review';
+import { createWordLookup } from './word-lookup';
+import { wordSpanAt } from '../dictionary';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -160,6 +166,7 @@ export function bindDocumentEvents(state: AppState): void {
   const readerTools = document.getElementById('reader-tools') as HTMLDetailsElement;
   const closeDocBtn = document.getElementById('close-document-btn') as HTMLButtonElement;
   const docTitle = document.getElementById('doc-title') as HTMLElement;
+  const lookupModeBtn = document.getElementById('lookup-mode-btn') as HTMLButtonElement;
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
 
   /**
@@ -183,6 +190,14 @@ export function bindDocumentEvents(state: AppState): void {
   let bookmarks: DocumentBookmark[] = [];
   let highlightsKey: string | null = null;
   let highlights: DocumentHighlight[] = [];
+  let wordsKey: string | null = null;
+  let wordList: DocumentWordEntry[] = [];
+  /**
+   * Lookup mode: when on, tapping the document looks the tapped word up
+   * instead of starting a read from it. The button lives in the top bar
+   * next to Quick read.
+   */
+  let lookupMode = false;
   /** Offset to jump to once the next document finishes mounting. */
   let pendingGoToOffset: number | null = null;
   /** Range captured by the highlight form while its note is being written. */
@@ -881,6 +896,8 @@ export function bindDocumentEvents(state: AppState): void {
     renderBookmarks();
     highlightsKey = file ? documentHighlightsKey(file) : null;
     highlights = highlightsKey ? loadDocumentHighlights(highlightsKey) : [];
+    wordsKey = file ? documentWordListKey(file) : null;
+    wordList = wordsKey ? loadDocumentWordList(wordsKey) : [];
     pendingHighlight = null;
     highlightForm.hidden = true;
     renderHighlights();
@@ -1073,6 +1090,10 @@ export function bindDocumentEvents(state: AppState): void {
     renderHighlights();
     classifiedBlocks = [];
     readerSentences = [];
+    wordsKey = null;
+    wordList = [];
+    if (lookupMode) setLookupMode(false);
+    lookup.close();
     readerView.innerHTML = '';
     readerOverlayContent.innerHTML = '';
     readerStatus.textContent = '';
@@ -1284,7 +1305,11 @@ export function bindDocumentEvents(state: AppState): void {
    * still moves the highlight and says why — a click that does nothing at all
    * reads as a broken document view rather than a missing model.
    */
-  function readFromOffset(offset: number) {
+  function readFromOffset(offset: number, point?: { x: number; y: number }) {
+    if (lookupMode) {
+      lookupAtOffset(offset, point);
+      return;
+    }
     const sentence = sentenceAtOffset(readerSentences, offset);
     if (!sentence) return;
     lastProgressOffset = sentence.start ?? offset;
@@ -1461,6 +1486,7 @@ export function bindDocumentEvents(state: AppState): void {
   function stopAllSpeech() {
     quickRead.stop();
     reviewRead.stop();
+    wordSpeak.stop();
     state.readerSession?.stop();
     state.readerSession = null;
     modelSpeechKind = null;
@@ -1566,6 +1592,92 @@ export function bindDocumentEvents(state: AppState): void {
     state.readerSession?.stop();
     reviewRead.speak(script.map(segment => ({ text: segment.text })), 0, {
       rate: QUICK_RATES[quickRateIndex],
+    });
+  });
+
+  // ── Word lookup: tap a word while lookup mode is on ──
+  // A dedicated speech path for "Hear it" so pronouncing a word never
+  // disturbs whatever the document itself is doing.
+  const wordSpeak = new ReadAloudController({
+    onError: message => showReaderNotice(message),
+  });
+
+  function saveWordToList(word: string, start: number): boolean {
+    if (wordList.some(entry => entry.word.toLowerCase() === word.toLowerCase()
+      && entry.offset === start)) {
+      return false;
+    }
+    wordList = [...wordList, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      word,
+      offset: start,
+      createdAt: Date.now(),
+    }];
+    if (wordsKey) saveDocumentWordList(wordsKey, wordList);
+    return true;
+  }
+
+  function highlightSpan(start: number, end: number): void {
+    highlights = [...highlights, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      start,
+      end,
+      color: 'yellow',
+      createdAt: Date.now(),
+    }];
+    if (highlightsKey) saveDocumentHighlights(highlightsKey, highlights);
+    renderHighlights();
+    applyAnnotationsToView();
+    readerTools.open = true;
+  }
+
+  const lookup = createWordLookup({
+    onSpeak: word => wordSpeak.speak([{ text: word }], 0, { rate: QUICK_RATES[quickRateIndex] }),
+    onSaveWord: saveWordToList,
+    onHighlight: highlightSpan,
+  });
+
+  function lookupAtOffset(offset: number, point?: { x: number; y: number }): void {
+    const text = state.extractedDocument?.text ?? '';
+    const found = wordSpanAt(text, offset);
+    if (!found) return;
+    lookup.open({
+      word: found.word,
+      start: found.start,
+      end: found.end,
+      x: point?.x ?? window.innerWidth / 2,
+      y: point?.y ?? window.innerHeight / 2,
+    });
+  }
+
+  function setLookupMode(on: boolean): void {
+    lookupMode = on;
+    lookupModeBtn.setAttribute('aria-pressed', String(on));
+    lookupModeBtn.classList.toggle('document-btn--on', on);
+    preview.classList.toggle('document-preview--lookup', on);
+    if (!on) lookup.close();
+  }
+
+  lookupModeBtn.addEventListener('click', () => setLookupMode(!lookupMode));
+
+  // The text view's word spans resolve to document offsets through the
+  // sentence's own segmentation, so a tap there looks up exactly what it hit.
+  readerView.addEventListener('click', event => {
+    if (!lookupMode) return;
+    const wordEl = (event.target as HTMLElement).closest<HTMLElement>('.reader-word');
+    const sentenceEl = wordEl?.closest<HTMLElement>('[data-sentence-index]');
+    if (!wordEl || !sentenceEl) return;
+    const sentence = readerSentences.find(s =>
+      s.globalIndex === Number(sentenceEl.dataset.sentenceIndex));
+    const span = sentence ? wordSpanInDocument(sentence, Number(wordEl.dataset.wordIndex)) : null;
+    if (!span) return;
+    const text = state.extractedDocument?.text ?? '';
+    lookup.open({
+      word: text.slice(span.start, span.end),
+      start: span.start,
+      end: span.end,
+      x: event.clientX,
+      y: event.clientY,
     });
   });
 

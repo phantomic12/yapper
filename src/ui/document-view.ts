@@ -345,7 +345,7 @@ export interface PdfViewOptions {
   text?: string;
   sections?: SectionTarget[];
   onNavigate?: (position: NavigationPosition) => void;
-  onPick?: (offset: number) => void;
+  onPick?: (offset: number, point?: { x: number; y: number }) => void;
   onError?: (error: unknown, pageNumber: number) => void;
   /**
    * Lazy text for search over documents whose pages have no text layer
@@ -742,7 +742,7 @@ export async function mountPdfView(
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-role]');
     if (!target) {
       const offset = options.onPick ? offsetAtPoint(event.clientX, event.clientY) : null;
-      if (offset !== null) options.onPick?.(offset);
+      if (offset !== null) options.onPick?.(offset, { x: event.clientX, y: event.clientY });
       return;
     }
     const role = target.dataset.role;
@@ -885,7 +885,7 @@ export async function mountPdfView(
 }
 
 export interface HtmlViewOptions {
-  onPick?: (offset: number) => void;
+  onPick?: (offset: number, point?: { x: number; y: number }) => void;
   initialScale?: number;
   initialTheme?: DocumentTheme;
   fontFamily?: DocumentFontFamily;
@@ -1424,7 +1424,7 @@ export function mountHtmlView(
 
   content.addEventListener('click', event => {
     const offset = options.onPick ? offsetAtPoint(event.clientX, event.clientY) : null;
-    if (offset !== null) options.onPick?.(offset);
+    if (offset !== null) options.onPick?.(offset, { x: event.clientX, y: event.clientY });
   }, { signal });
 
   host.addEventListener('click', event => {

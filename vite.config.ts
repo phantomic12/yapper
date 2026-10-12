@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import { copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { syncPdfWorker } from './scripts/copy-pdf-worker.mjs';
+import { syncDictionary } from './scripts/build-dictionary.mjs';
 
 /**
  * Vite plugin: copies pdfjs-dist's worker into `public/` so the document
@@ -30,6 +31,21 @@ function copyPdfWorkerPlugin(): Plugin {
       // it instead of import.meta.url, which resolves to dist/ after the
       // build runs.
       syncPdfWorker({ projectRoot: process.cwd(), required: true });
+    },
+  };
+}
+
+/**
+ * Vite plugin: rebuilds the bundled word-lookup dictionary in `public/dict/`
+ * from wordnet-db — the same function the postinstall hook runs for dev.
+ * The output is gitignored like the pdf worker.
+ */
+function buildDictionaryPlugin(): Plugin {
+  return {
+    name: 'build-dictionary',
+    apply: 'build',
+    buildStart() {
+      syncDictionary({ projectRoot: process.cwd(), required: true });
     },
   };
 }
@@ -199,6 +215,7 @@ export default defineConfig({
   plugins: [
     serveOrtWasmInDevPlugin(),
     copyPdfWorkerPlugin(),
+    buildDictionaryPlugin(),
     copyOrtWasmPlugin(),
     swCacheBustPlugin(),
   ],

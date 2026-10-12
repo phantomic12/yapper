@@ -330,6 +330,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
+              <button class="document-btn" id="lookup-mode-btn" type="button" aria-pressed="false"
+                      title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
               <div class="docview-switch" role="group" aria-label="How to show the document">
                 <span class="section-label docview-switch__label">View</span>
                 <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"

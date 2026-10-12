@@ -3318,3 +3318,74 @@ body {
 .docbookmarks__label-text { display: block; font-size: 0.85rem; color: var(--text); overflow-wrap: anywhere; }
 .docbookmarks__note-text { margin: 2px 0 0; font-size: 0.75rem; color: var(--text-muted); overflow-wrap: anywhere; }
 .docbookmarks__actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ─── Word lookup popover ─────────────────────────────────────
+   The "tap a word" card: definition, synonyms and syllabification
+   next to the tapped word while lookup mode is on. */
+.document-btn--on {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+}
+
+body.document-open .document-preview--lookup .reader-view,
+body.document-open .document-preview--lookup .document-view {
+  cursor: help;
+}
+
+.word-lookup {
+  position: fixed;
+  z-index: 80;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, calc(100dvh - 24px));
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.word-lookup[hidden] { display: none; }
+
+.word-lookup__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.word-lookup__word { font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; }
+.word-lookup__syl { color: var(--text-muted); font-size: 0.85rem; }
+.word-lookup__lemma { display: block; font-size: 0.78rem; color: var(--text-muted); margin: 2px 0 6px; }
+.word-lookup__close { margin-left: auto; padding: 4px 10px; align-self: flex-start; }
+
+.word-lookup__status { font-size: 0.78rem; color: var(--accent-hover); min-height: 1em; }
+.word-lookup__senses { margin: 8px 0 4px; padding-left: 20px; display: grid; gap: 8px; }
+.word-lookup__sense { font-size: 0.85rem; line-height: 1.45; }
+.word-lookup__pos {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--accent-glow);
+  color: var(--accent-hover);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.word-lookup__syns { margin: 8px 0 0; font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.word-lookup__syns-label { color: var(--text-muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
+.word-lookup__syn {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.word-lookup__syn:hover { border-color: var(--border-focus); color: var(--accent-hover); }
+.word-lookup__none { font-size: 0.85rem; color: var(--text-muted); margin: 8px 0; }
+.word-lookup__actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.word-lookup__actions .document-btn { padding: 6px 12px; font-size: 0.8rem; }
+.word-lookup__credit { margin: 10px 0 0; font-size: 0.68rem; color: var(--text-muted); }

@@ -196,6 +196,54 @@ export function saveDocumentHighlights(key: string, highlights: DocumentHighligh
   }
 }
 
+/** A word saved while reading, for review and study-guide export. */
+export interface DocumentWordEntry {
+  id: string;
+  /** The saved form as it appeared in the document. */
+  word: string;
+  /** Character offset into the extracted text, for context on export. */
+  offset: number;
+  createdAt: number;
+}
+
+const DOCUMENT_WORDLIST_PREFIX = 'yapper.document-wordlist.v1:';
+const MAX_WORDLIST_PER_DOCUMENT = 500;
+
+/** Word lists share the bookmarks key's shape: file identity, never content. */
+export function documentWordListKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_WORDLIST_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentWordList(key: string): DocumentWordEntry[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_WORDLIST_PER_DOCUMENT).flatMap((value, index) => {
+      const entry = value as Partial<DocumentWordEntry>;
+      if (typeof entry.word !== 'string' || !entry.word.trim()) return [];
+      if (!Number.isFinite(entry.offset) || (entry.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `word-${index}`,
+        word: entry.word,
+        offset: entry.offset!,
+        createdAt: Number.isFinite(entry.createdAt) ? entry.createdAt! : 0,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentWordList(key: string, entries: DocumentWordEntry[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(entries.slice(0, MAX_WORDLIST_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
 // ─── Recent documents ───────────────────────────────────────
 // A shelf of what was opened, so a document can be found again — and so
 // "resume where you left off" is visible before the file is re-picked.
