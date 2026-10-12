@@ -312,7 +312,12 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           </div>
 
           <div class="document-preview" id="document-preview" style="display:none">
+            <!-- The top bar: once a document is open it is the window's one
+                 control surface — leaving, reading, the view the document is
+                 seen through, and where the reading has got to. -->
             <div class="document-actions">
+              <button class="document-btn" id="close-document-btn" type="button" title="Close this document and pick another">Close document</button>
+              <span class="doc-title" id="doc-title"></span>
               <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                 <span>Read aloud</span>
@@ -322,7 +327,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
-              <button class="document-btn" id="close-document-btn" type="button" title="Close this document and pick another">Close document</button>
+              <div class="docview-switch" role="group" aria-label="How to show the document">
+                <span class="section-label docview-switch__label">View</span>
+                <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
+                        id="docview-btn-document">Document</button>
+                <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
+                        id="docview-btn-text">Text</button>
+              </div>
               <!-- Position, size and reading time of the open document —
                    inside the pinned bar so it stays visible while pages
                    scroll. -->
@@ -331,13 +342,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </div>
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
 
-            <div class="docview-switch" role="group" aria-label="How to show the document">
-              <span class="section-label docview-switch__label">View</span>
-              <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
-                      id="docview-btn-document">Document</button>
-              <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
-                      id="docview-btn-text">Text</button>
-            </div>
             <!-- The real thing: pages as they appear in the file. Populated only
                  for formats we can render; see document-view.ts. -->
             <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>

@@ -157,9 +157,9 @@ export function bindDocumentEvents(state: AppState): void {
   const shortcutHelp = document.getElementById('shortcut-help') as HTMLElement;
   const shortcutHelpClose = document.getElementById('shortcut-help-close') as HTMLButtonElement;
   const blackout = document.getElementById('blackout') as HTMLElement;
-  const readerSection = readerView.closest('.reader-page') as HTMLElement;
   const readerTools = document.getElementById('reader-tools') as HTMLDetailsElement;
   const closeDocBtn = document.getElementById('close-document-btn') as HTMLButtonElement;
+  const docTitle = document.getElementById('doc-title') as HTMLElement;
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
 
   /**
@@ -906,8 +906,9 @@ export function bindDocumentEvents(state: AppState): void {
     renderReaderView(doc.text, doc.atomicRanges);
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
-    // The reader takes over the page: upload chrome and session shelf hide,
-    // the document fills the viewport (see .reader-page--document-open).
+    // The document takes over the window: app chrome and upload chrome
+    // hide, the top bar and the document fill it (see body.document-open).
+    docTitle.textContent = doc.name;
     setDocOpen(true);
     options.style.display = '';
     // The sample offer has done its job once there is a document to look at.
@@ -1034,12 +1035,13 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   /**
-   * Whether the reader page is showing a document or the upload view.
-   * CSS does the hiding (`.reader-page--document-open`); this flag exists
-   * only so the two states are flipped in one place.
+   * Whether the window is showing a document or the app: an open document
+   * takes the whole window under its top bar. CSS does the hiding and
+   * filling (`body.document-open`); this flag exists only so the two
+   * states are flipped in one place.
    */
   function setDocOpen(open: boolean) {
-    readerSection.classList.toggle('reader-page--document-open', open);
+    document.body.classList.toggle('document-open', open);
   }
 
   /**
@@ -1087,6 +1089,7 @@ export function bindDocumentEvents(state: AppState): void {
     updateStatusBar();
     // Re-picking the same file must still fire 'change'.
     input.value = '';
+    docTitle.textContent = '';
     setDocOpen(false);
     drop.focus();
   }

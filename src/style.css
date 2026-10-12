@@ -2018,42 +2018,103 @@ body::before {
 }
 
 /* ─── Reader: document-open mode ─────────────────────────────
-   Once a document is open the reader IS the page: the upload chrome and
-   the session shelf step back, the controls pin to the top, and the
-   document fills the viewport under them. Structure, notes and exports
-   live in the collapsed tools section at the bottom instead of stacking
-   a second transcript above the pages. */
-.reader-page--document-open .reader-page__hero,
-.reader-page--document-open .document-drop,
-.reader-page--document-open .document-sample,
-.reader-page--document-open .document-need-model,
-.reader-page--document-open .document-options,
-.reader-page--document-open .docrecent,
-.reader-page--document-open .docsearch {
+   An open document takes the whole window: the app chrome and the
+   upload chrome step back, the top bar pins across the top as the one
+   control surface, and the document fills what is left under it.
+   Structure, notes and exports live in the collapsed tools section
+   below rather than stacking a second transcript above the pages. */
+body.document-open {
+  padding-bottom: 0;
+}
+
+body.document-open .app {
+  max-width: none;
+  padding: 0;
+}
+
+body.document-open .header,
+body.document-open .gpu-status,
+body.document-open .footer,
+body.document-open .bottom-bar,
+body.document-open .reader-page__hero,
+body.document-open .document-drop,
+body.document-open .document-sample,
+body.document-open .document-need-model,
+body.document-open .document-options,
+body.document-open .docrecent,
+body.document-open .docsearch {
   display: none;
 }
 
-/* The action bar stays put while the pages scroll under it. */
-.reader-page--document-open .document-actions {
+/* The preview column is exactly the window: the bar, then the
+   document, then the tools. Definite height so the document's flex
+   share resolves to what the window leaves it; opening the tools lets
+   the column overflow and the page scroll. */
+body.document-open .document-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  margin-bottom: 0;
+}
+
+body.document-open .document-preview > *:not(.reader-view):not(.document-view) {
+  flex-shrink: 0;
+}
+
+/* The top bar itself, pinned across the window while the pages move
+   under it. */
+body.document-open .document-actions {
   position: sticky;
   top: 0;
   z-index: 40;
   margin-top: 0;
-  padding: 8px 0;
-  background: var(--bg);
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
 }
 
-/* The document fills the page rather than reading as one small inset
-   panel among many. Page-level scroll takes over — the sticky bar above
-   keeps the controls in reach. */
-.reader-page--document-open .reader-view {
+body.document-open .docview-switch,
+body.document-open .doc-statusbar {
+  margin: 0;
+}
+
+/* The file's own name on the bar, truncated before it can push the
+   controls off one line. */
+.doc-title {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.doc-title:empty { display: none; }
+
+/* The document fills the window under the bar: each surface scrolls
+   its own contents, so what the window shows is always exactly the
+   document — the bar never leaves the top and the page never scrolls
+   the reader itself. */
+body.document-open .reader-view {
+  flex: 1;
+  min-height: 240px;
   max-height: none;
-  min-height: 70vh;
+  margin-top: 0;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
 }
 
-.reader-page--document-open .document-view {
-  height: calc(100dvh - 230px);
-  min-height: 420px;
+body.document-open .document-view {
+  flex: 1;
+  height: auto;
+  min-height: 240px;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+}
+
+body.document-open .document-hint {
+  text-align: center;
 }
 
 .reader-tools {
