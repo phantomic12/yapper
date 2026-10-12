@@ -740,6 +740,7 @@ export function bindDocumentEvents(state: AppState): void {
       item.append(text, actions);
       highlightList.appendChild(item);
     }
+    renderBubbleNotes();
   }
 
   function downloadFile(file: ExportFile) {
@@ -949,6 +950,7 @@ export function bindDocumentEvents(state: AppState): void {
     }
     updateStatusBar();
     renderReaderView(doc.text, doc.atomicRanges);
+    renderBubbleNotes();
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
     // The document takes over the window: app chrome and upload chrome
@@ -1929,6 +1931,45 @@ export function bindDocumentEvents(state: AppState): void {
       if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
       renderColNotes();
     }
+  });
+
+  // ── Bubble notes: inline callouts at the edge of noted highlights ──
+  // A highlight that carries a note renders a 💬 marker at the end of
+  // its range in the text view; tapping it opens the note as a bubble
+  // floating off the text — the margin callout, without leaving the page.
+  function renderBubbleNotes() {
+    readerView.querySelectorAll('.bubble-note').forEach(el => el.remove());
+    for (const h of highlights) {
+      if (!h.note?.trim()) continue;
+      const sentence = readerSentences.find(s =>
+        s.start !== undefined && s.start < h.end && (s.end ?? 0) >= h.end);
+      const span = sentence
+        ? readerView.querySelector(`[data-sentence-index="${sentence.globalIndex}"]`)
+        : null;
+      if (!span?.parentElement) continue;
+      const bubble = document.createElement('span');
+      bubble.className = 'bubble-note';
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = 'bubble-note__marker';
+      marker.textContent = '\u{1F4AC}';
+      marker.title = 'Show note';
+      const body = document.createElement('span');
+      body.className = 'bubble-note__body';
+      body.textContent = h.note;
+      bubble.append(marker, body);
+      span.parentElement.insertBefore(bubble, span.nextSibling);
+    }
+  }
+
+  readerView.addEventListener('click', event => {
+    const marker = (event.target as HTMLElement).closest<HTMLElement>('.bubble-note__marker');
+    if (!marker) return;
+    const bubble = marker.closest('.bubble-note');
+    const opening = !bubble?.classList.contains('bubble-note--open');
+    readerView.querySelectorAll('.bubble-note--open')
+      .forEach(el => el.classList.remove('bubble-note--open'));
+    bubble?.classList.toggle('bubble-note--open', opening);
   });
 
   // ── Cross-document search ────────────────────────────────

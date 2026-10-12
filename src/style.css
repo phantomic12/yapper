@@ -3464,3 +3464,42 @@ body.document-open .document-preview--notes .reader-view {
   overflow-wrap: anywhere;
 }
 .colnotes__note { margin: 4px 0 6px; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ─── Bubble notes (inline callouts) ──────────────────────────
+   A 💬 marker at the end of a noted highlight; its body floats off
+   the text like a margin bubble while the marker stays in flow. */
+.bubble-note {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+}
+.bubble-note__marker {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 0.85em;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.bubble-note__marker:hover { opacity: 1; transform: scale(1.15); }
+.bubble-note__body {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: min(320px, 80vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.bubble-note--open .bubble-note__body,
+.bubble-note:focus-within .bubble-note__body { display: block; }
