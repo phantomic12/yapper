@@ -3389,3 +3389,28 @@ body.document-open .document-preview--lookup .document-view {
 .word-lookup__actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .word-lookup__actions .document-btn { padding: 6px 12px; font-size: 0.8rem; }
 .word-lookup__credit { margin: 10px 0 0; font-size: 0.68rem; color: var(--text-muted); }
+
+/* ─── Word list + study-word suggestions ────────────────────── */
+.docwords[hidden] { display: none; }
+.docwords__suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.docwords__suggest[hidden] { display: none; }
+.docwords__suggest-label { width: 100%; font-size: 0.75rem; }
+.docwords__chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.docwords__chip:hover { border-color: var(--border-focus); color: var(--accent-hover); }

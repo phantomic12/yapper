@@ -416,6 +416,22 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <ul class="docbookmarks__list" id="highlight-list"></ul>
             </div>
 
+            <!-- Words saved from look-ups, plus study-guide export. -->
+            <div class="docwords" id="docwords">
+              <div class="section-label">Word list</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="words-find-btn" aria-expanded="false">
+                  Find study words
+                </button>
+                <button class="document-btn" type="button" id="study-guide-btn" disabled
+                        title="Download the saved words with their definitions and in-context sentences as Markdown">
+                  Study guide
+                </button>
+              </div>
+              <div class="docwords__suggest" id="words-suggest" hidden></div>
+              <ul class="docbookmarks__list" id="word-list"></ul>
+            </div>
+
             <!-- Downloads and the keyboard cheat sheet. -->
             <div class="docexports" id="docexports">
               <div class="section-label">Export</div>

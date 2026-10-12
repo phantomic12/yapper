@@ -56,7 +56,8 @@ import {
   type ReviewSegment,
 } from './document-review';
 import { createWordLookup } from './word-lookup';
-import { wordSpanAt } from '../dictionary';
+import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
+import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -168,6 +169,11 @@ export function bindDocumentEvents(state: AppState): void {
   const docTitle = document.getElementById('doc-title') as HTMLElement;
   const lookupModeBtn = document.getElementById('lookup-mode-btn') as HTMLButtonElement;
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
+  const wordsPanel = document.getElementById('docwords') as HTMLElement;
+  const wordsFindBtn = document.getElementById('words-find-btn') as HTMLButtonElement;
+  const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
+  const wordListEl = document.getElementById('word-list') as HTMLElement;
+  const studyGuideBtn = document.getElementById('study-guide-btn') as HTMLButtonElement;
 
   /**
    * The file the reader is currently showing, kept so the document view can
@@ -898,6 +904,7 @@ export function bindDocumentEvents(state: AppState): void {
     highlights = highlightsKey ? loadDocumentHighlights(highlightsKey) : [];
     wordsKey = file ? documentWordListKey(file) : null;
     wordList = wordsKey ? loadDocumentWordList(wordsKey) : [];
+    renderWordList();
     pendingHighlight = null;
     highlightForm.hidden = true;
     renderHighlights();
@@ -1092,6 +1099,8 @@ export function bindDocumentEvents(state: AppState): void {
     readerSentences = [];
     wordsKey = null;
     wordList = [];
+    renderWordList();
+    wordsSuggest.hidden = true;
     if (lookupMode) setLookupMode(false);
     lookup.close();
     readerView.innerHTML = '';
@@ -1614,8 +1623,116 @@ export function bindDocumentEvents(state: AppState): void {
       createdAt: Date.now(),
     }];
     if (wordsKey) saveDocumentWordList(wordsKey, wordList);
+    renderWordList();
     return true;
   }
+
+  /** The saved-words rail in the tools section: list, suggest chips, guide button. */
+  function renderWordList() {
+    wordsPanel.hidden = !wordsKey;
+    studyGuideBtn.disabled = wordList.length === 0;
+    wordListEl.replaceChildren();
+    for (const entry of wordList) {
+      const item = document.createElement('li');
+      item.className = 'docbookmarks__item';
+      item.dataset.wordId = entry.id;
+      const text = document.createElement('div');
+      text.className = 'docbookmarks__text';
+      const label = document.createElement('span');
+      label.className = 'docbookmarks__label-text';
+      label.textContent = entry.word;
+      text.appendChild(label);
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['lookup', 'Look up'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(text, actions);
+      wordListEl.appendChild(item);
+    }
+  }
+
+  wordListEl.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-word-id]');
+    const entry = wordList.find(w => w.id === item?.dataset.wordId);
+    if (!button || !entry) return;
+    if (button.dataset.action === 'remove') {
+      wordList = wordList.filter(w => w.id !== entry.id);
+      if (wordsKey) saveDocumentWordList(wordsKey, wordList);
+      renderWordList();
+    } else {
+      const rect = button.getBoundingClientRect();
+      lookup.open({
+        word: entry.word,
+        start: entry.offset,
+        end: entry.offset + entry.word.length,
+        x: rect.left,
+        y: rect.top,
+      });
+    }
+  });
+
+  /**
+   * "Find study words" scans the open document for terms outside the common
+   * core vocabulary and offers them as one-tap additions to the list — the
+   * extraction half of vocabulary work; saving is the curation half.
+   */
+  wordsFindBtn.addEventListener('click', async () => {
+    const doc = state.extractedDocument;
+    if (!doc) return;
+    wordsFindBtn.disabled = true;
+    wordsSuggest.hidden = false;
+    wordsSuggest.textContent = 'Scanning the document…';
+    const freq = await loadFrequencyList();
+    const common = new Set(freq.slice(0, COMMON_VOCABULARY_SIZE));
+    const candidates = extractCandidateWords(doc.text, common)
+      .filter(c => !wordList.some(w => w.word.toLowerCase() === c.word));
+    wordsFindBtn.disabled = false;
+    wordsSuggest.replaceChildren();
+    if (!candidates.length) {
+      wordsSuggest.textContent = 'No uncommon words found — this document stays inside everyday vocabulary.';
+      return;
+    }
+    const label = document.createElement('span');
+    label.className = 'docwords__suggest-label';
+    label.textContent = 'Tap a word to add it to the list:';
+    wordsSuggest.appendChild(label);
+    for (const candidate of candidates) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'docwords__chip';
+      chip.dataset.word = candidate.word;
+      chip.dataset.offset = String(candidate.offset);
+      chip.textContent = candidate.count > 1 ? `${candidate.word} ×${candidate.count}` : candidate.word;
+      wordsSuggest.appendChild(chip);
+    }
+  });
+
+  wordsSuggest.addEventListener('click', event => {
+    const chip = (event.target as HTMLElement).closest<HTMLButtonElement>('.docwords__chip');
+    if (!chip?.dataset.word) return;
+    if (saveWordToList(chip.dataset.word, Number(chip.dataset.offset ?? 0))) {
+      chip.remove();
+      readerTools.open = true;
+    }
+  });
+
+  studyGuideBtn.addEventListener('click', async () => {
+    const doc = state.extractedDocument;
+    if (!doc || !wordList.length) return;
+    studyGuideBtn.disabled = true;
+    const dict = await loadDictionary();
+    const guide = buildStudyGuide(doc.name, doc.text, wordList, dict);
+    downloadBlob(`${doc.name.replace(/\.[^./\\]+$/, '')}-study-guide.md`,
+      new Blob([guide], { type: 'text/markdown' }));
+    studyGuideBtn.disabled = false;
+  });
 
   function highlightSpan(start: number, end: number): void {
     highlights = [...highlights, {
