@@ -149,7 +149,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
         ${visibleModels().map(m => `
           <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}">
-            <div class="model-card__pick" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}" data-action="pick" aria-label="Select ${m.name}">
+            <div class="model-card__pick" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}" data-action="pick">
               <div class="model-card__name">${m.name}</div>
               <div class="model-card__desc">${m.description}</div>
               <div class="model-card__meta">
@@ -331,7 +331,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                  seen through, and where the reading has got to. -->
             <div class="document-actions">
               <button class="document-btn" id="close-document-btn" type="button" title="Close this document and pick another">Close document</button>
-              <span class="doc-title" id="doc-title"></span>
+              <h1 class="doc-title" id="doc-title"></h1>
               <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                 <span>Read aloud</span>
@@ -616,6 +616,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <dt>r</dt><dd>Review your highlights and notes aloud</dd>
           <dt>?</dt><dd>Show or hide this help</dd>
         </dl>
+        <!-- WCAG 2.1.4: single-character shortcuts must be able to be turned
+             off, since screen-reader and speech-input users type letters
+             that would otherwise fire them. -->
+        <label class="shortcut-help__toggle">
+          <input type="checkbox" id="shortcut-keys-toggle" checked />
+          Enable single-key shortcuts
+        </label>
       </div>
     </div>
   `;

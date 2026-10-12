@@ -282,9 +282,13 @@ export function bindDocumentEvents(state: AppState): void {
    * wants to watch the highlight move over it.
    */
   let openOverlayOnPlay = true;
+  // Focus that opened the overlay, returned to on close (2.4.3): the
+  // reading controls keep their place instead of dropping to <body>.
+  let overlayTrigger: HTMLElement | null = null;
 
   function openReaderOverlay() {
     if (readerOverlay.style.display === 'none') {
+      overlayTrigger = document.activeElement as HTMLElement | null;
       readerOverlay.style.display = '';
       readerOverlayStatus.textContent = readerStatus.textContent;
       document.body.style.overflow = 'hidden';
@@ -292,8 +296,32 @@ export function bindDocumentEvents(state: AppState): void {
     }
   }
   function closeReaderOverlay() {
+    const wasOpen = readerOverlay.style.display !== 'none';
     readerOverlay.style.display = 'none';
     document.body.style.overflow = '';
+    if (wasOpen && overlayTrigger?.isConnected) overlayTrigger.focus();
+    overlayTrigger = null;
+  }
+
+  /* aria-modal="true" promises the background is inert; without a Tab trap
+     focus can walk straight past the dialog's end into the page behind it.
+     Wraps Tab/Shift+Tab at both ends of the dialog's focusable set. */
+  function trapTabFocus(container: HTMLElement, event: KeyboardEvent): void {
+    const focusables = Array.from(container.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]'
+    )).filter(el => el.tabIndex >= 0 && el.getClientRects().length > 0
+      && !(el as HTMLButtonElement).disabled);
+    if (focusables.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const wrapTo = event.shiftKey ? focusables[focusables.length - 1] : focusables[0];
+    const boundary = event.shiftKey ? focusables[0] : focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (active === boundary || !container.contains(active)) {
+      event.preventDefault();
+      wrapTo.focus();
+    }
   }
 
   function setProgress(msg: string) {
@@ -1207,7 +1235,9 @@ export function bindDocumentEvents(state: AppState): void {
     input.value = '';
     docTitle.textContent = '';
     setDocOpen(false);
-    drop.focus();
+    // The drop zone is a <label> around the clipped file input — the input
+    // is the focusable element (the zone only shows its :focus-within ring).
+    input.focus();
   }
 
   closeDocBtn.addEventListener('click', closeDocument);
@@ -1454,7 +1484,12 @@ export function bindDocumentEvents(state: AppState): void {
   readerOverlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       stopAllSpeech();
+    } else if (e.key === 'Tab') {
+      trapTabFocus(readerOverlay, e);
     }
+  });
+  shortcutHelp.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') trapTabFocus(shortcutHelp, e);
   });
 
   // ── Highlights: user-made marked ranges with optional notes ──
@@ -2173,6 +2208,19 @@ export function bindDocumentEvents(state: AppState): void {
   shortcutsBtn.addEventListener('click', toggleShortcutHelp);
   shortcutHelpClose.addEventListener('click', toggleShortcutHelp);
 
+  // WCAG 2.1.4: single-character keys are off the moment the user unchecks
+  // the toggle in the shortcut help — speech input and screen-reader users
+  // otherwise fire 'm', 'n', 'b'… just by typing. Persisted per browser.
+  const SHORTCUTS_KEY = 'yapper.shortcuts-enabled';
+  const shortcutKeysToggle = document.getElementById('shortcut-keys-toggle') as HTMLInputElement;
+  const shortcutsEnabled = () => shortcutKeysToggle.checked;
+  try {
+    shortcutKeysToggle.checked = localStorage.getItem(SHORTCUTS_KEY) !== '0';
+  } catch { /* private mode — the checkbox default (on) stands */ }
+  shortcutKeysToggle.addEventListener('change', () => {
+    try { localStorage.setItem(SHORTCUTS_KEY, shortcutKeysToggle.checked ? '1' : '0'); } catch { /* best-effort */ }
+  });
+
   document.addEventListener('keydown', (e) => {
     // A visible blackout swallows the next key: dismissing it is the action.
     if (!blackout.hidden) {
@@ -2180,10 +2228,21 @@ export function bindDocumentEvents(state: AppState): void {
       e.preventDefault();
       return;
     }
+    // While a modal dialog is up its aria-modal promises an inert page:
+    // swallow every key except the ones that close it.
+    if (!shortcutHelp.hidden) {
+      if (e.key === 'Escape' || e.key === '?') {
+        e.preventDefault();
+        toggleShortcutHelp();
+      }
+      return;
+    }
+    if (readerOverlay.style.display !== 'none') return;
     const target = e.target as HTMLElement | null;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
       || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (!shortcutsEnabled() && e.key !== 'Escape') return;
     switch (e.key) {
       case '/':
         e.preventDefault();

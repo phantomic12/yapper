@@ -138,22 +138,23 @@ function renderVoiceCard(
   aliasNote: string,
 ): string {
   const selected = voiceId === selectedId;
-  // Traits belong in the accessible name even when the group heading already
-  // shows them: a screen reader lands on one card, not on the whole group.
-  const spoken = traits ? `${name}, ${traits}` : name;
   return `
     <div class="voice-card ${selected ? 'voice-card--selected' : ''}" data-voice-id="${voiceId}">
       <div class="voice-card__pick" role="radio"
-           tabindex="${selected ? 0 : -1}" aria-checked="${selected}" aria-label="Select ${escapeHtml(spoken)}">
+           tabindex="${selected ? 0 : -1}" aria-checked="${selected}">
         <span class="voice-card__name">${escapeHtml(name)}</span>
         ${detail ? `<span class="voice-card__desc">${escapeHtml(detail)}</span>` : ''}
+        ${/* Traits belong in the accessible name even when the group heading
+              already shows them: a screen reader lands on one card, not on
+              the whole group. Hidden so the visible text stays what it is —
+              the card's name then contains exactly what sighted users see. */ ''}
+        ${traits ? `<span class="visually-hidden">, ${escapeHtml(traits)}</span>` : ''}
       </div>
       ${aliasNote ? `<span class="voice-card__source" data-advanced>${escapeHtml(aliasNote)}</span>` : ''}
       ${previewable
-        ? `<button class="voice-card__play" type="button" data-action="preview" data-label="Hear ${escapeHtml(name)}"
-             aria-label="Hear ${escapeHtml(name)}"
+        ? `<button class="voice-card__play" type="button" data-action="preview"
              ${canHear ? '' : 'data-blocked="1" title="Load the model first to hear this voice"'}
-             >${previewButtonLabel(false)}</button>`
+             ><span class="voice-card__play-label">${previewButtonLabel(false)}</span><span class="visually-hidden">, ${escapeHtml(name)}</span></button>`
         : ''}
     </div>
   `;
@@ -289,12 +290,15 @@ function renderPreviewButtons(): void {
     const btn = card.querySelector<HTMLButtonElement>('.voice-card__play');
     if (!btn) return;
     const active = player.isActive(card.dataset.voiceId!);
-    const baseLabel = btn.dataset.label ?? 'Hear it';
-    btn.textContent = active
+    // Only the label span is repainted: the trailing visually-hidden span
+    // carries the voice name into the accessible name in every state, so the
+    // name always contains whatever the button currently says (Label in
+    // Name). Fallback to the button itself keeps bare test fixtures working.
+    const labelEl = btn.querySelector<HTMLElement>('.voice-card__play-label') ?? btn;
+    labelEl.textContent = active
       ? player.busy ? `… ${elapsed}s` : previewButtonLabel(true)
       : previewButtonLabel(false);
     btn.classList.toggle('voice-card__play--active', active);
-    btn.setAttribute('aria-label', active ? baseLabel.replace(/^Hear/, 'Stop') : baseLabel);
     btn.disabled = btn.hasAttribute('data-blocked') || (player.busy && !active);
   });
 }
