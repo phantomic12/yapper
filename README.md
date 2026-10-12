@@ -7,27 +7,27 @@
 [![GPU smoke test](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml)
 --->
 
-**Browser text-to-speech with zero cloud.** Kokoro, Kitten, SpeechT5, and MMS-TTS run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
+**A private document reader that reads aloud — with zero cloud.** Drop a PDF, DOCX, EPUB, or a dozen other formats into the reader; Yapper extracts the text on-device and reads it back with bookmarks, highlights, notes, and exports alongside. Kokoro, Kitten, SpeechT5, and MMS-TTS voices run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
 > **Note on performance:** Kokoro and Kitten are registered through `WorkerBackedEngine` (`src/engines/worker-bridge.ts` → `inference-worker.ts`), so load/generate for those models run off the main thread and the UI stays responsive while a job is in progress. SpeechT5 and MMS-TTS still run on the main thread via Transformers.js — selecting one shows an in-app warning that generation may briefly freeze the page, and a liveness indicator runs in the queue while any job generates. The non-blocking queue lets you stack multiple jobs either way.
 
 ## Quick start
 
-1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally).
-2. Pick a **quality** — the default view asks for one word, not a model:
+1. Open the [live demo](https://phantomic12.github.io/yapper/) (or run `npm run dev` locally). You land on the **Reader**.
+2. Drop a PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, or Markdown file — or press **Read a sample** to try it empty-handed. The document takes over the window under a top bar; **Quick read** speaks it with the browser voice, no model needed. For scanned PDFs, enable the OCR toggle (Tesseract or Florence-2 LLM).
+3. For a better voice, open **Studio** and pick a **quality** — the default view asks for one word, not a model:
    - **Low** — fastest and smallest, 8 voices
    - **Medium** — the sweet spot: 28 selectable English voices (US + British, male + female)
    - **High** — best fidelity, same 28 voices (falls back automatically on GPUs without `shader-f16`)
 
    The model behind each preset starts downloading by itself, so there is no
-   load button to press. It is cached after the first run.
-3. Type or paste text and press **Speak** (or `Ctrl`/`Cmd`+Enter).
+   load button to press. It is cached after the first run. **Read aloud** on the
+   reader bar then uses it; **Speak** on the Studio page reads pasted text.
 4. Open **More** in the bottom bar for everything the short path leaves out:
    the full model grid, the language filter, download sizes, speed, and the
    per-model details behind each quality — Kokoro-82M in int8 (~88 MB) or fp16
    (~156 MB), Kitten TTS Mini (~78 MB) and Nano (~24 MB), and MMS-TTS (~50 MB
    each, 9 languages).
-5. Drop a PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, or Markdown file into the document reader to listen hands-free. For scanned PDFs, enable the OCR toggle (Tesseract or Florence-2 LLM).
 
 > A live demo (pick a model → load → queue a sample → audio plays):
 >
@@ -54,7 +54,12 @@
   - **SpeechT5** (~330 MB, fp32) — multi-voice via 512-dim xvector speaker embeddings
   - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
 - **Off-thread Kokoro / Kitten** — `WorkerBackedEngine` keeps the page usable during those generations
+- **The reader is the app** — it opens first, and an open document takes the
+  whole window under a top bar (voice, view, position, close). Structure,
+  bookmarks, highlights, notes and exports stay one tap beneath the pages
 - **Read documents aloud** — drop PDF / DOCX / ODT / EPUB / TXT / MD; text is extracted locally and fed to the reader session + TTS queue
+- **Study along the way** — bookmarks, colour highlights with notes, reading
+  position memory, cross-document search, and notes/audiobook export
 - **Optional PDF OCR** — toggle OCR for scanned/layout pages (Tesseract.js). Self-hosted worker, WASM core, and English traineddata live under `public/lib/tesseract/`
 - **Non-blocking queue** — stack multiple generations
 - **Voice selection** — built-in voices per model, or a custom xvector for SpeechT5

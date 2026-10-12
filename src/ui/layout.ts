@@ -47,19 +47,19 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           </svg>
           <h1 class="header__title">Yapper</h1>
         </div>
-        <p class="header__subtitle">Text-to-speech that runs entirely in your browser</p>
+        <p class="header__subtitle">A private document reader that reads aloud — entirely in your browser</p>
         <div class="privacy-badge">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           100% private — no data leaves your device
         </div>
         <nav class="page-nav" role="tablist" aria-label="Pages">
-          <button class="page-nav__tab page-nav__tab--active" type="button" role="tab" data-page-target="studio" aria-selected="true" aria-controls="page-studio">
+          <button class="page-nav__tab page-nav__tab--active" type="button" role="tab" data-page-target="reader" aria-selected="true" aria-controls="page-reader">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            Reader
+          </button>
+          <button class="page-nav__tab" type="button" role="tab" data-page-target="studio" aria-selected="false" aria-controls="page-studio">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             Studio
-          </button>
-          <button class="page-nav__tab" type="button" role="tab" data-page-target="reader" aria-selected="false" aria-controls="page-reader">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            Document Reader
           </button>
         </nav>
 
@@ -72,8 +72,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span class="gpu-status__label">${capInfo.label}</span>
       </div>
 
-      <!-- ══════════ Studio page ══════════ -->
-      <div class="page" id="page-studio" role="tabpanel" aria-label="Studio">
+      <!-- ══════════ Studio page ══════════
+           The reader is the home page; Studio starts hidden so first paint
+           matches the default before page-nav runs. -->
+      <div class="page" id="page-studio" role="tabpanel" aria-label="Studio" hidden>
 
       <!-- Main-thread warning: honest about UI freezes during synthesis (AC2).
            Hidden by default; re-shown/hidden when the selection changes. -->
@@ -245,8 +247,9 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <div class="reader-page__hero">
             <h2 class="reader-page__title" id="reader-page-heading">Document Reader</h2>
             <p class="reader-page__subtitle">
-              Drop in a document — Yapper extracts the text, scans it with OCR when needed,
-              classifies every block, and reads it aloud. Everything happens on your device.
+              Drop in a document — Yapper extracts the text, OCRs what needs it, and reads
+              it aloud with bookmarks, highlights and notes along the way.
+              Everything happens on your device.
             </p>
           </div>
 
