@@ -3414,3 +3414,53 @@ body.document-open .document-preview--lookup .document-view {
   cursor: pointer;
 }
 .docwords__chip:hover { border-color: var(--border-focus); color: var(--accent-hover); }
+
+/* ─── Column notes rail ───────────────────────────────────────
+   The margin column: a right-hand rail of notes pinned to document
+   offsets. In document-open mode it slides over the page edge; the
+   views step aside so text and notes sit side by side. */
+.colnotes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.colnotes[hidden] { display: none; }
+
+body.document-open .colnotes {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(320px, 85vw);
+  padding-top: 60px; /* clear the pinned top bar */
+  overflow-y: auto;
+  z-index: 50;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+}
+
+body.document-open .document-preview--notes .document-view,
+body.document-open .document-preview--notes .reader-view {
+  margin-right: min(320px, 85vw);
+}
+
+.colnotes__head { display: flex; align-items: center; gap: 8px; }
+.colnotes__head #colnotes-close-btn { margin-left: auto; padding: 4px 10px; }
+.colnotes__form { display: grid; gap: 6px; }
+.colnotes__form[hidden] { display: none; }
+.colnotes__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.colnotes__item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+.colnotes__anchor {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.colnotes__note { margin: 4px 0 6px; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }

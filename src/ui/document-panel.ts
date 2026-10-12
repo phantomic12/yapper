@@ -34,7 +34,11 @@ import {
   documentWordListKey,
   loadDocumentWordList,
   saveDocumentWordList,
+  documentColumnNotesKey,
+  loadDocumentColumnNotes,
+  saveDocumentColumnNotes,
   type DocumentBookmark,
+  type DocumentColumnNote,
   type DocumentHighlight,
   type DocumentReadingProgress,
   type DocumentWordEntry,
@@ -169,6 +173,14 @@ export function bindDocumentEvents(state: AppState): void {
   const docTitle = document.getElementById('doc-title') as HTMLElement;
   const lookupModeBtn = document.getElementById('lookup-mode-btn') as HTMLButtonElement;
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
+  const colnotesBtn = document.getElementById('colnotes-btn') as HTMLButtonElement;
+  const colnotesEl = document.getElementById('colnotes') as HTMLElement;
+  const colnotesAddBtn = document.getElementById('colnotes-add-btn') as HTMLButtonElement;
+  const colnotesCloseBtn = document.getElementById('colnotes-close-btn') as HTMLButtonElement;
+  const colnotesForm = document.getElementById('colnotes-form') as HTMLFormElement;
+  const colnotesText = document.getElementById('colnotes-text') as HTMLTextAreaElement;
+  const colnotesCancelBtn = document.getElementById('colnotes-cancel-btn') as HTMLButtonElement;
+  const colnotesList = document.getElementById('colnotes-list') as HTMLElement;
   const wordsPanel = document.getElementById('docwords') as HTMLElement;
   const wordsFindBtn = document.getElementById('words-find-btn') as HTMLButtonElement;
   const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
@@ -198,6 +210,12 @@ export function bindDocumentEvents(state: AppState): void {
   let highlights: DocumentHighlight[] = [];
   let wordsKey: string | null = null;
   let wordList: DocumentWordEntry[] = [];
+  let colnotesKey: string | null = null;
+  let colNotes: DocumentColumnNote[] = [];
+  /** Note id being edited in the rail's form, or null when adding. */
+  let editingNoteId: string | null = null;
+  /** Offset the open note form will anchor to. */
+  let pendingNoteOffset = 0;
   /**
    * Lookup mode: when on, tapping the document looks the tapped word up
    * instead of starting a read from it. The button lives in the top bar
@@ -905,6 +923,9 @@ export function bindDocumentEvents(state: AppState): void {
     wordsKey = file ? documentWordListKey(file) : null;
     wordList = wordsKey ? loadDocumentWordList(wordsKey) : [];
     renderWordList();
+    colnotesKey = file ? documentColumnNotesKey(file) : null;
+    colNotes = colnotesKey ? loadDocumentColumnNotes(colnotesKey) : [];
+    renderColNotes();
     pendingHighlight = null;
     highlightForm.hidden = true;
     renderHighlights();
@@ -1101,6 +1122,12 @@ export function bindDocumentEvents(state: AppState): void {
     wordList = [];
     renderWordList();
     wordsSuggest.hidden = true;
+    colnotesKey = null;
+    colNotes = [];
+    renderColNotes();
+    setColNotesOpen(false);
+    colnotesForm.hidden = true;
+    editingNoteId = null;
     if (lookupMode) setLookupMode(false);
     lookup.close();
     readerView.innerHTML = '';
@@ -1796,6 +1823,112 @@ export function bindDocumentEvents(state: AppState): void {
       x: event.clientX,
       y: event.clientY,
     });
+  });
+
+  // ── Column notes: a margin rail of notes pinned to offsets ──
+  function setColNotesOpen(on: boolean): void {
+    colnotesEl.hidden = !on;
+    colnotesBtn.setAttribute('aria-pressed', String(on));
+    colnotesBtn.classList.toggle('document-btn--on', on);
+    preview.classList.toggle('document-preview--notes', on);
+  }
+
+  function goToDocumentOffset(offset: number): void {
+    lastProgressOffset = offset;
+    docView?.goToOffset(offset);
+    const sentence = readerSentences.find(s => s.start !== undefined
+      && s.start <= offset && (s.end ?? 0) > offset);
+    const el = sentence
+      ? readerView.querySelector(`[data-sentence-index="${sentence.globalIndex}"]`)
+      : null;
+    (el ?? readerView).scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }
+
+  function renderColNotes() {
+    colnotesList.replaceChildren();
+    const text = state.extractedDocument?.text ?? '';
+    for (const note of colNotes) {
+      const item = document.createElement('li');
+      item.className = 'colnotes__item';
+      item.dataset.noteId = note.id;
+      const anchor = document.createElement('div');
+      anchor.className = 'colnotes__anchor';
+      const quote = text.slice(Math.max(0, note.offset - 30), note.offset + 50)
+        .replace(/\s+/g, ' ').trim();
+      anchor.textContent = quote ? `…${quote}…` : `Offset ${note.offset}`;
+      const body = document.createElement('p');
+      body.className = 'colnotes__note';
+      body.textContent = note.note;
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['edit', 'Edit'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(anchor, body, actions);
+      colnotesList.appendChild(item);
+    }
+  }
+
+  colnotesBtn.addEventListener('click', () => setColNotesOpen(!!colnotesEl.hidden));
+  colnotesCloseBtn.addEventListener('click', () => setColNotesOpen(false));
+
+  colnotesAddBtn.addEventListener('click', () => {
+    editingNoteId = null;
+    pendingNoteOffset = lastProgressOffset;
+    colnotesText.value = '';
+    colnotesForm.hidden = false;
+    colnotesText.focus();
+  });
+
+  colnotesCancelBtn.addEventListener('click', () => {
+    colnotesForm.hidden = true;
+    editingNoteId = null;
+  });
+
+  colnotesForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const note = colnotesText.value.trim();
+    if (!note) return;
+    if (editingNoteId) {
+      colNotes = colNotes.map(entry =>
+        entry.id === editingNoteId ? { ...entry, note } : entry);
+    } else {
+      colNotes = [...colNotes, {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        offset: pendingNoteOffset,
+        note,
+        createdAt: Date.now(),
+      }].sort((a, b) => a.offset - b.offset);
+    }
+    if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
+    editingNoteId = null;
+    colnotesForm.hidden = true;
+    renderColNotes();
+  });
+
+  colnotesList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-note-id]');
+    const note = colNotes.find(n => n.id === item?.dataset.noteId);
+    if (!button || !note) return;
+    if (button.dataset.action === 'go') {
+      goToDocumentOffset(note.offset);
+    } else if (button.dataset.action === 'edit') {
+      editingNoteId = note.id;
+      pendingNoteOffset = note.offset;
+      colnotesText.value = note.note;
+      colnotesForm.hidden = false;
+      colnotesText.focus();
+    } else if (button.dataset.action === 'remove') {
+      colNotes = colNotes.filter(n => n.id !== note.id);
+      if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
+      renderColNotes();
+    }
   });
 
   // ── Cross-document search ────────────────────────────────

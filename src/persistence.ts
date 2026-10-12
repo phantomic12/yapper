@@ -244,6 +244,55 @@ export function saveDocumentWordList(key: string, entries: DocumentWordEntry[]):
   }
 }
 
+// ─── Column notes ───────────────────────────────────────────
+// Free-form notes pinned to document offsets — the margin column beside
+// the page. Sorted by offset so the rail reads alongside the document.
+
+export interface DocumentColumnNote {
+  id: string;
+  /** Character offset into the extracted text the note hangs off. */
+  offset: number;
+  note: string;
+  createdAt: number;
+}
+
+const DOCUMENT_COLNOTES_PREFIX = 'yapper.document-colnotes.v1:';
+const MAX_COLNOTES_PER_DOCUMENT = 300;
+
+export function documentColumnNotesKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_COLNOTES_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentColumnNotes(key: string): DocumentColumnNote[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_COLNOTES_PER_DOCUMENT).flatMap((value, index) => {
+      const note = value as Partial<DocumentColumnNote>;
+      if (typeof note.note !== 'string' || !note.note.trim()) return [];
+      if (!Number.isFinite(note.offset) || (note.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof note.id === 'string' && note.id ? note.id : `note-${index}`,
+        offset: note.offset!,
+        note: note.note,
+        createdAt: Number.isFinite(note.createdAt) ? note.createdAt! : 0,
+      }];
+    }).sort((a, b) => a.offset - b.offset);
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentColumnNotes(key: string, notes: DocumentColumnNote[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(notes.slice(0, MAX_COLNOTES_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
 // ─── Recent documents ───────────────────────────────────────
 // A shelf of what was opened, so a document can be found again — and so
 // "resume where you left off" is visible before the file is re-picked.

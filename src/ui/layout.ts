@@ -332,6 +332,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
               <button class="document-btn" id="lookup-mode-btn" type="button" aria-pressed="false"
                       title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
+              <button class="document-btn" id="colnotes-btn" type="button" aria-pressed="false"
+                      title="Show the margin column of notes pinned to spots in the document">Notes</button>
               <div class="docview-switch" role="group" aria-label="How to show the document">
                 <span class="section-label docview-switch__label">View</span>
                 <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
@@ -355,6 +357,25 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                  left empty just because the visual view is on top. -->
             <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
             <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+
+            <!-- Margin column: notes pinned to document offsets, riding
+                 beside the pages like a second column of the book. -->
+            <aside class="colnotes" id="colnotes" aria-label="Column notes" hidden>
+              <div class="colnotes__head">
+                <span class="section-label">Column notes</span>
+                <button class="document-btn" id="colnotes-add-btn" type="button">Note here</button>
+                <button class="document-btn" id="colnotes-close-btn" type="button" aria-label="Close notes column">✕</button>
+              </div>
+              <form class="colnotes__form" id="colnotes-form" hidden>
+                <textarea class="docbookmarks__note" id="colnotes-text" rows="3" maxlength="1000"
+                          placeholder="Note for this spot…"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save note</button>
+                  <button class="document-btn" type="button" id="colnotes-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ul class="colnotes__list" id="colnotes-list"></ul>
+            </aside>
 
             <!-- Secondary affordances stay reachable but collapsed: the
                  document itself is the interface here, so the structure list,
