@@ -1879,10 +1879,14 @@ export function bindDocumentEvents(state: AppState): void {
     const span = sentence ? wordSpanInDocument(sentence, Number(wordEl.dataset.wordIndex)) : null;
     if (!span) return;
     const text = state.extractedDocument?.text ?? '';
+    // The karaoke span covers the whole token — punctuation included — so
+    // resolve through wordSpanAt to land on the bare word.
+    const found = wordSpanAt(text, span.start);
+    if (!found) return;
     lookup.open({
-      word: text.slice(span.start, span.end),
-      start: span.start,
-      end: span.end,
+      word: found.word,
+      start: found.start,
+      end: found.end,
       x: event.clientX,
       y: event.clientY,
     });
@@ -1998,8 +2002,34 @@ export function bindDocumentEvents(state: AppState): void {
   // A highlight that carries a note renders a 💬 marker at the end of
   // its range in the text view; tapping it opens the note as a bubble
   // floating off the text — the margin callout, without leaving the page.
+  // The rendered-page view paints annotation boxes; the reflowable text
+  // view needs the same colour on its word spans or a highlight is only
+  // visible in one of the two reading surfaces.
+  function paintTextHighlights() {
+    readerView.querySelectorAll('.reader-word--hl').forEach(el => {
+      el.classList.remove('reader-word--hl',
+        'reader-word--hl--yellow', 'reader-word--hl--green', 'reader-word--hl--blue');
+    });
+    for (const h of highlights) {
+      for (const s of readerSentences) {
+        if (s.start === undefined) continue;
+        if (s.end !== undefined && s.end <= h.start) continue;
+        if (s.start >= h.end) break;
+        const sentenceEl = readerView.querySelector(`[data-sentence-index="${s.globalIndex}"]`);
+        const wordEls = sentenceEl?.querySelectorAll('.reader-word');
+        if (!wordEls?.length) continue;
+        for (let w = 0; w < s.words.length; w++) {
+          const span = wordSpanInDocument(s, w);
+          if (!span || span.end <= h.start || span.start >= h.end) continue;
+          wordEls[w]?.classList.add('reader-word--hl', `reader-word--hl--${h.color}`);
+        }
+      }
+    }
+  }
+
   function renderBubbleNotes() {
     readerView.querySelectorAll('.bubble-note').forEach(el => el.remove());
+    paintTextHighlights();
     for (const h of highlights) {
       if (!h.note?.trim()) continue;
       const sentence = readerSentences.find(s =>

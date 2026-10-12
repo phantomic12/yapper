@@ -136,9 +136,13 @@ let hypher: Hypher | null = null;
  * Returns the word unchanged when it has no hyphenation point.
  */
 export function syllabify(word: string): string {
-  if (!hypher) hypher = new Hypher(enUsPatterns);
-  const parts = hypher.hyphenate(word.toLowerCase());
-  return parts.length > 1 ? parts.join('·') : word;
+  const h = (hypher ??= new Hypher(enUsPatterns));
+  // Hyphenate each token separately: phrase headwords like "home ground"
+  // keep their space instead of getting a dangling "· ·" between parts.
+  return word.toLowerCase().split(/\s+/).map(token => {
+    const parts = h.hyphenate(token);
+    return parts.length > 1 ? parts.join('·') : token;
+  }).join(' ');
 }
 
 export interface LocatedWord {

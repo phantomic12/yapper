@@ -1662,6 +1662,15 @@ body {
   background: var(--bg-hover);
   border-color: var(--border-focus);
 }
+.document-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.document-btn--primary:disabled {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
 .document-btn--primary {
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   border-color: transparent;
@@ -2934,6 +2943,11 @@ body {
 /* Karaoke: the sentence trail behind the spoken word. */
 .docview__hl--context,
 .dochtml__hl--context { background: rgba(255, 214, 0, 0.14); box-shadow: none; }
+/* Same annotations, painted on the word spans of the reflowable text view. */
+.reader-word--hl { border-radius: 2px; }
+.reader-word--hl--yellow { background: rgba(255, 214, 0, 0.38); }
+.reader-word--hl--green { background: rgba(60, 200, 120, 0.32); }
+.reader-word--hl--blue { background: rgba(90, 160, 255, 0.32); }
 
 /* ─── Page sheets: the PDF-reader look for reflowable text ─────────
    Blocks are flowed onto fixed-proportion sheets (see ui/pagination.ts).
