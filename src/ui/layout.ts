@@ -457,6 +457,30 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <ul class="docbookmarks__list" id="word-list"></ul>
             </div>
 
+            <!-- Answers written against question spots in the document —
+                 the filled-in test sheet, exportable as Markdown. -->
+            <div class="doctest" id="doctest">
+              <div class="section-label">Test answers</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="test-answer-btn" aria-expanded="false">
+                  Answer this question
+                </button>
+                <button class="document-btn" type="button" id="test-sheet-btn" disabled
+                        title="Download your answers with their questions as a Markdown test sheet">
+                  Test sheet
+                </button>
+              </div>
+              <form class="docbookmarks__form" id="test-form" hidden>
+                <label class="docbookmarks__label" for="test-answer-text">Your answer</label>
+                <textarea class="docbookmarks__note" id="test-answer-text" rows="3" maxlength="2000"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save answer</button>
+                  <button class="document-btn" type="button" id="test-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ol class="doctest__list" id="test-list"></ol>
+            </div>
+
             <!-- Downloads and the keyboard cheat sheet. -->
             <div class="docexports" id="docexports">
               <div class="section-label">Export</div>

@@ -3550,3 +3550,18 @@ body.document-open .document-preview--notes .reader-view {
   margin-right: 4px;
 }
 .write-spell__none { color: var(--text-muted); font-size: 0.78rem; }
+
+/* ─── Test answers ──────────────────────────────────────────── */
+.doctest[hidden] { display: none; }
+.doctest__list {
+  margin: 8px 0 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 8px;
+}
+.doctest__item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}

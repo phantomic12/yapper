@@ -293,6 +293,55 @@ export function saveDocumentColumnNotes(key: string, notes: DocumentColumnNote[]
   }
 }
 
+// ─── Test answers ───────────────────────────────────────────
+// Answers written against question spots in the document — the filled-in
+// test sheet. Kept offset-sorted like the column notes.
+
+export interface DocumentTestAnswer {
+  id: string;
+  /** Offset of the question this answers (its anchor in the text). */
+  offset: number;
+  answer: string;
+  createdAt: number;
+}
+
+const DOCUMENT_TEST_PREFIX = 'yapper.document-test.v1:';
+const MAX_TEST_ANSWERS_PER_DOCUMENT = 200;
+
+export function documentTestAnswersKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_TEST_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentTestAnswers(key: string): DocumentTestAnswer[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_TEST_ANSWERS_PER_DOCUMENT).flatMap((value, index) => {
+      const answer = value as Partial<DocumentTestAnswer>;
+      if (typeof answer.answer !== 'string' || !answer.answer.trim()) return [];
+      if (!Number.isFinite(answer.offset) || (answer.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof answer.id === 'string' && answer.id ? answer.id : `answer-${index}`,
+        offset: answer.offset!,
+        answer: answer.answer,
+        createdAt: Number.isFinite(answer.createdAt) ? answer.createdAt! : 0,
+      }];
+    }).sort((a, b) => a.offset - b.offset);
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentTestAnswers(key: string, answers: DocumentTestAnswer[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(answers.slice(0, MAX_TEST_ANSWERS_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
 // ─── Recent documents ───────────────────────────────────────
 // A shelf of what was opened, so a document can be found again — and so
 // "resume where you left off" is visible before the file is re-picked.

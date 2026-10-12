@@ -37,7 +37,11 @@ import {
   documentColumnNotesKey,
   loadDocumentColumnNotes,
   saveDocumentColumnNotes,
+  documentTestAnswersKey,
+  loadDocumentTestAnswers,
+  saveDocumentTestAnswers,
   type DocumentBookmark,
+  type DocumentTestAnswer,
   type DocumentColumnNote,
   type DocumentHighlight,
   type DocumentReadingProgress,
@@ -62,6 +66,7 @@ import {
 import { createWordLookup } from './word-lookup';
 import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
 import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
+import { buildTestSheet } from '../testsheet';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -181,6 +186,13 @@ export function bindDocumentEvents(state: AppState): void {
   const colnotesText = document.getElementById('colnotes-text') as HTMLTextAreaElement;
   const colnotesCancelBtn = document.getElementById('colnotes-cancel-btn') as HTMLButtonElement;
   const colnotesList = document.getElementById('colnotes-list') as HTMLElement;
+  const testPanel = document.getElementById('doctest') as HTMLElement;
+  const testAnswerBtn = document.getElementById('test-answer-btn') as HTMLButtonElement;
+  const testSheetBtn = document.getElementById('test-sheet-btn') as HTMLButtonElement;
+  const testForm = document.getElementById('test-form') as HTMLFormElement;
+  const testAnswerText = document.getElementById('test-answer-text') as HTMLTextAreaElement;
+  const testCancelBtn = document.getElementById('test-cancel-btn') as HTMLButtonElement;
+  const testList = document.getElementById('test-list') as HTMLElement;
   const wordsPanel = document.getElementById('docwords') as HTMLElement;
   const wordsFindBtn = document.getElementById('words-find-btn') as HTMLButtonElement;
   const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
@@ -216,6 +228,10 @@ export function bindDocumentEvents(state: AppState): void {
   let editingNoteId: string | null = null;
   /** Offset the open note form will anchor to. */
   let pendingNoteOffset = 0;
+  let testKey: string | null = null;
+  let testAnswers: DocumentTestAnswer[] = [];
+  let editingAnswerId: string | null = null;
+  let pendingAnswerOffset = 0;
   /**
    * Lookup mode: when on, tapping the document looks the tapped word up
    * instead of starting a read from it. The button lives in the top bar
@@ -927,6 +943,9 @@ export function bindDocumentEvents(state: AppState): void {
     colnotesKey = file ? documentColumnNotesKey(file) : null;
     colNotes = colnotesKey ? loadDocumentColumnNotes(colnotesKey) : [];
     renderColNotes();
+    testKey = file ? documentTestAnswersKey(file) : null;
+    testAnswers = testKey ? loadDocumentTestAnswers(testKey) : [];
+    renderTestAnswers();
     pendingHighlight = null;
     highlightForm.hidden = true;
     renderHighlights();
@@ -1130,6 +1149,11 @@ export function bindDocumentEvents(state: AppState): void {
     setColNotesOpen(false);
     colnotesForm.hidden = true;
     editingNoteId = null;
+    testKey = null;
+    testAnswers = [];
+    renderTestAnswers();
+    testForm.hidden = true;
+    editingAnswerId = null;
     if (lookupMode) setLookupMode(false);
     lookup.close();
     readerView.innerHTML = '';
@@ -1970,6 +1994,104 @@ export function bindDocumentEvents(state: AppState): void {
     readerView.querySelectorAll('.bubble-note--open')
       .forEach(el => el.classList.remove('bubble-note--open'));
     bubble?.classList.toggle('bubble-note--open', opening);
+  });
+
+  // ── Test-taking: answers pinned to question offsets ──
+  // Read the question on the page, write the answer beside it, and the
+  // "Test sheet" export produces a numbered sheet pairing each answer
+  // with its question.
+  function renderTestAnswers() {
+    testPanel.hidden = !testKey;
+    testSheetBtn.disabled = testAnswers.length === 0;
+    testList.replaceChildren();
+    const text = state.extractedDocument?.text ?? '';
+    for (const entry of testAnswers) {
+      const item = document.createElement('li');
+      item.className = 'doctest__item';
+      item.dataset.answerId = entry.id;
+      const question = document.createElement('div');
+      question.className = 'colnotes__anchor';
+      const quote = text.slice(Math.max(0, entry.offset - 30), entry.offset + 50)
+        .replace(/\s+/g, ' ').trim();
+      question.textContent = quote ? `Q: …${quote}…` : `Question at ${entry.offset}`;
+      const body = document.createElement('p');
+      body.className = 'colnotes__note';
+      body.textContent = entry.answer;
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['edit', 'Edit'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(question, body, actions);
+      testList.appendChild(item);
+    }
+  }
+
+  testAnswerBtn.addEventListener('click', () => {
+    editingAnswerId = null;
+    pendingAnswerOffset = lastProgressOffset;
+    testAnswerText.value = '';
+    testForm.hidden = false;
+    testAnswerText.focus();
+  });
+
+  testCancelBtn.addEventListener('click', () => {
+    testForm.hidden = true;
+    editingAnswerId = null;
+  });
+
+  testForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const answer = testAnswerText.value.trim();
+    if (!answer) return;
+    if (editingAnswerId) {
+      testAnswers = testAnswers.map(entry =>
+        entry.id === editingAnswerId ? { ...entry, answer } : entry);
+    } else {
+      testAnswers = [...testAnswers, {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        offset: pendingAnswerOffset,
+        answer,
+        createdAt: Date.now(),
+      }].sort((a, b) => a.offset - b.offset);
+    }
+    if (testKey) saveDocumentTestAnswers(testKey, testAnswers);
+    editingAnswerId = null;
+    testForm.hidden = true;
+    renderTestAnswers();
+  });
+
+  testList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-answer-id]');
+    const entry = testAnswers.find(a => a.id === item?.dataset.answerId);
+    if (!button || !entry) return;
+    if (button.dataset.action === 'go') {
+      goToDocumentOffset(entry.offset);
+    } else if (button.dataset.action === 'edit') {
+      editingAnswerId = entry.id;
+      pendingAnswerOffset = entry.offset;
+      testAnswerText.value = entry.answer;
+      testForm.hidden = false;
+      testAnswerText.focus();
+    } else if (button.dataset.action === 'remove') {
+      testAnswers = testAnswers.filter(a => a.id !== entry.id);
+      if (testKey) saveDocumentTestAnswers(testKey, testAnswers);
+      renderTestAnswers();
+    }
+  });
+
+  testSheetBtn.addEventListener('click', () => {
+    const doc = state.extractedDocument;
+    if (!doc || !testAnswers.length) return;
+    const sheet = buildTestSheet(doc.name, doc.text, testAnswers);
+    downloadBlob(`${doc.name.replace(/\.[^./\\]+$/, '')}-test-sheet.md`,
+      new Blob([sheet], { type: 'text/markdown' }));
   });
 
   // ── Cross-document search ────────────────────────────────
