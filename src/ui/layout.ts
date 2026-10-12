@@ -495,6 +495,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <button class="document-btn" id="write-stop-btn" type="button" style="display:none">Stop</button>
             <button class="document-btn" id="write-typing-speak-btn" type="button" aria-pressed="false"
                     title="Speak each word as it is finished (space or enter)">Speak while typing</button>
+            <button class="document-btn" id="write-dictate-btn" type="button" aria-pressed="false"
+                    title="Dictate with the browser's speech recognition. On some browsers the audio goes to the browser vendor's service — text never leaves by any other path.">🎙 Dictate</button>
             <button class="document-btn" id="write-spell-btn" type="button">Check spelling</button>
             <button class="document-btn" id="write-clear-btn" type="button" title="Clear the draft">Clear</button>
             <span class="reader-status" id="write-status" role="status" aria-live="polite"></span>

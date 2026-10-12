@@ -21,6 +21,23 @@ import { ReadAloudController, readAloudSupported } from './read-aloud';
 const DRAFT_KEY = 'yapper.write-draft.v1';
 const WORD_CHAR = /[\p{L}\p{N}'’-]/u;
 
+/** Minimal shape of the browser's SpeechRecognition (not yet in lib.dom). */
+interface SpeechRecognitionLike extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+}
+interface SpeechRecognitionResultEventLike {
+  resultIndex: number;
+  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
 /** The partial word ending at the caret, or null when the caret rests elsewhere. */
 function wordBeforeCaret(text: string, caret: number): { word: string; start: number } | null {
   let start = caret;
@@ -36,6 +53,7 @@ export function bindWriteEvents(state: AppState): void {
   const speakBtn = document.getElementById('write-speak-btn') as HTMLButtonElement;
   const stopBtn = document.getElementById('write-stop-btn') as HTMLButtonElement;
   const typingSpeakBtn = document.getElementById('write-typing-speak-btn') as HTMLButtonElement;
+  const dictateBtn = document.getElementById('write-dictate-btn') as HTMLButtonElement;
   const spellBtn = document.getElementById('write-spell-btn') as HTMLButtonElement;
   const clearBtn = document.getElementById('write-clear-btn') as HTMLButtonElement;
   const status = document.getElementById('write-status') as HTMLElement;
@@ -161,6 +179,74 @@ export function bindWriteEvents(state: AppState): void {
     typingSpeakBtn.classList.toggle('document-btn--on', speakWhileTyping);
     if (!speakWhileTyping) speaker.stop();
     if (!readAloudSupported()) setStatus('This browser has no built-in speech voice.');
+  });
+
+  // ── Dictation: the browser's own speech recognizer into the editor ──
+  const RecognitionCtor = (window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  }).SpeechRecognition
+    ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor })
+      .webkitSpeechRecognition;
+  let recognition: SpeechRecognitionLike | null = null;
+  let dictating = false;
+  /** Where the next final transcript chunk lands; advances as text arrives. */
+  let dictateAnchor = 0;
+
+  function insertDictated(text: string) {
+    const value = editor.value;
+    const at = Math.min(dictateAnchor, value.length);
+    const needsSpace = at > 0 && !/\s/.test(value[at - 1]) && !/^\s/.test(text);
+    editor.value = value.slice(0, at) + (needsSpace ? ' ' : '') + text + value.slice(at);
+    dictateAnchor = at + (needsSpace ? 1 : 0) + text.length;
+    editor.setSelectionRange(dictateAnchor, dictateAnchor);
+    saveDraft();
+    if (speakWhileTyping) speaker.speak([{ text }], 0, {});
+  }
+
+  function setDictating(on: boolean) {
+    dictating = on;
+    dictateBtn.setAttribute('aria-pressed', String(on));
+    dictateBtn.classList.toggle('document-btn--on', on);
+    dictateBtn.textContent = on ? '⏹ Stop dictating' : '🎙 Dictate';
+  }
+
+  if (!RecognitionCtor) {
+    dictateBtn.disabled = true;
+    dictateBtn.title = 'This browser has no speech recognition — dictation needs a browser with a built-in recognizer.';
+  }
+
+  dictateBtn.addEventListener('click', () => {
+    if (!RecognitionCtor) return;
+    if (dictating) { recognition?.stop(); return; }
+    recognition = new RecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = document.documentElement.lang || 'en-US';
+    dictateAnchor = editor.selectionStart;
+    recognition.onresult = event => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = result[0]?.transcript ?? '';
+        if (result.isFinal) insertDictated(transcript.trim());
+        else interim = transcript;
+      }
+      status.textContent = interim ? `…${interim}` : '';
+    };
+    recognition.onerror = event => {
+      setStatus(event.error === 'not-allowed'
+        ? 'Microphone access was denied.'
+        : `Dictation stopped: ${event.error ?? 'unknown error'}`);
+    };
+    recognition.onend = () => setDictating(false);
+    try {
+      recognition.start();
+      setDictating(true);
+      editor.focus();
+    } catch {
+      setStatus('Could not start dictation.');
+    }
   });
 
   spellBtn.addEventListener('click', async () => {
