@@ -3503,3 +3503,50 @@ body.document-open .document-preview--notes .reader-view {
 }
 .bubble-note--open .bubble-note__body,
 .bubble-note:focus-within .bubble-note__body { display: block; }
+
+/* ─── Write page ──────────────────────────────────────────────
+   The talking editor: one drafting surface, prediction above it,
+   spell-check findings below it. */
+.write-page { display: flex; flex-direction: column; gap: 12px; }
+.write-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.write-editor {
+  width: 100%;
+  min-height: 40vh;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  padding: 16px 18px;
+  resize: vertical;
+}
+.write-editor:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.write-predict {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 30px;
+  padding: 2px;
+}
+.write-predict[hidden] { display: none; }
+.write-predict__chip { border-style: dashed; }
+.write-spell {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 0.85rem;
+}
+.write-spell[hidden] { display: none; }
+.write-spell__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.write-spell__word {
+  font-weight: 700;
+  color: var(--error, #f87171);
+  margin-right: 4px;
+}
+.write-spell__none { color: var(--text-muted); font-size: 0.78rem; }

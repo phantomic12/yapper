@@ -57,6 +57,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
             Reader
           </button>
+          <button class="page-nav__tab" type="button" role="tab" data-page-target="write" aria-selected="false" aria-controls="page-write">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Write
+          </button>
           <button class="page-nav__tab" type="button" role="tab" data-page-target="studio" aria-selected="false" aria-controls="page-studio">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             Studio
@@ -476,6 +480,29 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <summary>Raw OCR layout blocks</summary>
             <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
           </details>
+        </section>
+      </div>
+
+      <!-- ══════════ Write page ══════════
+           A talking editor: word prediction as you type, spell checking
+           against the bundled dictionary, and hear-as-you-write speech.
+           Everything stays on-device like the rest of the app. -->
+      <div class="page" id="page-write" role="tabpanel" aria-label="Write" hidden>
+        <section class="write-page">
+          <div class="write-toolbar">
+            <button class="document-btn" id="write-speak-btn" type="button"
+                    title="Read the text aloud with the browser voice">▶ Read text</button>
+            <button class="document-btn" id="write-stop-btn" type="button" style="display:none">Stop</button>
+            <button class="document-btn" id="write-typing-speak-btn" type="button" aria-pressed="false"
+                    title="Speak each word as it is finished (space or enter)">Speak while typing</button>
+            <button class="document-btn" id="write-spell-btn" type="button">Check spelling</button>
+            <button class="document-btn" id="write-clear-btn" type="button" title="Clear the draft">Clear</button>
+            <span class="reader-status" id="write-status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="write-predict" id="write-predict" aria-label="Word suggestions" hidden></div>
+          <textarea class="write-editor" id="write-editor" rows="14" spellcheck="false"
+                    placeholder="Write here — suggestions appear above, and the app can read each word as you finish it."></textarea>
+          <div class="write-spell" id="write-spell" hidden></div>
         </section>
       </div>
 

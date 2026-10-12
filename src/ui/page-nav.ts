@@ -1,14 +1,14 @@
 // ─── Page navigation ─────────────────────────────────────────────
-// Two pages — Reader and Studio — shown one at a time, Reader first
-// because reading is the app: the Studio is where a voice is picked.
+// Three pages — Reader, Write and Studio — shown one at a time, Reader
+// first because reading is the app: the Studio is where a voice is picked.
 // The active page is mirrored into the URL hash (#reader / #studio)
 // so links and reloads land where the user expects. Any element with
 // `data-page-jump="…"` switches pages (e.g. the "load a model" call to
 // action on the Reader page).
 
-export type PageName = 'studio' | 'reader';
+export type PageName = 'studio' | 'reader' | 'write';
 
-const PAGES: PageName[] = ['studio', 'reader'];
+const PAGES: PageName[] = ['studio', 'reader', 'write'];
 
 export function showPage(name: PageName): void {
   for (const page of PAGES) {
