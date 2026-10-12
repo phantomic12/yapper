@@ -162,8 +162,12 @@ export function wordSpanAt(text: string, offset: number): LocatedWord | null {
   let end = offset + 1;
   while (start > 0 && WORD_CHAR.test(text[start - 1])) start--;
   while (end < text.length && WORD_CHAR.test(text[end])) end++;
-  const word = text.slice(start, end).replace(/^['’-]+|['’-]+$/g, '');
-  return word ? { word, start, end } : null;
+  const raw = text.slice(start, end);
+  const word = raw.replace(/^['’-]+|['’-]+$/g, '');
+  if (!word) return null;
+  // Offsets track the cleaned word, not the punctuation it expanded over.
+  const lead = raw.indexOf(word);
+  return { word, start: start + lead, end: start + lead + word.length };
 }
 
 let frequencyPromise: Promise<string[]> | null = null;

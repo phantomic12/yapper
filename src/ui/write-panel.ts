@@ -239,7 +239,10 @@ export function bindWriteEvents(state: AppState): void {
         ? 'Microphone access was denied.'
         : `Dictation stopped: ${event.error ?? 'unknown error'}`);
     };
-    recognition.onend = () => setDictating(false);
+    recognition.onend = () => {
+      setDictating(false);
+      if (status.textContent.startsWith('…')) status.textContent = '';
+    };
     try {
       recognition.start();
       setDictating(true);
