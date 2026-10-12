@@ -277,6 +277,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             to see how the reader works.
           </p>
 
+          <div class="document-web">
+            <input class="document-web__input" id="web-url-input" type="url" inputmode="url"
+                   placeholder="https://… — read a web page" aria-label="Web page URL to read" />
+            <button class="document-btn" id="web-open-btn" type="button"
+                    title="Fetch the page and read it as a document (the site must allow it)">Read a web page</button>
+          </div>
+
           <div class="document-need-model" id="document-need-model">
             <p>📄 Upload a document to see its structure and extracted text. To hear it read aloud, <button type="button" class="link-btn" data-page-jump="studio">load a model on the Studio page</button> first.</p>
           </div>

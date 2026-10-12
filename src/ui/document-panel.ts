@@ -67,6 +67,7 @@ import { createWordLookup } from './word-lookup';
 import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
 import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
 import { buildTestSheet } from '../testsheet';
+import { extractWebDocument } from '../web-document';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -178,6 +179,8 @@ export function bindDocumentEvents(state: AppState): void {
   const docTitle = document.getElementById('doc-title') as HTMLElement;
   const lookupModeBtn = document.getElementById('lookup-mode-btn') as HTMLButtonElement;
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
+  const webUrlInput = document.getElementById('web-url-input') as HTMLInputElement;
+  const webOpenBtn = document.getElementById('web-open-btn') as HTMLButtonElement;
   const colnotesBtn = document.getElementById('colnotes-btn') as HTMLButtonElement;
   const colnotesEl = document.getElementById('colnotes') as HTMLElement;
   const colnotesAddBtn = document.getElementById('colnotes-add-btn') as HTMLButtonElement;
@@ -993,6 +996,40 @@ export function bindDocumentEvents(state: AppState): void {
     void mountDocumentView(doc, request);
     readerView.focus();
   }
+
+  /**
+   * Read-the-web: a URL is fetched straight from its origin and opened
+   * like an uploaded document. Sites that block cross-origin reads get
+   * an honest error from extractWebDocument rather than a blank page.
+   */
+  function openWebPage() {
+    const url = webUrlInput.value.trim();
+    if (!url) { webUrlInput.focus(); return; }
+    let parsed: URL;
+    try {
+      parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    } catch {
+      showReaderError('That does not look like a web address.');
+      return;
+    }
+    const request = ++activeFileRequest;
+    webOpenBtn.disabled = true;
+    clearReaderError();
+    setProgress('Fetching the page…');
+    extractWebDocument(parsed.href)
+      .then(doc => { if (request === activeFileRequest) showDocument(doc, null); })
+      .catch(err => {
+        if (request !== activeFileRequest) return;
+        clearProgress();
+        showReaderError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { webOpenBtn.disabled = false; });
+  }
+
+  webOpenBtn.addEventListener('click', openWebPage);
+  webUrlInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); openWebPage(); }
+  });
 
   sampleBtn.addEventListener('click', () => {
     clearReaderError();

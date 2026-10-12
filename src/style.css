@@ -2039,6 +2039,7 @@ body.document-open .bottom-bar,
 body.document-open .reader-page__hero,
 body.document-open .document-drop,
 body.document-open .document-sample,
+body.document-open .document-web,
 body.document-open .document-need-model,
 body.document-open .document-options,
 body.document-open .docrecent,
@@ -3565,3 +3566,22 @@ body.document-open .document-preview--notes .reader-view {
   border-radius: 8px;
   background: var(--bg-surface);
 }
+
+/* ─── Read-the-web input ────────────────────────────────────── */
+.document-web {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.document-web__input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 10px 12px;
+}
+.document-web__input:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
