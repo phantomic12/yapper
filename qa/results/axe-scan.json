@@ -1,0 +1,422 @@
+{
+  "when": "2026-10-13T04:10:20.888Z",
+  "results": [
+    {
+      "theme": "light",
+      "surface": "reader-landing",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "reader-advanced",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "studio-advanced",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              "button[data-page-target=\"reader\"]"
+            ],
+            [
+              ".page-nav__tab--active"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "studio-default",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#generate-btn-label"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "write",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "button[data-page-target=\"studio\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "document-open",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "light",
+      "surface": "reader-tools-open",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "light",
+      "surface": "shortcut-help-dialog",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "light",
+      "surface": "lookup-popover",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".word-lookup__close > span[aria-hidden=\"true\"]"
+            ]
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "nodes": [
+            [
+              ".word-lookup__close"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "colnotes-open",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              "#colnotes-close-btn > span[aria-hidden=\"true\"]"
+            ]
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "nodes": [
+            [
+              "#colnotes-close-btn"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "surface": "reader-after-close",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "reader-landing",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "reader-advanced",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "studio-advanced",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "studio-default",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#generate-btn-label"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "write",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "document-open",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "dark",
+      "surface": "reader-tools-open",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "dark",
+      "surface": "shortcut-help-dialog",
+      "violations": [],
+      "incomplete": []
+    },
+    {
+      "theme": "dark",
+      "surface": "lookup-popover",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".word-lookup__close > span[aria-hidden=\"true\"]"
+            ]
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "nodes": [
+            [
+              ".word-lookup__close"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "colnotes-open",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              "#colnotes-close-btn > span[aria-hidden=\"true\"]"
+            ]
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "nodes": [
+            [
+              "#colnotes-close-btn"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "surface": "reader-after-close",
+      "violations": [],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            [
+              ".header__title"
+            ],
+            [
+              ".page-nav__tab--active"
+            ],
+            [
+              "#reader-page-heading"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "light: shortcut-help traps Tab",
+      "pass": true,
+      "detail": "initial focus: shortcut-help-close"
+    },
+    {
+      "name": "light: shortcut-help returns focus to opener",
+      "pass": true,
+      "detail": "activeElement: shortcuts-btn"
+    },
+    {
+      "name": "light: single-key shortcuts disable (2.1.4)",
+      "pass": true,
+      "detail": "bookmarks 0→0"
+    },
+    {
+      "name": "light: document close restores focus",
+      "pass": true,
+      "detail": "activeElement: document-upload"
+    },
+    {
+      "name": "dark: shortcut-help traps Tab",
+      "pass": true,
+      "detail": "initial focus: shortcut-help-close"
+    },
+    {
+      "name": "dark: shortcut-help returns focus to opener",
+      "pass": true,
+      "detail": "activeElement: shortcuts-btn"
+    },
+    {
+      "name": "dark: single-key shortcuts disable (2.1.4)",
+      "pass": true,
+      "detail": "bookmarks 0→0"
+    },
+    {
+      "name": "dark: document close restores focus",
+      "pass": true,
+      "detail": "activeElement: document-upload"
+    }
+  ],
+  "stepErrors": []
+}

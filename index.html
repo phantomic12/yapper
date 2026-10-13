@@ -15,8 +15,15 @@
     (function () {
       try {
         var t = localStorage.getItem('yapper.theme.v1');
+        if (t !== 'light' && t !== 'dark') {
+          // 'system' (or nothing stored): resolve through the OS preference —
+          // the stylesheet has no prefers-color-scheme fallback, so an unset
+          // attribute would paint dark even on a light OS.
+          t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light' : 'dark';
+        }
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-      } catch (e) { /* storage blocked: fall through to the system default */ }
+      } catch (e) { /* storage blocked: fall through to the dark default */ }
     })();
   </script>
   <!-- Same reason as the theme: without this, the model grid paints for a

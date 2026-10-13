@@ -375,7 +375,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <div class="colnotes__head">
                 <span class="section-label">Column notes</span>
                 <button class="document-btn" id="colnotes-add-btn" type="button">Note here</button>
-                <button class="document-btn" id="colnotes-close-btn" type="button" aria-label="Close notes column">✕</button>
+                <button class="document-btn" id="colnotes-close-btn" type="button" aria-label="Close notes column"><span aria-hidden="true">✕</span></button>
               </div>
               <form class="colnotes__form" id="colnotes-form" hidden>
                 <textarea class="docbookmarks__note" id="colnotes-text" rows="3" maxlength="1000"

@@ -81,7 +81,7 @@ export function createWordLookup(actions: LookupActions): WordLookupController {
       <div class="word-lookup__head">
         <span class="word-lookup__word" data-role="word"></span>
         <span class="word-lookup__syl" data-role="syl"></span>
-        <button class="document-btn word-lookup__close" type="button" data-role="close" aria-label="Close">✕</button>
+        <button class="document-btn word-lookup__close" type="button" data-role="close" aria-label="Close"><span aria-hidden="true">✕</span></button>
       </div>
       <div class="word-lookup__status" data-role="status" role="status" aria-live="polite"></div>
       <div class="word-lookup__body" data-role="body"></div>

@@ -8,8 +8,10 @@
  * papercut on every launch.
  *
  * The applied value is mirrored into localStorage so a reload does not flash
- * the wrong theme, and `data-theme` is left unset for "system" so the CSS
- * `@media (prefers-color-scheme)` rules can decide.
+ * the wrong theme. For "system" the attribute is set to the *resolved* theme —
+ * the stylesheet has no prefers-color-scheme fallback, so leaving it unset
+ * would pin the dark palette on light-OS users; live OS changes still
+ * re-apply through the listener in bindThemeToggle.
  */
 
 export type ThemeChoice = 'light' | 'dark' | 'system';
@@ -71,16 +73,12 @@ export function nextTheme(choice: ThemeChoice): ThemeChoice {
 }
 
 /**
- * Apply a choice to <html>. 'system' clears the attribute so the stylesheet's
- * own media query applies, which also keeps the OS toggle live without JS.
+ * Apply a choice to <html>. The attribute always reflects the applied theme:
+ * 'system' resolves through matchMedia here, and the change listener in
+ * bindThemeToggle re-resolves when the OS flips while 'system' is chosen.
  */
 export function applyTheme(choice: ThemeChoice): void {
-  const root = document.documentElement;
-  if (choice === 'system') {
-    root.removeAttribute('data-theme');
-  } else {
-    root.setAttribute('data-theme', choice);
-  }
+  document.documentElement.setAttribute('data-theme', resolveTheme(choice));
 }
 
 /**

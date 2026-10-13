@@ -32,8 +32,9 @@
 
 /* ─── Light theme ────────────────────────────────────────────────
    Applied via <html data-theme="light">. The dark palette above is the
-   default, so an unset attribute (and "follow the system" in a light OS)
-   falls through to the prefers-color-scheme block at the bottom.
+   default; "follow the system" resolves to an explicit attribute value
+   in src/theme.ts (and the inline script in index.html), so an unset
+   attribute only ever means the dark fallback.
    Values are the dark palette's roles, not inversions: surfaces get
    lighter, text darker, and the accent darkens so it still clears
    4.5:1 on white. */
@@ -886,7 +887,7 @@ body {
   font-size: 0.65rem;
   line-height: 1.2;
   color: var(--text-muted);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 2px 7px;
@@ -2363,7 +2364,7 @@ body.document-open .document-hint {
 
 :root[data-theme='light'] .classify-chip--list,
 :root[data-theme='light'] .classify-badge--list {
-  color: #15803d;
+  color: #166534;
   border-color: rgba(21, 128, 61, 0.28);
   background: rgba(21, 128, 61, 0.09);
 }
@@ -2684,7 +2685,7 @@ body {
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  background: var(--surface-1, #14141a);
+  background: var(--bg-elevated);
 }
 .docview__bar {
   display: flex;
@@ -2710,7 +2711,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px 7px;
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   color: var(--text);
   font: inherit;
   font-size: 0.8rem;
@@ -2719,7 +2720,7 @@ body {
   flex: 0 0 112px;
   overflow: auto;
   padding: 8px;
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   border-right: 1px solid var(--border);
 }
 .docview__thumbnail {
@@ -2782,7 +2783,7 @@ body {
   height: 26px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   color: var(--text);
   cursor: pointer;
   font-size: 0.9rem;
@@ -2846,7 +2847,7 @@ body {
   padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   color: var(--text-muted);
   font-size: 0.8rem;
   cursor: pointer;
@@ -3040,7 +3041,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--surface-2);
+  background: var(--bg-elevated);
 }
 
 /* ─── Section tabs (sheets, slides, chapters) ──────────────────── */
@@ -3049,7 +3050,7 @@ body {
   gap: 6px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   overflow-x: auto;
 }
 .docview__tab {
@@ -3071,7 +3072,7 @@ body {
 /* ─── Outline panel (PDF bookmarks, headings, chapters) ──────── */
 .docview__outline {
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   max-height: 32vh;
   overflow: auto;
   padding: 6px 10px;
@@ -3111,7 +3112,7 @@ body {
   gap: 10px;
   padding: 10px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   max-height: 48vh;
   overflow: auto;
 }
@@ -3140,7 +3141,7 @@ body {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-2);
+  background: var(--bg-elevated);
 }
 .docrecent[hidden] { display: none; }
 .docrecent__list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
@@ -3183,7 +3184,7 @@ body {
 }
 .shortcut-help[hidden] { display: none; }
 .shortcut-help__card {
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px 20px;
@@ -3201,7 +3202,7 @@ body {
   margin: 12px 0 0;
   font-size: 0.85rem;
 }
-.shortcut-help__list dt { font-family: "Cascadia Mono", Consolas, monospace; color: var(--accent, #6d5efc); }
+.shortcut-help__list dt { font-family: "Cascadia Mono", Consolas, monospace; color: var(--accent-hover, #818cf8); }
 .shortcut-help__list dd { margin: 0; color: var(--text-muted); }
 .shortcut-help__toggle {
   display: flex;
@@ -3224,7 +3225,7 @@ body {
   height: 26px;
   border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.72rem;
@@ -3238,7 +3239,7 @@ body {
 .docview__toggle:focus-visible { outline: 2px solid var(--accent, #6d5efc); outline-offset: 2px; }
 .docview__search-panel {
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   max-height: 30vh;
   overflow: auto;
   padding: 6px 10px;
@@ -3276,7 +3277,7 @@ body {
   height: 26px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg-elevated);
   color: var(--text-muted);
   font-size: 0.72rem;
   padding: 0 10px;
@@ -3337,7 +3338,7 @@ body {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-2);
+  background: var(--bg-elevated);
 }
 .docbookmarks[hidden] { display: none; }
 .docbookmarks__row { display: flex; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
@@ -3599,7 +3600,7 @@ body.document-open .document-preview--notes .reader-view {
 .write-spell__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .write-spell__word {
   font-weight: 700;
-  color: var(--error, #f87171);
+  color: var(--danger);
   margin-right: 4px;
 }
 .write-spell__none { color: var(--text-muted); font-size: 0.78rem; }
