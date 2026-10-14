@@ -49,3 +49,11 @@ Append below: `YYYY-MM-DD <platform> — <what happened>`
 
 - 2026-10-14 linux — log created; both child sessions dispatched.
 - 2026-10-14 macOS — clone + `npm install` + `npm run build` done (macOS 26.6.2 arm64, Node v24.21.0); serving dist + Safari drive in progress.
+- 2026-10-14 linux — post-merge axe re-run caught one more real violation:
+  shortcut-sheet `<dt>` key glyphs used `--accent-hover` (#818cf8, 4.3:1 on
+  `--bg-elevated`). Fixed via new `--accent-key` token (#a5b4fc dark / #4338ca
+  light); shortcut-dialog state now scans clean in both themes.
+  Verification note: `localStorage['yapper.theme.v1']` drives `applyTheme` — a
+  `data-theme` init attribute alone gets overridden on bind, so theme-forced
+  scans must set the storage key.
+>>>>>>> ec4f25a (Fix shortcut-sheet key glyph contrast (--accent-key token))
