@@ -48,3 +48,4 @@ next unchecked item, update the file, commit, and push to `devin/platform-testin
 Append below: `YYYY-MM-DD <platform> — <what happened>`
 
 - 2026-10-14 linux — log created; both child sessions dispatched.
+- 2026-10-14 macOS — clone + `npm install` + `npm run build` done (macOS 26.6.2 arm64, Node v24.21.0); serving dist + Safari drive in progress.
