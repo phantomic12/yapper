@@ -26,6 +26,7 @@ import {
   updateQualitySelection,
 } from './ui/model-panel';
 import { bindJobQueueEvents, renderJobList } from './ui/job-queue';
+import { bindWriteEvents } from './ui/write-panel';
 import {
   bindDocumentEvents,
   updateDocumentSectionVisibility,
@@ -162,6 +163,7 @@ async function render(): Promise<void> {
   bindAdvancedToggle();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
+  bindWriteEvents(state);
   bindStreamPlayer(state);
   installPersistence(state);
 

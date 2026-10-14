@@ -93,6 +93,8 @@ export class DocumentReaderSession {
   /** Unsubscribers returned from engine.on(); called on stop()/destroy. */
   private unsubscribes: Array<() => void> = [];
   private highlightRaf?: number;
+  /** Set once the audio element has played inside a user gesture (iOS unlock). */
+  private audioPrimed = false;
 
   constructor(engine: TTSEngine, fullText: string, options: ReaderOptions = {}) {
     this.engine = engine;
@@ -114,7 +116,18 @@ export class DocumentReaderSession {
       status: 'idle',
     };
     this.audio = new Audio();
-    this.audio.addEventListener('ended', () => this.advance());
+    this.audio.addEventListener('ended', () => {
+      // Only a finished *chunk* may advance the reader. The silent prime
+      // clip (see primeAudioForAutoplay) and anything else that is not the
+      // current chunk's URL ends here instead — then we retry tryPlayNext
+      // so a prime that was still playing doesn't stall the session.
+      const chunk = this.chunks[this.state.currentIndex];
+      if (chunk?.job?.url && this.audio.src === chunk.job.url) {
+        this.advance();
+      } else {
+        this.tryPlayNext();
+      }
+    });
     this.audio.addEventListener('error', (e) => this.handleAudioError(e));
     this.audio.addEventListener('loadedmetadata', () => this.updateHighlight());
   }
@@ -153,6 +166,7 @@ export class DocumentReaderSession {
       this.setState({ status: 'finished' });
       return;
     }
+    this.primeAudioForAutoplay();
     this.cancelHighlightLoop();
     this.subscribe();
     const from = this.chunkIndexForSentence(fromSentenceIndex);
@@ -205,7 +219,43 @@ export class DocumentReaderSession {
    */
   resumeAfterGesture() {
     if (this.state.status === 'playing') return;
+    this.primeAudioForAutoplay();
     this.resume();
+  }
+
+  /**
+   * Unlock the audio element for gesture-free playback (iOS Safari).
+   *
+   * iOS only permits a media element to play() outside a user gesture once
+   * that element has already been played *inside* one. Without this, the
+   * first chunk — which lands seconds after the Play click, when the
+   * gesture has expired — is always rejected with NotAllowedError and the
+   * session opens on the "Click to play" CTA instead of just playing.
+   *
+   * start()/resumeAfterGesture() run inside click handlers, so a throwaway
+   * play() of an inaudible clip here marks the element unlocked for every
+   * later chunk on the same element. If this call itself isn't in a
+   * gesture (a programmatic resume), play() rejects, audioPrimed stays
+   * false so the next real gesture retries, and the existing
+   * needsUserGesture CTA covers it exactly as before.
+   */
+  private primeAudioForAutoplay() {
+    if (this.audioPrimed) return;
+    this.audio.src = READER_PRIME_URL;
+    try {
+      // jsdom and very old engines return undefined rather than a Promise —
+      // treat a synchronous (or missing) resolution as a successful prime.
+      const attempt = this.audio.play() as unknown as Promise<void> | undefined;
+      if (attempt && typeof attempt.then === 'function') {
+        attempt
+          .then(() => { this.audioPrimed = true; })
+          .catch(() => { /* outside a gesture — the CTA path handles it */ });
+      } else {
+        this.audioPrimed = true;
+      }
+    } catch {
+      // Synchronous refusal — same story as a rejected promise.
+    }
   }
 
   /** Stop and tear everything down. */
@@ -374,6 +424,11 @@ export class DocumentReaderSession {
     }
   }
 }
+
+// ─── iOS autoplay priming ──────────────────────────────────────────
+/** 46-byte PCM16 WAV: RIFF header + 4 zero samples (~0.5 ms). Inaudible. */
+const READER_PRIME_URL =
+  'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQgAAAAAAAAAAAAAAA==';
 
 // ─── Text segmentation helpers ─────────────────────────────────────
 

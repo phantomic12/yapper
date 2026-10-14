@@ -127,10 +127,12 @@ describe('applyTheme', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     applyTheme('dark');
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    // 'system' must leave the attribute off so the media query in the
-    // stylesheet can decide — otherwise the OS toggle would go dead.
+    // 'system' resolves to an explicit attribute value — the stylesheet
+    // has no prefers-color-scheme fallback, so leaving it unset would
+    // pin the dark palette on light-OS users. No matchMedia in jsdom,
+    // so the resolution defaults to dark.
     applyTheme('system');
-    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
   });
 });
 
@@ -165,7 +167,7 @@ describe('bindThemeToggle', () => {
     bindThemeToggle();
     const button = document.getElementById('theme-toggle')!;
     expect(button.textContent).toBe('Auto');
-    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 
     button.click(); // system → light (opposite of a dark OS)
     expect(readStoredTheme()).toBe('light');
@@ -184,6 +186,6 @@ describe('bindThemeToggle', () => {
     const button = document.getElementById('theme-toggle')!;
     expect(button.getAttribute('aria-label')).toContain('following system');
     button.click();
-    expect(button.getAttribute('aria-label')).toContain('light');
+    expect(button.getAttribute('aria-label')).toContain('switch to dark');
   });
 });

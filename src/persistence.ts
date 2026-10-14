@@ -196,6 +196,152 @@ export function saveDocumentHighlights(key: string, highlights: DocumentHighligh
   }
 }
 
+/** A word saved while reading, for review and study-guide export. */
+export interface DocumentWordEntry {
+  id: string;
+  /** The saved form as it appeared in the document. */
+  word: string;
+  /** Character offset into the extracted text, for context on export. */
+  offset: number;
+  createdAt: number;
+}
+
+const DOCUMENT_WORDLIST_PREFIX = 'yapper.document-wordlist.v1:';
+const MAX_WORDLIST_PER_DOCUMENT = 500;
+
+/** Word lists share the bookmarks key's shape: file identity, never content. */
+export function documentWordListKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_WORDLIST_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentWordList(key: string): DocumentWordEntry[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_WORDLIST_PER_DOCUMENT).flatMap((value, index) => {
+      const entry = value as Partial<DocumentWordEntry>;
+      if (typeof entry.word !== 'string' || !entry.word.trim()) return [];
+      if (!Number.isFinite(entry.offset) || (entry.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `word-${index}`,
+        word: entry.word,
+        offset: entry.offset!,
+        createdAt: Number.isFinite(entry.createdAt) ? entry.createdAt! : 0,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentWordList(key: string, entries: DocumentWordEntry[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(entries.slice(0, MAX_WORDLIST_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+// ─── Column notes ───────────────────────────────────────────
+// Free-form notes pinned to document offsets — the margin column beside
+// the page. Sorted by offset so the rail reads alongside the document.
+
+export interface DocumentColumnNote {
+  id: string;
+  /** Character offset into the extracted text the note hangs off. */
+  offset: number;
+  note: string;
+  createdAt: number;
+}
+
+const DOCUMENT_COLNOTES_PREFIX = 'yapper.document-colnotes.v1:';
+const MAX_COLNOTES_PER_DOCUMENT = 300;
+
+export function documentColumnNotesKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_COLNOTES_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentColumnNotes(key: string): DocumentColumnNote[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_COLNOTES_PER_DOCUMENT).flatMap((value, index) => {
+      const note = value as Partial<DocumentColumnNote>;
+      if (typeof note.note !== 'string' || !note.note.trim()) return [];
+      if (!Number.isFinite(note.offset) || (note.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof note.id === 'string' && note.id ? note.id : `note-${index}`,
+        offset: note.offset!,
+        note: note.note,
+        createdAt: Number.isFinite(note.createdAt) ? note.createdAt! : 0,
+      }];
+    }).sort((a, b) => a.offset - b.offset);
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentColumnNotes(key: string, notes: DocumentColumnNote[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(notes.slice(0, MAX_COLNOTES_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
+// ─── Test answers ───────────────────────────────────────────
+// Answers written against question spots in the document — the filled-in
+// test sheet. Kept offset-sorted like the column notes.
+
+export interface DocumentTestAnswer {
+  id: string;
+  /** Offset of the question this answers (its anchor in the text). */
+  offset: number;
+  answer: string;
+  createdAt: number;
+}
+
+const DOCUMENT_TEST_PREFIX = 'yapper.document-test.v1:';
+const MAX_TEST_ANSWERS_PER_DOCUMENT = 200;
+
+export function documentTestAnswersKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_TEST_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+}
+
+export function loadDocumentTestAnswers(key: string): DocumentTestAnswer[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const values = JSON.parse(raw) as unknown;
+    if (!Array.isArray(values)) return [];
+    return values.slice(0, MAX_TEST_ANSWERS_PER_DOCUMENT).flatMap((value, index) => {
+      const answer = value as Partial<DocumentTestAnswer>;
+      if (typeof answer.answer !== 'string' || !answer.answer.trim()) return [];
+      if (!Number.isFinite(answer.offset) || (answer.offset ?? -1) < 0) return [];
+      return [{
+        id: typeof answer.id === 'string' && answer.id ? answer.id : `answer-${index}`,
+        offset: answer.offset!,
+        answer: answer.answer,
+        createdAt: Number.isFinite(answer.createdAt) ? answer.createdAt! : 0,
+      }];
+    }).sort((a, b) => a.offset - b.offset);
+  } catch {
+    return [];
+  }
+}
+
+export function saveDocumentTestAnswers(key: string, answers: DocumentTestAnswer[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(answers.slice(0, MAX_TEST_ANSWERS_PER_DOCUMENT)));
+  } catch {
+    // Best-effort: a blocked/full store must not interrupt reading.
+  }
+}
+
 // ─── Recent documents ───────────────────────────────────────
 // A shelf of what was opened, so a document can be found again — and so
 // "resume where you left off" is visible before the file is re-picked.

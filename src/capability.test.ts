@@ -3,6 +3,8 @@ import {
   detectCapability,
   detectAcceleration,
   resetFeatureProbeCache,
+  wasmSimdSupported,
+  wasmSimdUnsupportedMessage,
   CAPABILITY_INFO,
   type CapabilityClass,
 } from './capability';
@@ -172,5 +174,30 @@ describe('detectAcceleration', () => {
     // requests total, not three.
     expect(afterFirst).toBeGreaterThan(0);
     expect(calls - afterFirst).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('wasmSimdSupported (iOS <16.4 gate)', () => {
+  it('accepts a real SIMD-enabled WebAssembly runtime', () => {
+    // Node/v8 supports v128, so the hand-assembled probe must validate —
+    // if the bytes were malformed this would false-negative on every
+    // browser and gate out everyone.
+    expect(wasmSimdSupported()).toBe(true);
+  });
+
+  it('returns false (not a throw) when WebAssembly is missing entirely', () => {
+    const original = (globalThis as { WebAssembly?: typeof WebAssembly }).WebAssembly;
+    try {
+      delete (globalThis as { WebAssembly?: typeof WebAssembly }).WebAssembly;
+      expect(wasmSimdSupported()).toBe(false);
+    } finally {
+      (globalThis as { WebAssembly?: typeof WebAssembly }).WebAssembly = original;
+    }
+  });
+
+  it('names the real browser floor in the failure message', () => {
+    const msg = wasmSimdUnsupportedMessage();
+    expect(msg).toContain('SIMD');
+    expect(msg).toContain('16.4');
   });
 });

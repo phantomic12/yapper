@@ -1,13 +1,14 @@
 // ─── Page navigation ─────────────────────────────────────────────
-// Two pages — Studio and Document Reader — shown one at a time. The
-// active page is mirrored into the URL hash (#studio / #reader) so
-// links and reloads land where the user expects. Any element with
+// Three pages — Reader, Write and Studio — shown one at a time, Reader
+// first because reading is the app: the Studio is where a voice is picked.
+// The active page is mirrored into the URL hash (#reader / #studio)
+// so links and reloads land where the user expects. Any element with
 // `data-page-jump="…"` switches pages (e.g. the "load a model" call to
 // action on the Reader page).
 
-export type PageName = 'studio' | 'reader';
+export type PageName = 'studio' | 'reader' | 'write';
 
-const PAGES: PageName[] = ['studio', 'reader'];
+const PAGES: PageName[] = ['studio', 'reader', 'write'];
 
 export function showPage(name: PageName): void {
   for (const page of PAGES) {
@@ -27,7 +28,7 @@ export function showPage(name: PageName): void {
 
 function pageFromHash(): PageName {
   const hash = location.hash.replace('#', '');
-  return (PAGES as string[]).includes(hash) ? (hash as PageName) : 'studio';
+  return (PAGES as string[]).includes(hash) ? (hash as PageName) : 'reader';
 }
 
 export function bindPageNav(): void {

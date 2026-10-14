@@ -5,7 +5,7 @@
   "description": "Privacy-first browser TTS — all inference runs locally via WebGPU",
   "license": "MIT",
   "scripts": {
-    "postinstall": "node scripts/copy-pdf-worker.mjs && node scripts/copy-phonemizer.mjs",
+    "postinstall": "node scripts/copy-pdf-worker.mjs && node scripts/copy-phonemizer.mjs && node scripts/build-dictionary.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
@@ -24,6 +24,8 @@
     "@huggingface/transformers": "4.3.1",
     "epubjs": "^0.3.93",
     "fflate": "^0.8.3",
+    "hyphenation.en-us": "^0.2.1",
+    "hypher": "^0.2.5",
     "jszip": "^3.10.1",
     "onnxruntime-web": "^1.26.0",
     "pdfjs-dist": "^6.1.200",
@@ -39,12 +41,14 @@
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@vitest/ui": "^5.0.0",
+    "axe-core": "^4.14.0",
     "eslint": "^10.0.0",
     "jsdom": "^30.0.0",
     "playwright": "^1.62.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.0.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "wordnet-db": "^3.1.14"
   }
 }

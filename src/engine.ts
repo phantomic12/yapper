@@ -1,6 +1,11 @@
 import { pipeline, env } from '@huggingface/transformers';
 import { EventEmitter } from './events';
-import { detectCapability, webgpuAdapterHasFeature } from './capability';
+import {
+  detectCapability,
+  wasmSimdSupported,
+  wasmSimdUnsupportedMessage,
+  webgpuAdapterHasFeature,
+} from './capability';
 import { startGenerationFeedback, stopGenerationFeedback } from './dom-utils';
 import { KITTEN_VOICES } from './engines/kitten';
 import { KOKORO_VOICES } from './engines/kokoro';
@@ -676,6 +681,13 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
 
   private async doLoad(model: TTSModel): Promise<void> {
     try {
+      // Every engine bottoms out in onnxruntime-web's SIMD-only WASM
+      // build; on iOS <16.4 / Safari <16.4 (and other browsers without
+      // v128) load would die deep inside ORT with "no available backend
+      // found". Name the real reason instead.
+      if (!wasmSimdSupported()) {
+        throw new Error(wasmSimdUnsupportedMessage());
+      }
       if (model.custom) {
         const custom = customEngines.get(model.modelId);
         if (!custom) {
@@ -702,9 +714,9 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
         // transformers.js's ORT build would otherwise compile f16 kernels
         // that fail WebGPU validation on such adapters.
         const useF16 = await webgpuAdapterHasFeature('shader-f16');
-        const newPipe = await pipeline('text-to-speech', model.modelId, {
-          dtype: model.dtype ?? 'q8',
-          ...(useF16 ? {} : { device: 'wasm' as const }),
+        const options = (device?: 'wasm') => ({
+          dtype: model.dtype ?? 'q8' as const,
+          ...(device ? { device } : {}),
           progress_callback: (progress: LoadProgress) => {
             if (progress.status === 'progress') {
               this.touchLoadActivity();
@@ -719,6 +731,23 @@ export class TTSEngine extends EventEmitter<EngineEventMap> {
             }
           },
         });
+        // A claimed `shader-f16` adapter is no guarantee the WebGPU session
+        // actually initializes — iOS Safari 26 exposes WebGPU but its ORT
+        // execution provider can still fail session creation. Same retry the
+        // Kokoro worker path already does: fall back to the WASM provider
+        // once, slower but functional, rather than failing the whole load.
+        let newPipe;
+        if (!useF16) {
+          newPipe = await pipeline('text-to-speech', model.modelId, options('wasm'));
+        } else {
+          try {
+            newPipe = await pipeline('text-to-speech', model.modelId, options());
+          } catch (err) {
+            console.warn('[engine] WebGPU pipeline creation failed, retrying on WASM:',
+              err instanceof Error ? err.message : err);
+            newPipe = await pipeline('text-to-speech', model.modelId, options('wasm'));
+          }
+        }
         this.pipe = newPipe;
         this.currentSampleRate = model.sampleRate ?? 16000;
       }

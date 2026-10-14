@@ -47,19 +47,23 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           </svg>
           <h1 class="header__title">Yapper</h1>
         </div>
-        <p class="header__subtitle">Text-to-speech that runs entirely in your browser</p>
+        <p class="header__subtitle">A private document reader that reads aloud — entirely in your browser</p>
         <div class="privacy-badge">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           100% private — no data leaves your device
         </div>
         <nav class="page-nav" role="tablist" aria-label="Pages">
-          <button class="page-nav__tab page-nav__tab--active" type="button" role="tab" data-page-target="studio" aria-selected="true" aria-controls="page-studio">
+          <button class="page-nav__tab page-nav__tab--active" type="button" role="tab" data-page-target="reader" aria-selected="true" aria-controls="page-reader">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            Reader
+          </button>
+          <button class="page-nav__tab" type="button" role="tab" data-page-target="write" aria-selected="false" aria-controls="page-write">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Write
+          </button>
+          <button class="page-nav__tab" type="button" role="tab" data-page-target="studio" aria-selected="false" aria-controls="page-studio">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             Studio
-          </button>
-          <button class="page-nav__tab" type="button" role="tab" data-page-target="reader" aria-selected="false" aria-controls="page-reader">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            Document Reader
           </button>
         </nav>
 
@@ -72,8 +76,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <span class="gpu-status__label">${capInfo.label}</span>
       </div>
 
-      <!-- ══════════ Studio page ══════════ -->
-      <div class="page" id="page-studio" role="tabpanel" aria-label="Studio">
+      <!-- ══════════ Studio page ══════════
+           The reader is the home page; Studio starts hidden so first paint
+           matches the default before page-nav runs. -->
+      <div class="page" id="page-studio" role="tabpanel" aria-label="Studio" hidden>
 
       <!-- Main-thread warning: honest about UI freezes during synthesis (AC2).
            Hidden by default; re-shown/hidden when the selection changes. -->
@@ -142,8 +148,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
            region that happens to contain it today. -->
       <div class="model-grid" id="model-grid" data-advanced role="radiogroup" aria-label="Choose a TTS model">
         ${visibleModels().map(m => `
-          <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}">
-            <button class="model-card__pick" type="button" data-action="pick" aria-label="Select ${m.name}">
+          <div class="model-card ${m.id === selectedModelId ? 'model-card--selected' : ''}" data-model-id="${m.id}" data-language="${m.language ?? 'en'}">
+            <div class="model-card__pick" role="radio" tabindex="0" aria-checked="${m.id === selectedModelId}" data-action="pick">
               <div class="model-card__name">${m.name}</div>
               <div class="model-card__desc">${m.description}</div>
               <div class="model-card__meta">
@@ -153,7 +159,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                 <span class="model-card__tag model-card__tag--${m.category}">${m.category}</span>
               </div>
               <div class="model-card__status" data-role="model-status">Selected</div>
-            </button>
+            </div>
             <button class="model-card__sample" data-action="sample" data-model-id="${m.id}" type="button" title="Generate a sample using the currently loaded model" hidden>Try sample</button>
           </div>
         `).join('')}
@@ -245,12 +251,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <div class="reader-page__hero">
             <h2 class="reader-page__title" id="reader-page-heading">Document Reader</h2>
             <p class="reader-page__subtitle">
-              Drop in a document — Yapper extracts the text, scans it with OCR when needed,
-              classifies every block, and reads it aloud. Everything happens on your device.
+              Drop in a document — Yapper extracts the text, OCRs what needs it, and reads
+              it aloud with bookmarks, highlights and notes along the way.
+              Everything happens on your device.
             </p>
           </div>
 
-          <div class="document-drop" id="document-drop" tabindex="0" role="button" aria-label="Upload a document to read aloud">
+          <div class="document-drop" id="document-drop">
             <input
               type="file"
               id="document-upload"
@@ -269,6 +276,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             No document handy? <button type="button" class="link-btn" id="document-sample-btn">Read a sample</button>
             to see how the reader works.
           </p>
+
+          <div class="document-web">
+            <input class="document-web__input" id="web-url-input" type="url" inputmode="url"
+                   placeholder="https://… — read a web page" aria-label="Web page URL to read" />
+            <button class="document-btn" id="web-open-btn" type="button"
+                    title="Fetch the page and read it as a document (the site must allow it)">Read a web page</button>
+          </div>
 
           <div class="document-need-model" id="document-need-model">
             <p>📄 Upload a document to see its structure and extracted text. To hear it read aloud, <button type="button" class="link-btn" data-page-jump="studio">load a model on the Studio page</button> first.</p>
@@ -312,7 +326,12 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           </div>
 
           <div class="document-preview" id="document-preview" style="display:none">
+            <!-- The top bar: once a document is open it is the window's one
+                 control surface — leaving, reading, the view the document is
+                 seen through, and where the reading has got to. -->
             <div class="document-actions">
+              <button class="document-btn" id="close-document-btn" type="button" title="Close this document and pick another">Close document</button>
+              <h1 class="doc-title" id="doc-title"></h1>
               <button class="document-btn document-btn--primary" id="read-document-btn" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                 <span>Read aloud</span>
@@ -322,9 +341,59 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
+              <button class="document-btn" id="lookup-mode-btn" type="button" aria-pressed="false"
+                      title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
+              <button class="document-btn" id="colnotes-btn" type="button" aria-pressed="false"
+                      title="Show the margin column of notes pinned to spots in the document">Notes</button>
+              <div class="docview-switch" role="group" aria-label="How to show the document">
+                <span class="section-label docview-switch__label">View</span>
+                <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
+                        id="docview-btn-document">Document</button>
+                <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
+                        id="docview-btn-text">Text</button>
+              </div>
+              <!-- Position, size and reading time of the open document —
+                   inside the pinned bar so it stays visible while pages
+                   scroll. -->
+              <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
               <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
             </div>
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
+
+            <!-- The real thing: pages as they appear in the file. Populated only
+                 for formats we can render; see document-view.ts. -->
+            <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
+            <!-- Always populated, even when hidden: it is the accessible view of
+                 the document and the one a screen reader reads, so it is never
+                 left empty just because the visual view is on top. -->
+            <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
+            <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+
+            <!-- Margin column: notes pinned to document offsets, riding
+                 beside the pages like a second column of the book. -->
+            <aside class="colnotes" id="colnotes" aria-label="Column notes" hidden>
+              <div class="colnotes__head">
+                <span class="section-label">Column notes</span>
+                <button class="document-btn" id="colnotes-add-btn" type="button">Note here</button>
+                <button class="document-btn" id="colnotes-close-btn" type="button" aria-label="Close notes column"><span aria-hidden="true">✕</span></button>
+              </div>
+              <form class="colnotes__form" id="colnotes-form" hidden>
+                <textarea class="docbookmarks__note" id="colnotes-text" rows="3" maxlength="1000"
+                          placeholder="Note for this spot…"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save note</button>
+                  <button class="document-btn" type="button" id="colnotes-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ul class="colnotes__list" id="colnotes-list"></ul>
+            </aside>
+
+            <!-- Secondary affordances stay reachable but collapsed: the
+                 document itself is the interface here, so the structure list,
+                 notes and exports live one tap deeper rather than stacking a
+                 second transcript on top of the reader. -->
+            <details class="reader-tools" id="reader-tools">
+              <summary>Structure, notes &amp; export</summary>
 
             <!-- Classified document structure -->
             <div class="classify-panel" id="classify-panel" hidden>
@@ -379,6 +448,46 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <ul class="docbookmarks__list" id="highlight-list"></ul>
             </div>
 
+            <!-- Words saved from look-ups, plus study-guide export. -->
+            <div class="docwords" id="docwords">
+              <div class="section-label">Word list</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="words-find-btn" aria-expanded="false">
+                  Find study words
+                </button>
+                <button class="document-btn" type="button" id="study-guide-btn" disabled
+                        title="Download the saved words with their definitions and in-context sentences as Markdown">
+                  Study guide
+                </button>
+              </div>
+              <div class="docwords__suggest" id="words-suggest" hidden></div>
+              <ul class="docbookmarks__list" id="word-list"></ul>
+            </div>
+
+            <!-- Answers written against question spots in the document —
+                 the filled-in test sheet, exportable as Markdown. -->
+            <div class="doctest" id="doctest">
+              <div class="section-label">Test answers</div>
+              <div class="docbookmarks__row">
+                <button class="document-btn" type="button" id="test-answer-btn" aria-expanded="false">
+                  Answer this question
+                </button>
+                <button class="document-btn" type="button" id="test-sheet-btn" disabled
+                        title="Download your answers with their questions as a Markdown test sheet">
+                  Test sheet
+                </button>
+              </div>
+              <form class="docbookmarks__form" id="test-form" hidden>
+                <label class="docbookmarks__label" for="test-answer-text">Your answer</label>
+                <textarea class="docbookmarks__note" id="test-answer-text" rows="3" maxlength="2000"></textarea>
+                <div class="docbookmarks__row">
+                  <button class="document-btn document-btn--primary" type="submit">Save answer</button>
+                  <button class="document-btn" type="button" id="test-cancel-btn">Cancel</button>
+                </div>
+              </form>
+              <ol class="doctest__list" id="test-list"></ol>
+            </div>
+
             <!-- Downloads and the keyboard cheat sheet. -->
             <div class="docexports" id="docexports">
               <div class="section-label">Export</div>
@@ -395,30 +504,38 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               </div>
             </div>
 
-            <!-- Position, size and reading time of the open document. -->
-            <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
-
-            <div class="docview-switch" role="group" aria-label="How to show the document">
-              <span class="section-label docview-switch__label">View</span>
-              <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
-                      id="docview-btn-document">Document</button>
-              <button class="docview-switch__btn" type="button" data-docview="text" aria-pressed="false"
-                      id="docview-btn-text">Text</button>
-            </div>
-            <!-- The real thing: pages as they appear in the file. Populated only
-                 for formats we can render; see document-view.ts. -->
-            <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
-            <!-- Always populated, even when hidden: it is the accessible view of
-                 the document and the one a screen reader reads, so it is never
-                 left empty just because the visual view is on top. -->
-            <div id="document-reader-view" class="reader-view" role="region" aria-label="Document text" aria-live="off" tabindex="0"></div>
-            <p class="document-hint" id="document-text-hint">The active sentence is highlighted as it is read aloud.</p>
+            </details>
           </div>
 
           <details class="layout-details" id="layout-details" style="display:none">
             <summary>Raw OCR layout blocks</summary>
             <pre class="layout-pre" id="layout-pre" tabindex="0"></pre>
           </details>
+        </section>
+      </div>
+
+      <!-- ══════════ Write page ══════════
+           A talking editor: word prediction as you type, spell checking
+           against the bundled dictionary, and hear-as-you-write speech.
+           Everything stays on-device like the rest of the app. -->
+      <div class="page" id="page-write" role="tabpanel" aria-label="Write" hidden>
+        <section class="write-page">
+          <div class="write-toolbar">
+            <button class="document-btn" id="write-speak-btn" type="button"
+                    title="Read the text aloud with the browser voice">▶ Read text</button>
+            <button class="document-btn" id="write-stop-btn" type="button" style="display:none">Stop</button>
+            <button class="document-btn" id="write-typing-speak-btn" type="button" aria-pressed="false"
+                    title="Speak each word as it is finished (space or enter)">Speak while typing</button>
+            <button class="document-btn" id="write-dictate-btn" type="button" aria-pressed="false"
+                    title="Dictate with the browser's speech recognition. On some browsers the audio goes to the browser vendor's service — text never leaves by any other path.">🎙 Dictate</button>
+            <button class="document-btn" id="write-spell-btn" type="button">Check spelling</button>
+            <button class="document-btn" id="write-clear-btn" type="button" title="Clear the draft">Clear</button>
+            <span class="reader-status" id="write-status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="write-predict" id="write-predict" aria-label="Word suggestions" hidden></div>
+          <textarea class="write-editor" id="write-editor" rows="14" spellcheck="false"
+                    placeholder="Write here — suggestions appear above, and the app can read each word as you finish it."></textarea>
+          <div class="write-spell" id="write-spell" hidden></div>
         </section>
       </div>
 
@@ -499,6 +616,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <dt>r</dt><dd>Review your highlights and notes aloud</dd>
           <dt>?</dt><dd>Show or hide this help</dd>
         </dl>
+        <!-- WCAG 2.1.4: single-character shortcuts must be able to be turned
+             off, since screen-reader and speech-input users type letters
+             that would otherwise fire them. -->
+        <label class="shortcut-help__toggle">
+          <input type="checkbox" id="shortcut-keys-toggle" checked />
+          Enable single-key shortcuts
+        </label>
       </div>
     </div>
   `;

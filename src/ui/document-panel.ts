@@ -31,9 +31,21 @@ import {
   documentHighlightsKey,
   loadRecentDocuments,
   recordRecentDocument,
+  documentWordListKey,
+  loadDocumentWordList,
+  saveDocumentWordList,
+  documentColumnNotesKey,
+  loadDocumentColumnNotes,
+  saveDocumentColumnNotes,
+  documentTestAnswersKey,
+  loadDocumentTestAnswers,
+  saveDocumentTestAnswers,
   type DocumentBookmark,
+  type DocumentTestAnswer,
+  type DocumentColumnNote,
   type DocumentHighlight,
   type DocumentReadingProgress,
+  type DocumentWordEntry,
 } from '../persistence';
 import { mountHtmlView, mountPdfView, type DocumentView } from './document-view';
 import { paginateIntoPages, type PagePagination } from './pagination';
@@ -51,6 +63,11 @@ import {
   type ReviewScriptText,
   type ReviewSegment,
 } from './document-review';
+import { createWordLookup } from './word-lookup';
+import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
+import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
+import { buildTestSheet } from '../testsheet';
+import { extractWebDocument } from '../web-document';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -95,7 +112,9 @@ export function updateDocumentSectionVisibility(state: AppState): void {
   const canRead = !!(state.engine && state.engine.getEngineState() === 'ready');
   if (needModel) needModel.style.display = canRead ? 'none' : '';
   readBtn.disabled = !canRead;
-  readBtn.title = canRead ? 'Read extracted text aloud' : 'Load a model above before reading';
+  readBtn.title = canRead
+    ? 'Read extracted text aloud'
+    : 'Load a model on the Studio page to read aloud';
 }
 
 // ─── Document upload + reader ──────────────────────────────────────
@@ -155,6 +174,33 @@ export function bindDocumentEvents(state: AppState): void {
   const shortcutHelp = document.getElementById('shortcut-help') as HTMLElement;
   const shortcutHelpClose = document.getElementById('shortcut-help-close') as HTMLButtonElement;
   const blackout = document.getElementById('blackout') as HTMLElement;
+  const readerTools = document.getElementById('reader-tools') as HTMLDetailsElement;
+  const closeDocBtn = document.getElementById('close-document-btn') as HTMLButtonElement;
+  const docTitle = document.getElementById('doc-title') as HTMLElement;
+  const lookupModeBtn = document.getElementById('lookup-mode-btn') as HTMLButtonElement;
+  const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
+  const webUrlInput = document.getElementById('web-url-input') as HTMLInputElement;
+  const webOpenBtn = document.getElementById('web-open-btn') as HTMLButtonElement;
+  const colnotesBtn = document.getElementById('colnotes-btn') as HTMLButtonElement;
+  const colnotesEl = document.getElementById('colnotes') as HTMLElement;
+  const colnotesAddBtn = document.getElementById('colnotes-add-btn') as HTMLButtonElement;
+  const colnotesCloseBtn = document.getElementById('colnotes-close-btn') as HTMLButtonElement;
+  const colnotesForm = document.getElementById('colnotes-form') as HTMLFormElement;
+  const colnotesText = document.getElementById('colnotes-text') as HTMLTextAreaElement;
+  const colnotesCancelBtn = document.getElementById('colnotes-cancel-btn') as HTMLButtonElement;
+  const colnotesList = document.getElementById('colnotes-list') as HTMLElement;
+  const testPanel = document.getElementById('doctest') as HTMLElement;
+  const testAnswerBtn = document.getElementById('test-answer-btn') as HTMLButtonElement;
+  const testSheetBtn = document.getElementById('test-sheet-btn') as HTMLButtonElement;
+  const testForm = document.getElementById('test-form') as HTMLFormElement;
+  const testAnswerText = document.getElementById('test-answer-text') as HTMLTextAreaElement;
+  const testCancelBtn = document.getElementById('test-cancel-btn') as HTMLButtonElement;
+  const testList = document.getElementById('test-list') as HTMLElement;
+  const wordsPanel = document.getElementById('docwords') as HTMLElement;
+  const wordsFindBtn = document.getElementById('words-find-btn') as HTMLButtonElement;
+  const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
+  const wordListEl = document.getElementById('word-list') as HTMLElement;
+  const studyGuideBtn = document.getElementById('study-guide-btn') as HTMLButtonElement;
 
   /**
    * The file the reader is currently showing, kept so the document view can
@@ -177,6 +223,24 @@ export function bindDocumentEvents(state: AppState): void {
   let bookmarks: DocumentBookmark[] = [];
   let highlightsKey: string | null = null;
   let highlights: DocumentHighlight[] = [];
+  let wordsKey: string | null = null;
+  let wordList: DocumentWordEntry[] = [];
+  let colnotesKey: string | null = null;
+  let colNotes: DocumentColumnNote[] = [];
+  /** Note id being edited in the rail's form, or null when adding. */
+  let editingNoteId: string | null = null;
+  /** Offset the open note form will anchor to. */
+  let pendingNoteOffset = 0;
+  let testKey: string | null = null;
+  let testAnswers: DocumentTestAnswer[] = [];
+  let editingAnswerId: string | null = null;
+  let pendingAnswerOffset = 0;
+  /**
+   * Lookup mode: when on, tapping the document looks the tapped word up
+   * instead of starting a read from it. The button lives in the top bar
+   * next to Quick read.
+   */
+  let lookupMode = false;
   /** Offset to jump to once the next document finishes mounting. */
   let pendingGoToOffset: number | null = null;
   /** Range captured by the highlight form while its note is being written. */
@@ -218,9 +282,13 @@ export function bindDocumentEvents(state: AppState): void {
    * wants to watch the highlight move over it.
    */
   let openOverlayOnPlay = true;
+  // Focus that opened the overlay, returned to on close (2.4.3): the
+  // reading controls keep their place instead of dropping to <body>.
+  let overlayTrigger: HTMLElement | null = null;
 
   function openReaderOverlay() {
     if (readerOverlay.style.display === 'none') {
+      overlayTrigger = document.activeElement as HTMLElement | null;
       readerOverlay.style.display = '';
       readerOverlayStatus.textContent = readerStatus.textContent;
       document.body.style.overflow = 'hidden';
@@ -228,8 +296,32 @@ export function bindDocumentEvents(state: AppState): void {
     }
   }
   function closeReaderOverlay() {
+    const wasOpen = readerOverlay.style.display !== 'none';
     readerOverlay.style.display = 'none';
     document.body.style.overflow = '';
+    if (wasOpen && overlayTrigger?.isConnected) overlayTrigger.focus();
+    overlayTrigger = null;
+  }
+
+  /* aria-modal="true" promises the background is inert; without a Tab trap
+     focus can walk straight past the dialog's end into the page behind it.
+     Wraps Tab/Shift+Tab at both ends of the dialog's focusable set. */
+  function trapTabFocus(container: HTMLElement, event: KeyboardEvent): void {
+    const focusables = Array.from(container.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]'
+    )).filter(el => el.tabIndex >= 0 && el.getClientRects().length > 0
+      && !(el as HTMLButtonElement).disabled);
+    if (focusables.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const wrapTo = event.shiftKey ? focusables[focusables.length - 1] : focusables[0];
+    const boundary = event.shiftKey ? focusables[0] : focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (active === boundary || !container.contains(active)) {
+      event.preventDefault();
+      wrapTo.focus();
+    }
   }
 
   function setProgress(msg: string) {
@@ -454,6 +546,9 @@ export function bindDocumentEvents(state: AppState): void {
     bookmarkForm.hidden = !opening;
     bookmarkAddBtn.setAttribute('aria-expanded', String(opening));
     if (opening) {
+      // The form lives inside the collapsed tools section — open it so the
+      // click visibly did something.
+      readerTools.open = true;
       const snippet = state.extractedDocument?.text
         .slice(lastProgressOffset, lastProgressOffset + 32).trim();
       bookmarkName.value = snippet
@@ -692,6 +787,7 @@ export function bindDocumentEvents(state: AppState): void {
       item.append(text, actions);
       highlightList.appendChild(item);
     }
+    renderBubbleNotes();
   }
 
   function downloadFile(file: ExportFile) {
@@ -872,6 +968,15 @@ export function bindDocumentEvents(state: AppState): void {
     renderBookmarks();
     highlightsKey = file ? documentHighlightsKey(file) : null;
     highlights = highlightsKey ? loadDocumentHighlights(highlightsKey) : [];
+    wordsKey = file ? documentWordListKey(file) : null;
+    wordList = wordsKey ? loadDocumentWordList(wordsKey) : [];
+    renderWordList();
+    colnotesKey = file ? documentColumnNotesKey(file) : null;
+    colNotes = colnotesKey ? loadDocumentColumnNotes(colnotesKey) : [];
+    renderColNotes();
+    testKey = file ? documentTestAnswersKey(file) : null;
+    testAnswers = testKey ? loadDocumentTestAnswers(testKey) : [];
+    renderTestAnswers();
     pendingHighlight = null;
     highlightForm.hidden = true;
     renderHighlights();
@@ -895,8 +1000,13 @@ export function bindDocumentEvents(state: AppState): void {
     }
     updateStatusBar();
     renderReaderView(doc.text, doc.atomicRanges);
+    renderBubbleNotes();
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
+    // The document takes over the window: app chrome and upload chrome
+    // hide, the top bar and the document fill it (see body.document-open).
+    docTitle.textContent = doc.name;
+    setDocOpen(true);
     options.style.display = '';
     // The sample offer has done its job once there is a document to look at.
     sampleEl.hidden = true;
@@ -914,6 +1024,40 @@ export function bindDocumentEvents(state: AppState): void {
     void mountDocumentView(doc, request);
     readerView.focus();
   }
+
+  /**
+   * Read-the-web: a URL is fetched straight from its origin and opened
+   * like an uploaded document. Sites that block cross-origin reads get
+   * an honest error from extractWebDocument rather than a blank page.
+   */
+  function openWebPage() {
+    const url = webUrlInput.value.trim();
+    if (!url) { webUrlInput.focus(); return; }
+    let parsed: URL;
+    try {
+      parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    } catch {
+      showReaderError('That does not look like a web address.');
+      return;
+    }
+    const request = ++activeFileRequest;
+    webOpenBtn.disabled = true;
+    clearReaderError();
+    setProgress('Fetching the page…');
+    extractWebDocument(parsed.href)
+      .then(doc => { if (request === activeFileRequest) showDocument(doc, null); })
+      .catch(err => {
+        if (request !== activeFileRequest) return;
+        clearProgress();
+        showReaderError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { webOpenBtn.disabled = false; });
+  }
+
+  webOpenBtn.addEventListener('click', openWebPage);
+  webUrlInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); openWebPage(); }
+  });
 
   sampleBtn.addEventListener('click', () => {
     clearReaderError();
@@ -996,13 +1140,9 @@ export function bindDocumentEvents(state: AppState): void {
     showStatus('success', `Queued ${kindLabel(block.kind).toLowerCase()} for speech.`);
   });
 
+  // Pointer users get the whole drop zone; keyboard users get the (clipped,
+  // focusable) file input itself, which opens the picker natively on Enter.
   drop.addEventListener('click', () => input.click());
-  drop.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      input.click();
-    }
-  });
 
   drop.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -1020,6 +1160,87 @@ export function bindDocumentEvents(state: AppState): void {
     const file = input.files?.[0];
     if (file) handleFile(file);
   });
+
+  /**
+   * Whether the window is showing a document or the app: an open document
+   * takes the whole window under its top bar. CSS does the hiding and
+   * filling (`body.document-open`); this flag exists only so the two
+   * states are flipped in one place.
+   */
+  function setDocOpen(open: boolean) {
+    document.body.classList.toggle('document-open', open);
+  }
+
+  /**
+   * Put the document down: speech stops, the view unmounts, and the page
+   * returns to the upload state. Session documents and the recents shelf
+   * deliberately survive — closing a document is not forgetting it.
+   */
+  function closeDocument() {
+    activeFileRequest++;
+    stopAllSpeech();
+    destroyDocView();
+    hasDocView = false;
+    applyDocViewMode();
+    state.extractedDocument = null;
+    sourceFile = null;
+    progressKey = null;
+    savedProgress = null;
+    lastProgressOffset = 0;
+    clearTimeout(progressTimer);
+    pendingGoToOffset = null;
+    pendingHighlight = null;
+    highlightForm.hidden = true;
+    bookmarkForm.hidden = true;
+    bookmarksKey = null;
+    bookmarks = [];
+    renderBookmarks();
+    highlightsKey = null;
+    highlights = [];
+    renderHighlights();
+    classifiedBlocks = [];
+    readerSentences = [];
+    wordsKey = null;
+    wordList = [];
+    renderWordList();
+    wordsSuggest.hidden = true;
+    colnotesKey = null;
+    colNotes = [];
+    renderColNotes();
+    setColNotesOpen(false);
+    colnotesForm.hidden = true;
+    editingNoteId = null;
+    testKey = null;
+    testAnswers = [];
+    renderTestAnswers();
+    testForm.hidden = true;
+    editingAnswerId = null;
+    if (lookupMode) setLookupMode(false);
+    lookup.close();
+    readerView.innerHTML = '';
+    readerOverlayContent.innerHTML = '';
+    readerStatus.textContent = '';
+    readerOverlayStatus.textContent = '';
+    // renderClassification re-reveals this on the next open.
+    classifyPanel.hidden = true;
+    readerTools.open = false;
+    preview.style.display = 'none';
+    options.style.display = 'none';
+    layoutDetails.style.display = 'none';
+    sampleEl.hidden = false;
+    clearProgress();
+    clearReaderError();
+    updateStatusBar();
+    // Re-picking the same file must still fire 'change'.
+    input.value = '';
+    docTitle.textContent = '';
+    setDocOpen(false);
+    // The drop zone is a <label> around the clipped file input — the input
+    // is the focusable element (the zone only shows its :focus-within ring).
+    input.focus();
+  }
+
+  closeDocBtn.addEventListener('click', closeDocument);
 
   // Show/hide the OCR mode selector when the OCR toggle changes.
   ocrToggle.addEventListener('change', () => {
@@ -1209,7 +1430,11 @@ export function bindDocumentEvents(state: AppState): void {
    * still moves the highlight and says why — a click that does nothing at all
    * reads as a broken document view rather than a missing model.
    */
-  function readFromOffset(offset: number) {
+  function readFromOffset(offset: number, point?: { x: number; y: number }) {
+    if (lookupMode) {
+      lookupAtOffset(offset, point);
+      return;
+    }
     const sentence = sentenceAtOffset(readerSentences, offset);
     if (!sentence) return;
     lastProgressOffset = sentence.start ?? offset;
@@ -1259,7 +1484,12 @@ export function bindDocumentEvents(state: AppState): void {
   readerOverlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       stopAllSpeech();
+    } else if (e.key === 'Tab') {
+      trapTabFocus(readerOverlay, e);
     }
+  });
+  shortcutHelp.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') trapTabFocus(shortcutHelp, e);
   });
 
   // ── Highlights: user-made marked ranges with optional notes ──
@@ -1270,6 +1500,9 @@ export function bindDocumentEvents(state: AppState): void {
       return;
     }
     pendingHighlight = range;
+    // The form lives inside the collapsed tools section — open it so the
+    // click visibly did something.
+    readerTools.open = true;
     highlightForm.hidden = false;
     highlightAddBtn.setAttribute('aria-expanded', 'true');
     highlightNote.focus();
@@ -1383,6 +1616,7 @@ export function bindDocumentEvents(state: AppState): void {
   function stopAllSpeech() {
     quickRead.stop();
     reviewRead.stop();
+    wordSpeak.stop();
     state.readerSession?.stop();
     state.readerSession = null;
     modelSpeechKind = null;
@@ -1491,6 +1725,473 @@ export function bindDocumentEvents(state: AppState): void {
     });
   });
 
+  // ── Word lookup: tap a word while lookup mode is on ──
+  // A dedicated speech path for "Hear it" so pronouncing a word never
+  // disturbs whatever the document itself is doing.
+  const wordSpeak = new ReadAloudController({
+    onError: message => showReaderNotice(message),
+  });
+
+  function saveWordToList(word: string, start: number): boolean {
+    if (wordList.some(entry => entry.word.toLowerCase() === word.toLowerCase()
+      && entry.offset === start)) {
+      return false;
+    }
+    wordList = [...wordList, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      word,
+      offset: start,
+      createdAt: Date.now(),
+    }];
+    if (wordsKey) saveDocumentWordList(wordsKey, wordList);
+    renderWordList();
+    return true;
+  }
+
+  /** The saved-words rail in the tools section: list, suggest chips, guide button. */
+  function renderWordList() {
+    wordsPanel.hidden = !wordsKey;
+    studyGuideBtn.disabled = wordList.length === 0;
+    wordListEl.replaceChildren();
+    for (const entry of wordList) {
+      const item = document.createElement('li');
+      item.className = 'docbookmarks__item';
+      item.dataset.wordId = entry.id;
+      const text = document.createElement('div');
+      text.className = 'docbookmarks__text';
+      const label = document.createElement('span');
+      label.className = 'docbookmarks__label-text';
+      label.textContent = entry.word;
+      text.appendChild(label);
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['lookup', 'Look up'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(text, actions);
+      wordListEl.appendChild(item);
+    }
+  }
+
+  wordListEl.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-word-id]');
+    const entry = wordList.find(w => w.id === item?.dataset.wordId);
+    if (!button || !entry) return;
+    if (button.dataset.action === 'remove') {
+      wordList = wordList.filter(w => w.id !== entry.id);
+      if (wordsKey) saveDocumentWordList(wordsKey, wordList);
+      renderWordList();
+    } else {
+      const rect = button.getBoundingClientRect();
+      lookup.open({
+        word: entry.word,
+        start: entry.offset,
+        end: entry.offset + entry.word.length,
+        x: rect.left,
+        y: rect.top,
+      });
+    }
+  });
+
+  /**
+   * "Find study words" scans the open document for terms outside the common
+   * core vocabulary and offers them as one-tap additions to the list — the
+   * extraction half of vocabulary work; saving is the curation half.
+   */
+  wordsFindBtn.addEventListener('click', async () => {
+    const doc = state.extractedDocument;
+    if (!doc) return;
+    wordsFindBtn.disabled = true;
+    wordsSuggest.hidden = false;
+    wordsSuggest.textContent = 'Scanning the document…';
+    const freq = await loadFrequencyList();
+    const common = new Set(freq.slice(0, COMMON_VOCABULARY_SIZE));
+    const candidates = extractCandidateWords(doc.text, common)
+      .filter(c => !wordList.some(w => w.word.toLowerCase() === c.word));
+    wordsFindBtn.disabled = false;
+    wordsSuggest.replaceChildren();
+    if (!candidates.length) {
+      wordsSuggest.textContent = 'No uncommon words found — this document stays inside everyday vocabulary.';
+      return;
+    }
+    const label = document.createElement('span');
+    label.className = 'docwords__suggest-label';
+    label.textContent = 'Tap a word to add it to the list:';
+    wordsSuggest.appendChild(label);
+    for (const candidate of candidates) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'docwords__chip';
+      chip.dataset.word = candidate.word;
+      chip.dataset.offset = String(candidate.offset);
+      chip.textContent = candidate.count > 1 ? `${candidate.word} ×${candidate.count}` : candidate.word;
+      wordsSuggest.appendChild(chip);
+    }
+  });
+
+  wordsSuggest.addEventListener('click', event => {
+    const chip = (event.target as HTMLElement).closest<HTMLButtonElement>('.docwords__chip');
+    if (!chip?.dataset.word) return;
+    if (saveWordToList(chip.dataset.word, Number(chip.dataset.offset ?? 0))) {
+      chip.remove();
+      readerTools.open = true;
+    }
+  });
+
+  studyGuideBtn.addEventListener('click', async () => {
+    const doc = state.extractedDocument;
+    if (!doc || !wordList.length) return;
+    studyGuideBtn.disabled = true;
+    const dict = await loadDictionary();
+    const guide = buildStudyGuide(doc.name, doc.text, wordList, dict);
+    downloadBlob(`${doc.name.replace(/\.[^./\\]+$/, '')}-study-guide.md`,
+      new Blob([guide], { type: 'text/markdown' }));
+    studyGuideBtn.disabled = false;
+  });
+
+  function highlightSpan(start: number, end: number): void {
+    highlights = [...highlights, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      start,
+      end,
+      color: 'yellow',
+      createdAt: Date.now(),
+    }];
+    if (highlightsKey) saveDocumentHighlights(highlightsKey, highlights);
+    renderHighlights();
+    applyAnnotationsToView();
+    readerTools.open = true;
+  }
+
+  const lookup = createWordLookup({
+    onSpeak: word => wordSpeak.speak([{ text: word }], 0, { rate: QUICK_RATES[quickRateIndex] }),
+    onSaveWord: saveWordToList,
+    onHighlight: highlightSpan,
+  });
+
+  function lookupAtOffset(offset: number, point?: { x: number; y: number }): void {
+    const text = state.extractedDocument?.text ?? '';
+    const found = wordSpanAt(text, offset);
+    if (!found) return;
+    lookup.open({
+      word: found.word,
+      start: found.start,
+      end: found.end,
+      x: point?.x ?? window.innerWidth / 2,
+      y: point?.y ?? window.innerHeight / 2,
+    });
+  }
+
+  function setLookupMode(on: boolean): void {
+    lookupMode = on;
+    lookupModeBtn.setAttribute('aria-pressed', String(on));
+    lookupModeBtn.classList.toggle('document-btn--on', on);
+    preview.classList.toggle('document-preview--lookup', on);
+    if (!on) lookup.close();
+  }
+
+  lookupModeBtn.addEventListener('click', () => setLookupMode(!lookupMode));
+
+  // The text view's word spans resolve to document offsets through the
+  // sentence's own segmentation, so a tap there looks up exactly what it hit.
+  readerView.addEventListener('click', event => {
+    if (!lookupMode) return;
+    const wordEl = (event.target as HTMLElement).closest<HTMLElement>('.reader-word');
+    const sentenceEl = wordEl?.closest<HTMLElement>('[data-sentence-index]');
+    if (!wordEl || !sentenceEl) return;
+    const sentence = readerSentences.find(s =>
+      s.globalIndex === Number(sentenceEl.dataset.sentenceIndex));
+    const span = sentence ? wordSpanInDocument(sentence, Number(wordEl.dataset.wordIndex)) : null;
+    if (!span) return;
+    const text = state.extractedDocument?.text ?? '';
+    // The karaoke span covers the whole token — punctuation included — so
+    // resolve through wordSpanAt to land on the bare word.
+    const found = wordSpanAt(text, span.start);
+    if (!found) return;
+    lookup.open({
+      word: found.word,
+      start: found.start,
+      end: found.end,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  });
+
+  // ── Column notes: a margin rail of notes pinned to offsets ──
+  function setColNotesOpen(on: boolean): void {
+    colnotesEl.hidden = !on;
+    colnotesBtn.setAttribute('aria-pressed', String(on));
+    colnotesBtn.classList.toggle('document-btn--on', on);
+    preview.classList.toggle('document-preview--notes', on);
+  }
+
+  function goToDocumentOffset(offset: number): void {
+    lastProgressOffset = offset;
+    docView?.goToOffset(offset);
+    const sentence = readerSentences.find(s => s.start !== undefined
+      && s.start <= offset && (s.end ?? 0) > offset);
+    const el = sentence
+      ? readerView.querySelector(`[data-sentence-index="${sentence.globalIndex}"]`)
+      : null;
+    (el ?? readerView).scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }
+
+  function renderColNotes() {
+    colnotesList.replaceChildren();
+    const text = state.extractedDocument?.text ?? '';
+    for (const note of colNotes) {
+      const item = document.createElement('li');
+      item.className = 'colnotes__item';
+      item.dataset.noteId = note.id;
+      const anchor = document.createElement('div');
+      anchor.className = 'colnotes__anchor';
+      const quote = text.slice(Math.max(0, note.offset - 30), note.offset + 50)
+        .replace(/\s+/g, ' ').trim();
+      anchor.textContent = quote ? `…${quote}…` : `Offset ${note.offset}`;
+      const body = document.createElement('p');
+      body.className = 'colnotes__note';
+      body.textContent = note.note;
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['edit', 'Edit'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(anchor, body, actions);
+      colnotesList.appendChild(item);
+    }
+  }
+
+  colnotesBtn.addEventListener('click', () => setColNotesOpen(!!colnotesEl.hidden));
+  colnotesCloseBtn.addEventListener('click', () => setColNotesOpen(false));
+
+  colnotesAddBtn.addEventListener('click', () => {
+    editingNoteId = null;
+    pendingNoteOffset = lastProgressOffset;
+    colnotesText.value = '';
+    colnotesForm.hidden = false;
+    colnotesText.focus();
+  });
+
+  colnotesCancelBtn.addEventListener('click', () => {
+    colnotesForm.hidden = true;
+    editingNoteId = null;
+  });
+
+  colnotesForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const note = colnotesText.value.trim();
+    if (!note) return;
+    if (editingNoteId) {
+      colNotes = colNotes.map(entry =>
+        entry.id === editingNoteId ? { ...entry, note } : entry);
+    } else {
+      colNotes = [...colNotes, {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        offset: pendingNoteOffset,
+        note,
+        createdAt: Date.now(),
+      }].sort((a, b) => a.offset - b.offset);
+    }
+    if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
+    editingNoteId = null;
+    colnotesForm.hidden = true;
+    renderColNotes();
+  });
+
+  colnotesList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-note-id]');
+    const note = colNotes.find(n => n.id === item?.dataset.noteId);
+    if (!button || !note) return;
+    if (button.dataset.action === 'go') {
+      goToDocumentOffset(note.offset);
+    } else if (button.dataset.action === 'edit') {
+      editingNoteId = note.id;
+      pendingNoteOffset = note.offset;
+      colnotesText.value = note.note;
+      colnotesForm.hidden = false;
+      colnotesText.focus();
+    } else if (button.dataset.action === 'remove') {
+      colNotes = colNotes.filter(n => n.id !== note.id);
+      if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
+      renderColNotes();
+    }
+  });
+
+  // ── Bubble notes: inline callouts at the edge of noted highlights ──
+  // A highlight that carries a note renders a 💬 marker at the end of
+  // its range in the text view; tapping it opens the note as a bubble
+  // floating off the text — the margin callout, without leaving the page.
+  // The rendered-page view paints annotation boxes; the reflowable text
+  // view needs the same colour on its word spans or a highlight is only
+  // visible in one of the two reading surfaces.
+  function paintTextHighlights() {
+    readerView.querySelectorAll('.reader-word--hl').forEach(el => {
+      el.classList.remove('reader-word--hl',
+        'reader-word--hl--yellow', 'reader-word--hl--green', 'reader-word--hl--blue');
+    });
+    for (const h of highlights) {
+      for (const s of readerSentences) {
+        if (s.start === undefined) continue;
+        if (s.end !== undefined && s.end <= h.start) continue;
+        if (s.start >= h.end) break;
+        const sentenceEl = readerView.querySelector(`[data-sentence-index="${s.globalIndex}"]`);
+        const wordEls = sentenceEl?.querySelectorAll('.reader-word');
+        if (!wordEls?.length) continue;
+        for (let w = 0; w < s.words.length; w++) {
+          const span = wordSpanInDocument(s, w);
+          if (!span || span.end <= h.start || span.start >= h.end) continue;
+          wordEls[w]?.classList.add('reader-word--hl', `reader-word--hl--${h.color}`);
+        }
+      }
+    }
+  }
+
+  function renderBubbleNotes() {
+    readerView.querySelectorAll('.bubble-note').forEach(el => el.remove());
+    paintTextHighlights();
+    for (const h of highlights) {
+      if (!h.note?.trim()) continue;
+      const sentence = readerSentences.find(s =>
+        s.start !== undefined && s.start < h.end && (s.end ?? 0) >= h.end);
+      const span = sentence
+        ? readerView.querySelector(`[data-sentence-index="${sentence.globalIndex}"]`)
+        : null;
+      if (!span?.parentElement) continue;
+      const bubble = document.createElement('span');
+      bubble.className = 'bubble-note';
+      const marker = document.createElement('button');
+      marker.type = 'button';
+      marker.className = 'bubble-note__marker';
+      marker.textContent = '\u{1F4AC}';
+      marker.title = 'Show note';
+      const body = document.createElement('span');
+      body.className = 'bubble-note__body';
+      body.textContent = h.note;
+      bubble.append(marker, body);
+      span.parentElement.insertBefore(bubble, span.nextSibling);
+    }
+  }
+
+  readerView.addEventListener('click', event => {
+    const marker = (event.target as HTMLElement).closest<HTMLElement>('.bubble-note__marker');
+    if (!marker) return;
+    const bubble = marker.closest('.bubble-note');
+    const opening = !bubble?.classList.contains('bubble-note--open');
+    readerView.querySelectorAll('.bubble-note--open')
+      .forEach(el => el.classList.remove('bubble-note--open'));
+    bubble?.classList.toggle('bubble-note--open', opening);
+  });
+
+  // ── Test-taking: answers pinned to question offsets ──
+  // Read the question on the page, write the answer beside it, and the
+  // "Test sheet" export produces a numbered sheet pairing each answer
+  // with its question.
+  function renderTestAnswers() {
+    testPanel.hidden = !testKey;
+    testSheetBtn.disabled = testAnswers.length === 0;
+    testList.replaceChildren();
+    const text = state.extractedDocument?.text ?? '';
+    for (const entry of testAnswers) {
+      const item = document.createElement('li');
+      item.className = 'doctest__item';
+      item.dataset.answerId = entry.id;
+      const question = document.createElement('div');
+      question.className = 'colnotes__anchor';
+      const quote = text.slice(Math.max(0, entry.offset - 30), entry.offset + 50)
+        .replace(/\s+/g, ' ').trim();
+      question.textContent = quote ? `Q: …${quote}…` : `Question at ${entry.offset}`;
+      const body = document.createElement('p');
+      body.className = 'colnotes__note';
+      body.textContent = entry.answer;
+      const actions = document.createElement('div');
+      actions.className = 'docbookmarks__actions';
+      for (const [action, caption] of [['go', 'Go'], ['edit', 'Edit'], ['remove', 'Remove']] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'document-btn';
+        button.dataset.action = action;
+        button.textContent = caption;
+        actions.appendChild(button);
+      }
+      item.append(question, body, actions);
+      testList.appendChild(item);
+    }
+  }
+
+  testAnswerBtn.addEventListener('click', () => {
+    editingAnswerId = null;
+    pendingAnswerOffset = lastProgressOffset;
+    testAnswerText.value = '';
+    testForm.hidden = false;
+    testAnswerText.focus();
+  });
+
+  testCancelBtn.addEventListener('click', () => {
+    testForm.hidden = true;
+    editingAnswerId = null;
+  });
+
+  testForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const answer = testAnswerText.value.trim();
+    if (!answer) return;
+    if (editingAnswerId) {
+      testAnswers = testAnswers.map(entry =>
+        entry.id === editingAnswerId ? { ...entry, answer } : entry);
+    } else {
+      testAnswers = [...testAnswers, {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        offset: pendingAnswerOffset,
+        answer,
+        createdAt: Date.now(),
+      }].sort((a, b) => a.offset - b.offset);
+    }
+    if (testKey) saveDocumentTestAnswers(testKey, testAnswers);
+    editingAnswerId = null;
+    testForm.hidden = true;
+    renderTestAnswers();
+  });
+
+  testList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    const item = button?.closest<HTMLElement>('li[data-answer-id]');
+    const entry = testAnswers.find(a => a.id === item?.dataset.answerId);
+    if (!button || !entry) return;
+    if (button.dataset.action === 'go') {
+      goToDocumentOffset(entry.offset);
+    } else if (button.dataset.action === 'edit') {
+      editingAnswerId = entry.id;
+      pendingAnswerOffset = entry.offset;
+      testAnswerText.value = entry.answer;
+      testForm.hidden = false;
+      testAnswerText.focus();
+    } else if (button.dataset.action === 'remove') {
+      testAnswers = testAnswers.filter(a => a.id !== entry.id);
+      if (testKey) saveDocumentTestAnswers(testKey, testAnswers);
+      renderTestAnswers();
+    }
+  });
+
+  testSheetBtn.addEventListener('click', () => {
+    const doc = state.extractedDocument;
+    if (!doc || !testAnswers.length) return;
+    const sheet = buildTestSheet(doc.name, doc.text, testAnswers);
+    downloadBlob(`${doc.name.replace(/\.[^./\\]+$/, '')}-test-sheet.md`,
+      new Blob([sheet], { type: 'text/markdown' }));
+  });
+
   // ── Cross-document search ────────────────────────────────
   sessionSearchInput.addEventListener('input', () => {
     clearTimeout(sessionSearchTimer);
@@ -1507,6 +2208,19 @@ export function bindDocumentEvents(state: AppState): void {
   shortcutsBtn.addEventListener('click', toggleShortcutHelp);
   shortcutHelpClose.addEventListener('click', toggleShortcutHelp);
 
+  // WCAG 2.1.4: single-character keys are off the moment the user unchecks
+  // the toggle in the shortcut help — speech input and screen-reader users
+  // otherwise fire 'm', 'n', 'b'… just by typing. Persisted per browser.
+  const SHORTCUTS_KEY = 'yapper.shortcuts-enabled';
+  const shortcutKeysToggle = document.getElementById('shortcut-keys-toggle') as HTMLInputElement;
+  const shortcutsEnabled = () => shortcutKeysToggle.checked;
+  try {
+    shortcutKeysToggle.checked = localStorage.getItem(SHORTCUTS_KEY) !== '0';
+  } catch { /* private mode — the checkbox default (on) stands */ }
+  shortcutKeysToggle.addEventListener('change', () => {
+    try { localStorage.setItem(SHORTCUTS_KEY, shortcutKeysToggle.checked ? '1' : '0'); } catch { /* best-effort */ }
+  });
+
   document.addEventListener('keydown', (e) => {
     // A visible blackout swallows the next key: dismissing it is the action.
     if (!blackout.hidden) {
@@ -1514,10 +2228,21 @@ export function bindDocumentEvents(state: AppState): void {
       e.preventDefault();
       return;
     }
+    // While a modal dialog is up its aria-modal promises an inert page:
+    // swallow every key except the ones that close it.
+    if (!shortcutHelp.hidden) {
+      if (e.key === 'Escape' || e.key === '?') {
+        e.preventDefault();
+        toggleShortcutHelp();
+      }
+      return;
+    }
+    if (readerOverlay.style.display !== 'none') return;
     const target = e.target as HTMLElement | null;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
       || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (!shortcutsEnabled() && e.key !== 'Escape') return;
     switch (e.key) {
       case '/':
         e.preventDefault();
