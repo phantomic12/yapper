@@ -554,6 +554,27 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <ul class="docbookmarks__list" id="bookmark-list"></ul>
             </div>
 
+            <!-- Per-section voices: give a paragraph or a selection a
+                 different speaker than the body text. Stored per file (see
+                 voice-tags.ts) and wired by ui/voice-tags-panel.ts. The page
+                 text is untouched — only which voice synthesizes which words
+                 changes. -->
+            <div class="voice-tags" id="voice-tags">
+              <div class="section-label">Section voices</div>
+              <div class="docbookmarks__row voice-tags__row">
+                <select class="voice-tags__select" id="voice-tag-voice" aria-label="Voice for the tagged section"></select>
+                <button class="document-btn" type="button" id="voice-tag-paragraph-btn"
+                        title="Read the paragraph at the reading cursor in the chosen voice">Tag paragraph</button>
+                <button class="document-btn" type="button" id="voice-tag-selection-btn"
+                        title="Read the selected text in the chosen voice">Tag selection</button>
+                <button class="document-btn" type="button" id="voice-tag-clear-btn" disabled
+                        title="Read the whole document in one voice again">Clear all</button>
+              </div>
+              <p class="voice-tags__hint">The page keeps its words; only the speaking voice changes.</p>
+              <ul class="voice-tags__list docbookmarks__list" id="voice-tag-list"></ul>
+              <p class="voice-tags__status" id="voice-tag-status" role="status" aria-live="polite"></p>
+            </div>
+
             <!-- Marked-up ranges of the document text, kept per uploaded file. -->
             <div class="dochighlights" id="dochighlights">
               <div class="section-label">Highlights</div>

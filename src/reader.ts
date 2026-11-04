@@ -1,6 +1,12 @@
 import type { GenerationJob, TTSEngine } from './engine';
 import { applyPronunciations, toWrittenWordIndex, type PronunciationEntry } from './pronunciation';
 import {
+  chunkWordCount,
+  chunkWordPosition,
+  splitChunksByVoice,
+  type VoiceTag,
+} from './voice-tags';
+import {
   buildReadingUnits,
   nextReadingUnitIndex,
   readingUnitAt,
@@ -32,6 +38,24 @@ export interface ReaderSentence {
   end?: number;
 }
 
+/**
+ * A word window over one sentence inside one chunk.
+ *
+ * A chunk used to be a list of whole sentences. Per-section voices break that
+ * assumption: a tag boundary can fall inside a sentence, so the same sentence
+ * can be spoken by two chunks in two voices. `startWord`/`endWord` are word
+ * indices into `sentence.words`, and they are what keeps highlighting exact —
+ * the second half of a sentence is not word zero of that sentence, and only
+ * this window remembers where it actually starts.
+ */
+export interface ChunkSegment {
+  sentence: ReaderSentence;
+  /** First word of `sentence` spoken by this chunk, inclusive. */
+  startWord: number;
+  /** One past the last word of `sentence` spoken by this chunk. */
+  endWord: number;
+}
+
 export interface ReaderChunk {
   /** Text sent to the TTS engine. */
   text: string;
@@ -39,6 +63,16 @@ export interface ReaderChunk {
   index: number;
   /** Sentences that make up this chunk, in order. */
   sentences: ReaderSentence[];
+  /** The word windows this chunk speaks, in reading order. */
+  segments: ChunkSegment[];
+  /**
+   * Voice this chunk is synthesized with, as an id from the active model's
+   * voice list. Undefined means the model's default (or the session's
+   * `voiceId` option) — the untagged path. A chunk never straddles two
+   * voices: the planner splits at the boundary and this is the voice in force
+   * where the chunk begins.
+   */
+  voiceId?: string;
   /** Assigned generation job once queued. */
   job?: GenerationJob;
   /**
@@ -98,6 +132,27 @@ export interface ReaderOptions {
   /** Playback speed passed to the engine. */
   speed?: number;
   /**
+   * Voice for chunks that carry no tag — normally the voice the user picked
+   * on the Studio page. Undefined leaves the model's own default in charge,
+   * which is what every caller did before per-section voices existed.
+   */
+  voiceId?: string;
+  /**
+   * Per-section voices: character ranges of `fullText`, each naming a voice.
+   * Chunks are planned so no chunk spans two of them; see `voice-tags.ts`.
+   */
+  voiceTags?: readonly VoiceTag[];
+  /**
+   * Opaque id of the document this session is reading.
+   *
+   * The tagging UI holds a mutable tag list and wants to push changes into
+   * the live session. Without an id it could only guess whether the session
+   * on `AppState` is this document or a review script built from it — and
+   * applying document offsets to a different text would voice arbitrary
+   * sentences. The id makes that comparison exact.
+   */
+  documentId?: string;
+  /**
    * Start silent: advance the highlight on a text-derived clock without
    * synthesising or playing anything. Silent sessions need no engine at all.
    */
@@ -136,6 +191,15 @@ export class DocumentReaderSession {
   private sessionId: string;
   private chunks: ReaderChunk[] = [];
   private allSentences: ReaderSentence[] = [];
+  /** The trimmed text this session was planned from, kept so tags can be
+   *  re-applied mid-run without re-reading the document from the UI. */
+  private fullText: string;
+  /**
+   * Set when a tag names a voice the active model cannot speak. The session
+   * refuses to play rather than quietly reading every section in one voice —
+   * a document that says two speakers should not sound like one.
+   */
+  private voiceIssue: string | null = null;
   private audio: HTMLAudioElement;
   private state: ReaderState;
   private options: ReaderOptions;
@@ -173,10 +237,19 @@ export class DocumentReaderSession {
       ...options,
     };
     this.sessionId = `read-${Math.random().toString(36).slice(2)}-${Date.now()}`;
-    const { sentences, chunks } = prepareReaderData(fullText.trim(), this.options.chunkSize, this.options.atomicRanges);
+    // Set the mode before validating: a silent session never synthesizes, so
+    // it must not be told its tagged voices are unhonourable.
+    this.silent = options.silent ?? false;
+    this.fullText = fullText.trim();
+    const { sentences, chunks } = prepareReaderData(
+      this.fullText,
+      this.options.chunkSize,
+      this.options.atomicRanges,
+      this.options.voiceTags,
+    );
     this.allSentences = sentences;
     this.chunks = chunks;
-    this.silent = options.silent ?? false;
+    this.voiceIssue = this.resolveVoiceIssue();
     this.readingUnit = options.readingUnit ?? 'sentence';
     this.units = buildReadingUnits(this.allSentences, this.readingUnit, this.options.lineChars);
     this.position = {
@@ -229,6 +302,110 @@ export class DocumentReaderSession {
     return this.readingUnit;
   }
 
+  /** Where the reading cursor is, in document coordinates. */
+  getPosition(): { sentenceIndex: number; wordIndex: number } {
+    return { ...this.position };
+  }
+
+  /** The document id this session was created for, if the caller supplied one. */
+  getDocumentId(): string | null {
+    return this.options.documentId ?? null;
+  }
+
+  /**
+   * Why the tagged voices cannot be honoured, or null when they can.
+   *
+   * Exposed so the tagging UI can say it at the moment the user tags a
+   * section, rather than letting them start a read that will refuse to play.
+   */
+  getVoiceTagsError(): string | null {
+    return this.voiceIssue;
+  }
+
+  /**
+   * Explain the first tag the active model cannot speak.
+   *
+   * The engine's `enqueue` falls back to the model's default voice when a
+   * voice id does not resolve, which is exactly the silent lie this feature
+   * must not tell: the user would hear the whole document in one voice and
+   * believe the tags had been applied. So the check happens here, before any
+   * text is queued, and a failure is surfaced instead of papered over.
+   *
+   * Silent sessions are exempt — nothing is synthesized, so there is no voice
+   * to get wrong.
+   */
+  private resolveVoiceIssue(): string | null {
+    const tags = this.options.voiceTags;
+    if (!tags?.length || !this.engine || this.silent) return null;
+    const model = this.engine.getCurrentModel();
+    if (!model) return 'Load a model before reading with section voices.';
+    const voices = model.voices ?? [];
+    if (!voices.length) {
+      return `${model.name ?? 'This model'} has a single fixed voice, so the tagged sections cannot be spoken by another. Load Kokoro or Kitten, or clear the section voices.`;
+    }
+    const known = new Set(voices.map(voice => voice.id));
+    const missing = tags.find(tag => !known.has(tag.voiceId));
+    if (missing) {
+      return `A section is tagged with the voice "${missing.voiceId}", which ${model.name} does not offer. Clear that tag or pick one of this model's voices.`;
+    }
+    return null;
+  }
+
+  /**
+   * Re-plan the session with a new set of section voices.
+   *
+   * Called while the reader is listening, so the position is the anchor: the
+   * cursor stays on the same word and the chunk under it is recomputed, the
+   * same way changing the reading unit keeps its place. Clips already queued
+   * for the old plan are cancelled — they were synthesized in the wrong
+   * voice for their new position, and letting them play would be the exact
+   * mismatch this feature exists to avoid.
+   */
+  applyVoiceTags(tags: readonly VoiceTag[]): void {
+    const wasPlaying = this.state.status === 'playing';
+    const anchor = { ...this.position };
+    if (this.engine) {
+      for (const chunk of this.chunks) {
+        if (chunk.job && (chunk.job.status === 'pending' || chunk.job.status === 'generating')) {
+          this.engine.cancel(chunk.job.id);
+        }
+      }
+    }
+    this.options = { ...this.options, voiceTags: [...tags] };
+    const { chunks } = prepareReaderData(
+      this.fullText,
+      this.options.chunkSize,
+      this.options.atomicRanges,
+      this.options.voiceTags,
+    );
+    this.chunks = chunks;
+    this.voiceIssue = this.resolveVoiceIssue();
+    this.audio.pause();
+    this.pendingSeekWord = null;
+    const index = this.chunkIndexForSentence(anchor.sentenceIndex, anchor.wordIndex);
+    this.setState({
+      currentIndex: index,
+      bufferedIndex: -1,
+      totalChunks: this.chunks.length,
+      error: this.voiceIssue ?? undefined,
+      ...(this.voiceIssue ? { status: 'paused', isPlaying: false } : {}),
+    });
+    if (this.voiceIssue) {
+      this.cancelHighlightLoop();
+      return;
+    }
+    if (this.silent) {
+      this.emitPosition();
+      return;
+    }
+    this.ensureBuffered(Math.min(index + this.options.lookahead! - 1, this.chunks.length - 1));
+    if (wasPlaying) {
+      this.scheduleHighlightLoop();
+      this.tryPlayNext();
+    }
+    this.emitPosition();
+  }
+
   isSilent(): boolean {
     return this.silent;
   }
@@ -265,6 +442,16 @@ export class DocumentReaderSession {
     if (on === this.silent) return;
     this.silent = on;
     this.setState({ silent: on });
+    if (!on) {
+      // Audio is about to exist again, so the voice plan has to be
+      // satisfiable before anything is queued. A silent session never
+      // validated it — there was no voice to get wrong.
+      this.voiceIssue = this.resolveVoiceIssue();
+      if (this.voiceIssue) {
+        this.setState({ isPlaying: false, status: 'paused', error: this.voiceIssue });
+        return;
+      }
+    }
     if (on) {
       if (this.state.status === 'playing') {
         this.audio.pause();
@@ -336,6 +523,11 @@ export class DocumentReaderSession {
       this.setState({ status: 'finished' });
       return;
     }
+    // Refuse honestly rather than play the whole document in one voice.
+    if (!this.silent && this.voiceIssue) {
+      this.setState({ status: 'paused', isPlaying: false, error: this.voiceIssue });
+      return;
+    }
     this.cancelHighlightLoop();
     this.cancelSilentTimer();
     const from = this.chunkIndexForSentence(fromSentenceIndex);
@@ -365,17 +557,28 @@ export class DocumentReaderSession {
   }
 
   /**
-   * The position of the chunk holding a sentence, or 0 if it holds none.
+   * The position of the chunk holding a sentence — or, when `wordIndex` is
+   * given, the chunk holding that exact word.
+   *
+   * A voice boundary can cut a sentence in two, so "the chunk containing
+   * sentence 7" is ambiguous: there may be two. Preferring the chunk that
+   * contains the word keeps seeking, skipping and highlighting on the half of
+   * the sentence the reader is actually in.
    *
    * Falls back to the start rather than failing: a sentence index that no
    * longer resolves — a document replaced under an old click — should read the
    * document from the top, not refuse to play at all.
    */
-  private chunkIndexForSentence(globalIndex: number): number {
+  private chunkIndexForSentence(globalIndex: number, wordIndex = 0): number {
+    let fallback = -1;
     for (const chunk of this.chunks) {
-      if (chunk.sentences.some(s => s.globalIndex === globalIndex)) return chunk.index;
+      for (const segment of chunk.segments) {
+        if (segment.sentence.globalIndex !== globalIndex) continue;
+        if (wordIndex >= segment.startWord && wordIndex < segment.endWord) return chunk.index;
+        if (fallback < 0) fallback = chunk.index;
+      }
     }
-    return 0;
+    return fallback >= 0 ? fallback : 0;
   }
 
   /** Pause playback at the current chunk. */
@@ -389,7 +592,11 @@ export class DocumentReaderSession {
   /** Resume from the current chunk. */
   resume() {
     if (this.state.status === 'finished') return;
-    this.setState({ isPlaying: true, status: 'playing', needsUserGesture: undefined });
+    if (!this.silent && this.voiceIssue) {
+      this.setState({ status: 'paused', isPlaying: false, error: this.voiceIssue });
+      return;
+    }
+    this.setState({ isPlaying: true, status: 'playing', needsUserGesture: undefined, error: undefined });
     if (this.silent) {
       this.emitPosition();
       this.scheduleSilentTick();
@@ -539,6 +746,9 @@ export class DocumentReaderSession {
       chunk.wordMap = spoken.wordMap;
       chunk.job = this.engine.enqueue(spoken.text, {
         modelId,
+        // The chunk's own voice wins; untagged chunks fall back to the voice
+        // the reader picked, not to whatever the model happens to default to.
+        voiceId: chunk.voiceId ?? this.options.voiceId,
         readerSessionId: this.sessionId,
         readerIndex: chunk.index,
         speed: this.options.speed ?? 1,
@@ -616,7 +826,7 @@ export class DocumentReaderSession {
     this.options.onHighlight?.({
       sentenceIndex: this.position.sentenceIndex,
       wordIndex: this.position.wordIndex,
-      chunkIndex: this.chunkIndexForSentence(this.position.sentenceIndex),
+      chunkIndex: this.chunkIndexForSentence(this.position.sentenceIndex, this.position.wordIndex),
       unit: this.readingUnit,
       unitRanges: unit
         ? unit.ranges.map(range => ({ ...range }))
@@ -640,7 +850,7 @@ export class DocumentReaderSession {
    */
   private moveTo(sentenceIndex: number, wordIndex: number): void {
     const previousChunk = this.state.currentIndex;
-    const chunkIndex = this.chunkIndexForSentence(sentenceIndex);
+    const chunkIndex = this.chunkIndexForSentence(sentenceIndex, wordIndex);
     this.position = { sentenceIndex, wordIndex };
     if (chunkIndex !== previousChunk) {
       this.setState({ currentIndex: chunkIndex });
@@ -667,11 +877,18 @@ export class DocumentReaderSession {
   ): number | null {
     if (!chunk) return null;
     let offset = 0;
-    for (const sentence of chunk.sentences) {
-      if (sentence.globalIndex === sentenceIndex) {
-        return wordIndex >= 0 && wordIndex < sentence.words.length ? offset + wordIndex : null;
+    for (const segment of chunk.segments) {
+      const length = segment.endWord - segment.startWord;
+      // A sentence split across two chunks appears in each with a different
+      // window, and a tag can even hand one sentence to the same chunk twice
+      // (A-B-A). The word is in this chunk only when it falls inside one of
+      // those windows.
+      if (segment.sentence.globalIndex === sentenceIndex
+        && wordIndex >= segment.startWord
+        && wordIndex < segment.endWord) {
+        return offset + (wordIndex - segment.startWord);
       }
-      offset += sentence.words.length;
+      offset += length;
     }
     return null;
   }
@@ -723,7 +940,7 @@ export class DocumentReaderSession {
   private timeForWord(chunk: ReaderChunk, writtenWordIndex: number): number | null {
     const duration = this.audio.duration;
     if (!Number.isFinite(duration) || duration <= 0) return null;
-    const totalWritten = chunk.sentences.reduce((sum, s) => sum + s.words.length, 0);
+    const totalWritten = chunkWordCount(chunk);
     if (totalWritten <= 0) return null;
     const timings = chunk.job?.wordTimings;
     const totalSpoken = chunk.wordMap?.length ?? totalWritten;
@@ -782,7 +999,13 @@ export class DocumentReaderSession {
     const sentence = this.sentenceFor(this.position.sentenceIndex);
     if (!sentence) return false;
     if (this.position.wordIndex + 1 < sentence.words.length) {
-      this.position = { sentenceIndex: sentence.globalIndex, wordIndex: this.position.wordIndex + 1 };
+      const wordIndex = this.position.wordIndex + 1;
+      this.position = { sentenceIndex: sentence.globalIndex, wordIndex };
+      // A voice boundary can split this sentence itself, so the next word may
+      // already belong to another chunk. The status line reads `currentIndex`,
+      // and it must not claim the clip the reader has left behind.
+      const chunkIndex = this.chunkIndexForSentence(sentence.globalIndex, wordIndex);
+      if (chunkIndex !== this.state.currentIndex) this.setState({ currentIndex: chunkIndex });
       return true;
     }
     const next = this.allSentences.find(s => s.globalIndex > sentence.globalIndex);
@@ -817,9 +1040,9 @@ export class DocumentReaderSession {
     if (this.state.currentIndex >= this.chunks.length) return;
 
     const chunk = this.chunks[this.state.currentIndex];
-    if (!chunk.sentences.length) return;
+    if (!chunk.segments.length) return;
 
-    const totalWords = chunk.sentences.reduce((sum, s) => sum + s.words.length, 0);
+    const totalWords = chunkWordCount(chunk);
     if (totalWords === 0) return;
 
     // When a pronunciation rule rewrote this chunk, the engine's timings
@@ -835,15 +1058,12 @@ export class DocumentReaderSession {
     );
     const targetWord = chunk.wordMap ? toWrittenWordIndex(spokenIndex, chunk.wordMap) : spokenIndex;
 
-    let remaining = targetWord;
-    for (const sentence of chunk.sentences) {
-      if (remaining < sentence.words.length) {
-        this.position = { sentenceIndex: sentence.globalIndex, wordIndex: remaining };
-        this.emitPosition();
-        return;
-      }
-      remaining -= sentence.words.length;
-    }
+    // Resolve through the chunk's word windows: if a voice boundary split this
+    // chunk off the middle of a sentence, word 0 here is not word 0 there.
+    const position = chunkWordPosition(chunk, targetWord);
+    if (!position) return;
+    this.position = position;
+    this.emitPosition();
   }
 }
 
@@ -909,11 +1129,19 @@ export function prepareReaderData(
   text: string,
   maxChars: number = 300,
   atomicRanges?: ReadonlyArray<readonly [number, number]>,
+  voiceTags?: readonly VoiceTag[],
 ): PreparedReaderData {
   const sentences = segmentSentences(text, atomicRanges);
   assignOffsets(sentences, text);
   const chunks = buildChunks(sentences, maxChars);
-  return { sentences, chunks };
+  return {
+    sentences,
+    // Tags only change how the text is *grouped* for synthesis. The sentence
+    // list above is the same one the page was rendered from, so offsets,
+    // highlighting and click-to-read keep working whichever side of a voice
+    // boundary a word ends up on.
+    chunks: voiceTags?.length ? splitChunksByVoice(chunks, voiceTags) : chunks,
+  };
 }
 
 /**
@@ -1152,6 +1380,11 @@ function buildChunks(sentences: ReaderSentence[], maxChars: number): ReaderChunk
       text: buffered.map(s => s.text).join(' '),
       index: chunks.length,
       sentences: [...buffered],
+      segments: buffered.map(sentence => ({
+        sentence,
+        startWord: 0,
+        endWord: sentence.words.length,
+      })),
     });
     buffered = [];
     bufferedLength = 0;
@@ -1170,6 +1403,7 @@ function buildChunks(sentences: ReaderSentence[], maxChars: number): ReaderChunk
         text: sentence.text,
         index: chunks.length,
         sentences: [sentence],
+        segments: [{ sentence, startWord: 0, endWord: sentence.words.length }],
       });
     } else {
       flush();
