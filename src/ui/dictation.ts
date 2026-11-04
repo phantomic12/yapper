@@ -16,14 +16,12 @@ import type { AppState } from '../app-state';
 import {
   ASR_SAMPLE_RATE,
   canRecord,
-  conflate,
   downmix,
   insertAtCaret,
   isSilent,
   looksLikeSpeech,
   pickAsrModel,
   resample,
-  splitForWhisper,
   trimSilence,
 } from '../asr';
 
@@ -90,12 +88,10 @@ async function transcribe(blob: Blob, state: AppState): Promise<string> {
   const { loadAsrModel, transcribeAudio } = await import('../engines/whisper-asr');
   await loadAsrModel(model);
 
-  const parts: string[] = [];
-  for (const window of splitForWhisper(trimmed, ASR_SAMPLE_RATE)) {
-    const text = await transcribeAudio(window, { language: state.currentLanguageFilter });
-    if (text) parts.push(text);
-  }
-  return conflate(parts);
+  // Hand the whole recording to the pipeline. It chunks internally with a
+  // 5 s stride; splitting here as well cut words in half and produced a
+  // hallucinated word at every seam when measured against real speech.
+  return transcribeAudio(trimmed, { language: state.currentLanguageFilter });
 }
 
 /** Wire the dictate button. Safe on a page without the markup. */

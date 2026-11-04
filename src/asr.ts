@@ -17,7 +17,7 @@
 /** Whisper is trained at 16 kHz mono. Everything here converges on that. */
 export const ASR_SAMPLE_RATE = 16_000;
 
-/** Whisper's own window. Longer utterances must be split or truncated. */
+/** Whisper's own window. Longer audio is chunked by the pipeline, not by us. */
 export const ASR_MAX_UTTERANCE_SECONDS = 30;
 
 export interface AsrModelSpec {
@@ -192,6 +192,12 @@ export function looksLikeSpeech(samples: Float32Array, sampleRate: number, minVa
  * Trim leading and trailing near-silence, keeping `padMs` of margin so
  * the first and last phonemes survive. Whisper hallucinates words when
  * handed a long run of silence, so trimming is not cosmetic.
+ *
+ * `threshold` is an absolute amplitude, but it is capped at a fraction of
+ * the recording's own peak. A soft speaker on a quiet microphone can peak
+ * at 0.02; an absolute 0.01 gate would then cut half their speech away and
+ * return a fragment. Relative to the peak, the same recording trims the
+ * same way a loud one does.
  */
 export function trimSilence(
   samples: Float32Array,
@@ -200,31 +206,20 @@ export function trimSilence(
   padMs = 100,
 ): Float32Array {
   if (!samples.length) return samples;
+  const peak = peakLevel(samples);
+  if (peak <= 0) return new Float32Array(0);
+  // Never gate above 5% of the loudest sample in this recording.
+  const floor = Math.min(threshold, peak * 0.05);
   let first = 0;
-  while (first < samples.length && Math.abs(samples[first]) < threshold) first++;
+  while (first < samples.length && Math.abs(samples[first]) < floor) first++;
   if (first === samples.length) return new Float32Array(0);
   let last = samples.length - 1;
-  while (last > first && Math.abs(samples[last]) < threshold) last--;
+  while (last > first && Math.abs(samples[last]) < floor) last--;
 
   const pad = Math.floor((padMs / 1000) * sampleRate);
   const start = Math.max(0, first - pad);
   const end = Math.min(samples.length, last + pad + 1);
   return samples.subarray(start, end);
-}
-
-/** Split a long recording into Whisper-sized windows. */
-export function splitForWhisper(
-  samples: Float32Array,
-  sampleRate: number,
-  maxSeconds = ASR_MAX_UTTERANCE_SECONDS,
-): Float32Array[] {
-  const maxSamples = Math.floor(maxSeconds * sampleRate);
-  if (maxSamples <= 0 || samples.length <= maxSamples) return samples.length ? [samples] : [];
-  const parts: Float32Array[] = [];
-  for (let start = 0; start < samples.length; start += maxSamples) {
-    parts.push(samples.subarray(start, Math.min(start + maxSamples, samples.length)));
-  }
-  return parts;
 }
 
 // ─── Transcript handling ─────────────────────────────────────────

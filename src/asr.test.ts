@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ASR_SAMPLE_RATE,
   WHISPER_TINY_EN,
   WHISPER_TINY_MULTI,
   concat,
@@ -13,7 +12,6 @@ import {
   peakLevel,
   pickAsrModel,
   resample,
-  splitForWhisper,
   trimSilence,
 } from './asr';
 
@@ -181,27 +179,26 @@ describe('trimSilence', () => {
     expect(trimSilence(new Float32Array(500), 16000)).toHaveLength(0);
   });
 
+  it('keeps quiet speech instead of trimming it to nothing', () => {
+    // A soft speaker peaking at 0.02 — well under the 0.01 absolute
+    // threshold's comfortable range. Relative to its own peak, the burst
+    // must survive intact.
+    const samples = new Float32Array(1000);
+    for (let i = 400; i < 600; i++) samples[i] = i % 2 === 0 ? 0.02 : -0.02;
+    const out = trimSilence(samples, 16000, 0.01, 0);
+    expect(out.length).toBe(200);
+  });
+
+  it('still trims loud recordings at the absolute threshold', () => {
+    const samples = new Float32Array(1000);
+    for (let i = 0; i < samples.length; i++) samples[i] = 0.002; // room tone
+    for (let i = 400; i < 600; i++) samples[i] = 0.5;
+    const out = trimSilence(samples, 16000, 0.01, 0);
+    expect(out.length).toBe(200);
+  });
+
   it('handles empty input', () => {
     expect(trimSilence(new Float32Array(0), 16000)).toHaveLength(0);
-  });
-});
-
-describe('splitForWhisper', () => {
-  it('leaves a short utterance whole', () => {
-    const parts = splitForWhisper(new Float32Array(1000), ASR_SAMPLE_RATE);
-    expect(parts).toHaveLength(1);
-  });
-
-  it('splits anything past the 30 second window', () => {
-    const samples = new Float32Array(ASR_SAMPLE_RATE * 75);
-    const parts = splitForWhisper(samples, ASR_SAMPLE_RATE);
-    expect(parts).toHaveLength(3);
-    expect(parts[0].length).toBe(ASR_SAMPLE_RATE * 30);
-    expect(parts[2].length).toBe(ASR_SAMPLE_RATE * 15);
-  });
-
-  it('returns nothing for an empty recording', () => {
-    expect(splitForWhisper(new Float32Array(0), ASR_SAMPLE_RATE)).toHaveLength(0);
   });
 });
 
