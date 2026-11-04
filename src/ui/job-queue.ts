@@ -11,6 +11,7 @@ import type { AppState } from '../app-state';
 import { escapeHtml, showStatus } from '../dom-utils';
 import { voiceDisplayLabel } from '../voice-preview';
 import { ensureModelLoaded } from './model-panel';
+import { guardFeatureLock } from './feature-locks-panel';
 
 // ─── Job list render ─────────────────────────────────────────────
 //
@@ -72,6 +73,7 @@ function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) 
       });
     } else if (action === 'download') {
       el.addEventListener('click', () => {
+        if (guardFeatureLock('export-audio')) return;
         const id = card.dataset.jobId!;
         const job = state.currentJobs.find(j => j.id === id);
         if (!job?.url) return;
@@ -82,6 +84,7 @@ function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) 
       });
     } else if (action === 'download-captions') {
       el.addEventListener('click', () => {
+        if (guardFeatureLock('export-audio')) return;
         const id = card.dataset.jobId!;
         const job = state.currentJobs.find(j => j.id === id);
         if (!job) return;
@@ -101,6 +104,7 @@ function wireCardButtons(state: AppState, card: HTMLElement, list: HTMLElement) 
       });
     } else if (action === 'download-karaoke') {
       el.addEventListener('click', () => {
+        if (guardFeatureLock('export-audio')) return;
         const id = card.dataset.jobId!;
         const job = state.currentJobs.find(j => j.id === id);
         if (!job?.audio || !job.sampleRate || !job.wordTimings) return;
@@ -459,6 +463,7 @@ export function bindJobQueueEvents(state: AppState): void {
 
   // Download all finished clips as one WAV (oldest first, short gaps).
   document.getElementById('download-all-btn')?.addEventListener('click', () => {
+    if (guardFeatureLock('export-audio')) return;
     // jobs[] is newest-first for display; export in generation order.
     const clips: AudioClip[] = state.currentJobs
       .filter(j => j.status === 'done' && j.audio && j.sampleRate)
