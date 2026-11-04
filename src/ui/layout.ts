@@ -386,6 +386,51 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </div>
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
 
+            <!-- Feature lock: a per-document restriction for reading in an
+                 assessment context. The bar sits directly under the top bar so
+                 a reader never has to guess whether what they are looking at
+                 is locked; the controls it covers are blocked in
+                 feature-locks-panel.ts, not merely greyed out. The checkbox
+                 list is built from LOCK_ACTIONS so the markup cannot drift
+                 from what the guards enforce. -->
+            <section class="feature-lock" id="feature-lock" aria-label="Document lock" hidden>
+              <div class="feature-lock__bar">
+                <span class="feature-lock__badge" id="feature-lock-badge" aria-hidden="true">🔓</span>
+                <span class="feature-lock__state" id="feature-lock-state">Not locked</span>
+                <span class="feature-lock__detail" id="feature-lock-detail"></span>
+                <button class="document-btn" id="feature-lock-manage-btn" type="button" aria-expanded="false">Lock document…</button>
+              </div>
+
+              <form class="feature-lock__form" id="feature-lock-form" hidden>
+                <p class="feature-lock__hint">Choose what the reader may not do while this document is open. Reading aloud is never restricted.</p>
+                <div class="feature-lock__choices" id="feature-lock-choices"></div>
+                <label class="feature-lock__field">Password
+                  <input type="password" id="feature-lock-password" autocomplete="new-password" required />
+                </label>
+                <label class="feature-lock__field">Repeat password
+                  <input type="password" id="feature-lock-confirm" autocomplete="new-password" required />
+                </label>
+                <div class="feature-lock__actions">
+                  <button class="document-btn document-btn--primary" type="submit">Turn on lock</button>
+                  <button class="document-btn" type="button" id="feature-lock-cancel-btn">Cancel</button>
+                </div>
+              </form>
+
+              <form class="feature-lock__form" id="feature-lock-unlock-form" hidden>
+                <p class="feature-lock__hint">Enter the lock password to lift the restriction. The password is checked against the stored digest; it is never saved in the clear.</p>
+                <label class="feature-lock__field">Password
+                  <input type="password" id="feature-lock-unlock-password" autocomplete="current-password" required />
+                </label>
+                <div class="feature-lock__actions">
+                  <button class="document-btn document-btn--primary" type="submit">Unlock until closed</button>
+                  <button class="document-btn" type="button" id="feature-lock-remove-btn">Remove lock…</button>
+                  <button class="document-btn" type="button" id="feature-lock-cancel-unlock-btn">Cancel</button>
+                </div>
+              </form>
+
+              <p class="feature-lock__status" id="feature-lock-status" role="status" aria-live="polite"></p>
+            </section>
+
             <!-- The real thing: pages as they appear in the file. Populated only
                  for formats we can render; see document-view.ts. -->
             <div id="document-view" class="document-view" role="region" aria-label="Document pages" tabindex="0" hidden></div>
