@@ -1729,6 +1729,16 @@ body {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+/* Dictation: the button label is the state readout, so the status span
+   only carries the longer sentence. */
+.dictate-status {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.dictate-status:empty {
+  display: none;
+}
 .document-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;

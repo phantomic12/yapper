@@ -217,6 +217,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           <span id="stream-btn-label">Play</span>
         </button>
+        <!-- Dictation: push-to-talk, transcribed on device. Deliberately
+             plain text — the label doubles as the state readout. -->
+        <button class="stream-btn" id="dictate-btn" type="button" aria-pressed="false"
+                title="Speak instead of typing — transcribed in your browser">
+          Dictate
+        </button>
+        <span class="dictate-status" id="dictate-status" role="status" aria-live="polite"></span>
         <span class="queue-count" id="queue-count" hidden></span>
         <button class="clear-btn" data-advanced id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
         <button class="clear-btn" data-advanced id="clear-btn" disabled>Clear finished</button>

@@ -10,6 +10,7 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
 import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
@@ -171,6 +172,7 @@ async function render(): Promise<void> {
   bindDocumentEvents(state);
   bindWriteEvents(state);
   bindPronunciationPanel(state);
+  bindDictation(state);
   bindStreamPlayer(state);
   installPersistence(state);
 
@@ -203,6 +205,12 @@ window.addEventListener('unhandledrejection', (event) => {
 window.addEventListener('beforeunload', () => {
   void disposeAllOcrEngines();
   disposeLlmOcrEngine();
+  // Release the ASR pipeline too, but only if dictation was ever used —
+  // the import is deferred so a session that never dictated never pays
+  // for loading the module.
+  void import('./engines/whisper-asr')
+    .then((module) => module.disposeAsr())
+    .catch(() => undefined);
 });
 
 // Register the app-shell service worker — in production builds only.
