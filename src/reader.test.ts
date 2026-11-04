@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   prepareReaderData,
   pickHighlightedWord,
   sentenceAtOffset,
   DocumentReaderSession,
+  type HighlightInfo,
+  type ReaderOptions,
+  type ReaderState,
 } from './reader';
+import { silentWordDurationMs } from './reading-units';
 import type { TTSEngine } from './engine';
 
 describe('prepareReaderData — sentence segmentation', () => {
@@ -521,5 +525,335 @@ describe('DocumentReaderSession — pronunciation overrides', () => {
 
     expect(String(enqueue.mock.calls[0][0])).toBe('Plain text only.');
     expect(session.getChunks()[0].wordMap).toBeNull();
+  });
+});
+
+// ─── Silent reading, skip, and reading units ───────────────────────
+
+/** A session with its hands off the audio element, for pacing tests. */
+function silentSession(text: string, options: ReaderOptions = {}) {
+  const highlights: HighlightInfo[] = [];
+  const states: ReaderState[] = [];
+  const session = new DocumentReaderSession(null, text, {
+    chunkSize: 40,
+    silent: true,
+    onHighlight: info => highlights.push(info),
+    onStateChange: state => states.push(state),
+    ...options,
+  });
+  return { session, highlights, states };
+}
+
+/** jsdom does not implement the audio element; this reaches it anyway. */
+function audioOf(session: DocumentReaderSession): HTMLAudioElement {
+  return (session as unknown as { audio: HTMLAudioElement }).audio;
+}
+
+describe('DocumentReaderSession — silent reading', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('highlights the first word on start without any audio', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three.');
+    session.start();
+
+    expect(highlights).toHaveLength(1);
+    expect(highlights[0]).toMatchObject({
+      sentenceIndex: 0,
+      wordIndex: 0,
+      silent: true,
+      unit: 'sentence',
+    });
+    expect(session.getState().status).toBe('playing');
+    // Nothing was loaded into the player: silent means silent.
+    expect(audioOf(session).src).toBe('');
+  });
+
+  it('never sends text to the engine', () => {
+    vi.useFakeTimers();
+    const enqueue = vi.fn(() => ({ id: 'job-1', status: 'pending' }));
+    const engine = {
+      enqueue,
+      cancel: vi.fn(),
+      on: vi.fn(() => () => {}),
+      getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+    } as unknown as TTSEngine;
+    const session = new DocumentReaderSession(engine, 'One two three.', {
+      silent: true,
+    });
+    session.start();
+    vi.advanceTimersByTime(5000);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(session.getState().silent).toBe(true);
+  });
+
+  it('advances one word at a time, at the pace of each word', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three.');
+    session.start();
+
+    const firstTick = silentWordDurationMs('One', 1);
+    vi.advanceTimersByTime(firstTick - 1);
+    expect(highlights.at(-1)?.wordIndex).toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(highlights.at(-1)?.wordIndex).toBe(1);
+
+    // The second word has its own duration; it is not a fixed interval.
+    vi.advanceTimersByTime(silentWordDurationMs('two', 1) - 1);
+    expect(highlights.at(-1)?.wordIndex).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(highlights.at(-1)?.wordIndex).toBe(2);
+  });
+
+  it('moves faster when the speed is higher', () => {
+    vi.useFakeTimers();
+    const slow = silentSession('One two three.', { speed: 1 });
+    const fast = silentSession('One two three.', { speed: 2 });
+    slow.session.start();
+    fast.session.start();
+
+    vi.advanceTimersByTime(silentWordDurationMs('One', 2));
+    expect(fast.highlights.at(-1)?.wordIndex).toBe(1);
+    expect(slow.highlights.at(-1)?.wordIndex).toBe(0);
+  });
+
+  it('crosses sentences and finishes at the end of the document', () => {
+    vi.useFakeTimers();
+    const { session, highlights, states } = silentSession('One. Two.');
+    session.start();
+
+    vi.advanceTimersByTime(silentWordDurationMs('One.', 1));
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 0 });
+
+    vi.advanceTimersByTime(silentWordDurationMs('Two.', 1));
+    expect(session.getState().status).toBe('finished');
+    expect(states.at(-1)?.status).toBe('finished');
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 0 });
+
+    const count = highlights.length;
+    vi.advanceTimersByTime(10_000);
+    expect(highlights).toHaveLength(count);
+  });
+
+  it('pause stops the clock and resume picks the same word up again', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three.');
+    session.start();
+    vi.advanceTimersByTime(silentWordDurationMs('One', 1));
+    expect(highlights.at(-1)?.wordIndex).toBe(1);
+
+    session.pause();
+    expect(session.getState().status).toBe('paused');
+    const pausedAt = highlights.length;
+    vi.advanceTimersByTime(10_000);
+    expect(highlights).toHaveLength(pausedAt);
+
+    session.resume();
+    expect(session.getState().status).toBe('playing');
+    expect(highlights.at(-1)?.wordIndex).toBe(1);
+    vi.advanceTimersByTime(silentWordDurationMs('two', 1));
+    expect(highlights.at(-1)?.wordIndex).toBe(2);
+  });
+
+  it('starts at the requested sentence', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One. Two. Three.');
+    session.start(2);
+    expect(highlights[0]).toMatchObject({ sentenceIndex: 2, wordIndex: 0 });
+  });
+
+  it('can switch from audio to silent without moving the cursor', () => {
+    vi.useFakeTimers();
+    const engine = {
+      enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending' })),
+      cancel: vi.fn(),
+      on: vi.fn(() => () => {}),
+      getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+    } as unknown as TTSEngine;
+    const highlights: HighlightInfo[] = [];
+    const session = new DocumentReaderSession(engine, 'One two three.', {
+      chunkSize: 40,
+      onHighlight: info => highlights.push(info),
+    });
+    session.start();
+    expect(session.isSilent()).toBe(false);
+
+    session.setSilentMode(true);
+    expect(session.isSilent()).toBe(true);
+    expect(session.getState().silent).toBe(true);
+    expect(highlights.at(-1)).toMatchObject({ wordIndex: 0, silent: true });
+
+    vi.advanceTimersByTime(silentWordDurationMs('One', 1));
+    expect(highlights.at(-1)?.wordIndex).toBe(1);
+  });
+
+  it('queues synthesis when a silent session is switched back to audio', () => {
+    // The reverse handover must leave the session able to speak: a silent
+    // session never queued anything, so a paused switch that only flips a
+    // flag would resume into silence with no jobs to play.
+    vi.useFakeTimers();
+    const enqueue = vi.fn(() => ({ id: 'job-1', status: 'pending' }));
+    const engine = {
+      enqueue,
+      cancel: vi.fn(),
+      on: vi.fn(() => () => {}),
+      getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+    } as unknown as TTSEngine;
+    const session = new DocumentReaderSession(engine, 'One two three.', { silent: true });
+    session.start();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    session.pause();
+    session.setSilentMode(false);
+    expect(session.hasEngine()).toBe(true);
+    expect(enqueue).toHaveBeenCalled();
+  });
+});
+
+describe('DocumentReaderSession — skip a reading unit', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('skips a sentence forward and back while paused', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One. Two. Three.');
+    session.start();
+    session.pause();
+
+    expect(session.skip(1)).toBe(true);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 0 });
+    expect(session.skip(1)).toBe(true);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 2, wordIndex: 0 });
+    expect(session.skip(-1)).toBe(true);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 0 });
+  });
+
+  it('refuses to move past either end and leaves the highlight alone', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One. Two.');
+    session.start();
+    session.pause();
+
+    expect(session.skip(-1)).toBe(false);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 0, wordIndex: 0 });
+
+    session.skip(1);
+    const count = highlights.length;
+    expect(session.skip(1)).toBe(false);
+    expect(highlights).toHaveLength(count);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 0 });
+  });
+
+  it('steps one word at a time when the unit is a word', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three.');
+    session.start();
+    session.pause();
+    session.setReadingUnit('word');
+
+    session.skip(1);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 0, wordIndex: 1, unit: 'word' });
+    session.skip(1);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 0, wordIndex: 2 });
+    session.skip(-1);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 0, wordIndex: 1 });
+  });
+
+  it('jumps to the next paragraph when the unit is a paragraph', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession(
+      'First para one. First para two.\n\nSecond para one.',
+    );
+    session.start();
+    session.pause();
+    session.setReadingUnit('paragraph');
+
+    expect(session.skip(1)).toBe(true);
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 2, wordIndex: 0 });
+    expect(session.skip(1)).toBe(false);
+  });
+
+  it('skips across chunks while paused and moves the chunk cursor', () => {
+    const session = new DocumentReaderSession(
+      {
+        enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending' })),
+        cancel: vi.fn(),
+        on: vi.fn(() => () => {}),
+        getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+      } as unknown as TTSEngine,
+      'Sentence one here. Sentence two here. Sentence three here.',
+      { chunkSize: 20 },
+    );
+    session.pause();
+    expect(session.getChunks().length).toBeGreaterThan(1);
+
+    expect(session.skip(1)).toBe(true);
+    expect(session.getState().currentIndex).toBe(1);
+    expect(session.skip(1)).toBe(true);
+    expect(session.getState().currentIndex).toBe(2);
+    expect(session.skip(1)).toBe(false);
+  });
+
+  it('reports the new unit on the same word when the unit changes', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three. Four five six.');
+    session.start();
+    session.pause();
+    session.skip(1);
+    const before = highlights.at(-1)!;
+    expect(before).toMatchObject({ sentenceIndex: 1, wordIndex: 0, unit: 'sentence' });
+
+    session.setReadingUnit('word');
+    const after = highlights.at(-1)!;
+    expect(after).toMatchObject({ sentenceIndex: 1, wordIndex: 0, unit: 'word' });
+    expect(after.unitRanges).toEqual([{ sentenceIndex: 1, startWord: 0, endWord: 1 }]);
+  });
+});
+
+describe('DocumentReaderSession — dual highlighting', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reports the current word inside the whole current sentence by default', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three. Four five.');
+    session.start();
+    vi.advanceTimersByTime(silentWordDurationMs('One', 1));
+
+    const info = highlights.at(-1)!;
+    expect(info.wordIndex).toBe(1);
+    expect(info.unit).toBe('sentence');
+    expect(info.unitRanges).toEqual([{ sentenceIndex: 0, startWord: 0, endWord: 3 }]);
+  });
+
+  it('reports every sentence of a paragraph as the unit ranges', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession(
+      'First para one. First para two.\n\nSecond para one.',
+    );
+    session.setReadingUnit('paragraph');
+    session.start();
+
+    const info = highlights.at(-1)!;
+    expect(info.unitRanges).toEqual([
+      { sentenceIndex: 0, startWord: 0, endWord: 3 },
+      { sentenceIndex: 1, startWord: 0, endWord: 3 },
+    ]);
+  });
+
+  it('keeps the word inside the unit as the word advances', () => {
+    vi.useFakeTimers();
+    const { session, highlights } = silentSession('One two three.');
+    session.start();
+    vi.advanceTimersByTime(silentWordDurationMs('One', 1));
+
+    const info = highlights.at(-1)!;
+    expect(info.wordIndex).toBe(1);
+    expect(info.unitRanges[0].startWord).toBeLessThanOrEqual(info.wordIndex);
+    expect(info.unitRanges[0].endWord).toBeGreaterThan(info.wordIndex);
   });
 });
