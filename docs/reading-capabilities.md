@@ -105,18 +105,41 @@ they are not counted as gaps — they would be additions, not parity.
 
 ## Sequencing
 
-Working order, by (readers helped) ÷ (effort):
+Working order, by (readers helped) ÷ (effort).
 
-1. Silent reading toggle + skip unit forward/back — hours, used every session
-2. Reading unit selector (word / line / sentence / paragraph) + self-paced mode
-3. MP3 export
-4. Dual highlighting
-5. Corrections list (OCR find/replace)
-6. Header/footer suppression
-7. Region OCR
-8. Feature locks
-9. DAISY 3 export
-10. Zone editor
-11. Per-section voice tagging
-12. Voice notes, bubble notes, column-note covering
-13. Dictation (needs a local ASR model — a dependency decision, not a coding one)
+### Done
+
+- Say-as overrides / pronunciation editor
+- Dictation (Whisper Tiny, 41 MB, on device)
+
+### Remaining
+
+| # | Work | Effort |
+|---|---|---|
+| 1 | Silent reading toggle + skip unit forward/back | hours |
+| 2 | Reading unit selector (word / line / sentence / paragraph) + self-paced mode | small |
+| 3 | MP3 export (WAV is ~10× the size for the same audio) | small |
+| 4 | Dual highlighting — word colour plus unit colour | moderate |
+| 5 | Corrections list — find/replace for recurring OCR errors | small |
+| 6 | Header/footer suppression — running heads are read aloud today | small |
+| 7 | Region OCR — drag a box over on-screen text and hear it | moderate |
+| 8 | Feature locks — per-document, password-gated | moderate |
+| 9 | DAISY 3 export — audio + SMIL + navigation | moderate |
+| 10 | Zone editor — reorder or silence recognised blocks | large |
+| 11 | Per-section voice / language tagging | large |
+| 12 | Voice notes, bubble notes, column-note covering | moderate |
+
+### Open decisions, not tasks
+
+- **Dictation accuracy on spelled-out punctuation.** Whisper Tiny merges
+  "jordan dot lee at example dot com" into `jordan.lea.example.com`. A
+  larger checkpoint fixes it at roughly 3× the download. Cost, not code.
+- **Voice-activity detection.** The envelope gate is a heuristic. Silero
+  VAD (~2 MB) is the correct upgrade; not worth it until the heuristic
+  misbehaves on real microphones.
+- **Translation / bilingual reading** needs an on-device MT model, which is
+  a much larger dependency than anything here. Out of scope until decided.
+- **README undersells the app.** It lists 16 features; the codebase has
+  considerably more (vocabulary study guides, column notes, karaoke,
+  chapters, test sheets, OCR with a second engine). Worth rewriting on its
+  own, not bundled into a feature branch.
