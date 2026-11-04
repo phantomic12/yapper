@@ -337,6 +337,36 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </div>
           </details>
 
+          <!-- Extraction-time cleanups. Kept beside the pronunciation
+               editor rather than inside document-options: they apply to
+               every document the reader opens, not just the current one. -->
+          <details class="pron-editor" id="quality-editor">
+            <summary class="pron-editor__summary">OCR cleanup</summary>
+            <p class="pron-editor__hint">
+              Fix mistakes the scanner repeats, as the text is extracted. One rule per line,
+              <code>find = replace</code>. Prefix the find with <code>*</code> to match inside
+              words (<code>*rn = m</code>); without it, only whole words match. Applied to PDFs
+              the next time a document is opened.
+            </p>
+            <textarea class="pron-editor__list" id="corrections-list" rows="4" spellcheck="false"
+                      aria-label="OCR corrections, one per line as find = replace"
+                      placeholder="rn = m&#10;modem = modern&#10;1 = l"></textarea>
+            <div class="pron-editor__actions" style="flex-wrap:wrap">
+              <button type="button" class="document-btn" id="corrections-save-btn">Save rules</button>
+              <button type="button" class="document-btn" id="corrections-clear-btn">Clear</button>
+              <button type="button" class="document-btn" id="corrections-export-btn">Export .txt</button>
+              <label class="document-btn" for="corrections-import-input">Import .txt</label>
+              <input type="file" id="corrections-import-input" accept=".txt,text/plain" hidden
+                     aria-label="Import an OCR correction list" />
+              <span class="pron-editor__status" id="corrections-status" role="status" aria-live="polite"></span>
+            </div>
+            <label class="switch" style="margin-top:10px">
+              <input type="checkbox" id="strip-margins-toggle" checked />
+              <span class="switch__track"></span>
+              <span class="switch__label">Drop repeating page headers and footers (PDF)</span>
+            </label>
+          </details>
+
           <!-- Session shelf and cross-document search; live before a file opens. -->
           <div class="docrecent" id="docrecent" hidden>
             <div class="section-label">Recent documents</div>
