@@ -392,6 +392,11 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
+              <!-- Region OCR: drag a box over a page and hear only that part.
+                   Wired by src/ui/region-ocr.ts; the status line is its live region. -->
+              <button class="document-btn" id="region-ocr-btn" type="button" aria-pressed="false"
+                      title="Drag a box over part of the page to hear just that area read aloud">Select area</button>
+              <span class="region-ocr__status" id="region-ocr-status" role="status" aria-live="polite"></span>
               <button class="document-btn" id="lookup-mode-btn" type="button" aria-pressed="false"
                       title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
               <button class="document-btn" id="colnotes-btn" type="button" aria-pressed="false"
