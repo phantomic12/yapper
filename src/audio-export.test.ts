@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resampleClip, concatenateClips } from './audio-export';
+import { resampleClip, concatenateClips, sliceClip } from './audio-export';
 
 describe('resampleClip', () => {
   it('returns the same array when the rate already matches', () => {
@@ -68,5 +68,32 @@ describe('concatenateClips', () => {
 
   it('throws on an empty clip list', () => {
     expect(() => concatenateClips([])).toThrow();
+  });
+});
+
+describe('sliceClip', () => {
+  const clip = () => ({
+    audio: Float32Array.from({ length: 1000 }, (_, i) => i),
+    sampleRate: 1000,
+  });
+
+  it('cuts the requested span and excludes the end sample', () => {
+    const out = sliceClip(clip(), 0.25, 0.5);
+    expect(out.length).toBe(250);
+    expect(out[0]).toBe(250);
+    expect(out[249]).toBe(499);
+  });
+
+  it('clamps a range that runs past either end of the clip', () => {
+    expect(sliceClip(clip(), -1, 0.1).length).toBe(100);
+    expect(sliceClip(clip(), 0.9, 99).length).toBe(100);
+    // An inverted range collapses to nothing rather than reading backwards.
+    expect(sliceClip(clip(), 0.8, 0.2).length).toBe(0);
+  });
+
+  it('returns a view, so a chapter cut does not copy the whole book', () => {
+    const source = clip();
+    const out = sliceClip(source, 0.1, 0.2);
+    expect(out.buffer).toBe(source.audio.buffer);
   });
 });
