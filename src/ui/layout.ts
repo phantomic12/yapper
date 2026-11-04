@@ -311,6 +311,25 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             </div>
           </div>
 
+          <!-- Say-as rules: the voice hears the rewrite, the page keeps the
+               author's spelling. Lives outside document-options so it is
+               reachable whether or not a document is open. -->
+          <details class="pron-editor" id="pron-editor">
+            <summary class="pron-editor__summary">Pronunciation editor</summary>
+            <p class="pron-editor__hint">
+              One rule per line, <code>word = say</code>. Fixes names, acronyms and
+              heteronyms without changing the text on the page.
+            </p>
+            <textarea class="pron-editor__list" id="pron-list" rows="4" spellcheck="false"
+                      aria-label="Pronunciation rules, one per line as word = replacement"
+                      placeholder="Dr = Doctor&#10;SQL = sequel&#10;Reyes = RAY-ess"></textarea>
+            <div class="pron-editor__actions">
+              <button type="button" class="document-btn" id="pron-save-btn">Save rules</button>
+              <button type="button" class="document-btn" id="pron-clear-btn">Clear</button>
+              <span class="pron-editor__status" id="pron-status" role="status" aria-live="polite"></span>
+            </div>
+          </details>
+
           <!-- Session shelf and cross-document search; live before a file opens. -->
           <div class="docrecent" id="docrecent" hidden>
             <div class="section-label">Recent documents</div>

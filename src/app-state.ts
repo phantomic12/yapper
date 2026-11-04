@@ -3,6 +3,7 @@ import type { DocumentReaderSession } from './reader';
 import { MODELS, type TTSEngine, type TTSModel, type GenerationJob } from './engine';
 import type { CapabilityClass, AccelerationInfo } from './capability';
 import type { OcrMode } from './document-types';
+import type { PronunciationEntry } from './pronunciation';
 
 /** Mutable UI + engine session state shared across main and UI modules. */
 export interface AppState {
@@ -33,6 +34,12 @@ export interface AppState {
   readerSession: DocumentReaderSession | null;
   /** OCR backend for scanned PDFs: 'tesseract' (default) or 'llm' (Florence-2). */
   ocrMode: OcrMode;
+  /**
+   * Say-as rules applied to text handed to the engine. Loaded once at
+   * boot and updated by the pronunciation editor; the page itself keeps
+   * the author's spelling.
+   */
+  pronunciations: PronunciationEntry[];
 }
 
 export function createAppState(): AppState {
@@ -54,5 +61,6 @@ export function createAppState(): AppState {
     extractedDocument: null,
     readerSession: null,
     ocrMode: 'tesseract',
+    pronunciations: [],
   };
 }

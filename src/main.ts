@@ -10,6 +10,8 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindPronunciationPanel } from './ui/pronunciation-panel';
+import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
 import { bindAdvancedToggle } from './advanced-mode';
 import { bindPageNav } from './ui/page-nav';
@@ -42,6 +44,10 @@ const state = createAppState();
 
 /** Apply persisted settings to fresh state before the first render. */
 function applySavedSettings(appState: AppState): string {
+  // Say-as rules are not part of PersistedSettings: they have their own
+  // store and their own editor, and a corrupt one there must not cost the
+  // reader their model choice.
+  appState.pronunciations = loadPronunciations();
   const saved = loadSettings();
   if (!saved) return '';
   if (saved.modelId) {
@@ -164,6 +170,7 @@ async function render(): Promise<void> {
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
   bindWriteEvents(state);
+  bindPronunciationPanel(state);
   bindStreamPlayer(state);
   installPersistence(state);
 
