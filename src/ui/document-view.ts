@@ -1,4 +1,5 @@
 import type { TextAnchor } from '../document-types';
+import type { ReadingPageBox } from '../reading-regions';
 import { rectsForSpan } from '../document-types';
 import { escapeHtmlText, parseOffsetAttr, overlappingRanges } from '../document-html';
 import { findMatches, matchSnippet, type SearchMatch } from './document-search';
@@ -80,6 +81,21 @@ export interface DocumentView {
   cycleTheme(): void;
   getOutline(): OutlineItem[];
   setAnnotations(annotations: DocumentAnnotation[]): void;
+  /**
+   * Live boxes of the rendered pages, in client pixels plus the zoom they were
+   * painted at. Overlays that sit on top of the pages (the reading-regions
+   * editor) measure through this instead of guessing a scale from the DOM, so
+   * a zoom cannot silently move a drawn box.
+   */
+  pageSurfaces?(): ReadingPageBox[];
+  /** The text anchors currently painted against, in scale-1 page space. */
+  textAnchors?(): TextAnchor[];
+  /**
+   * Replace the anchors the view paints against. Reordering text for a read
+   * order changes every character offset, so the view has to be told — the
+   * alternative is a highlight drifting onto the wrong words.
+   */
+  setTextAnchors?(anchors: TextAnchor[]): void;
   readonly search?: DocumentSearchApi;
   destroy(): void;
 }
@@ -139,6 +155,47 @@ function searchPanelHtml(): string {
       <div class="docview__search-status" role="status" aria-live="polite"></div>
       <ul class="docview__results" aria-label="Search results"></ul>
     </div>`;
+}
+
+// ─── Mounted views ───────────────────────────────────────────────
+// An overlay that sits on top of the pages has to measure the page it draws
+// on, and the page's size and position are the view's business: it is the one
+// that knows the zoom it painted at. Registering the instance on its host lets
+// such an overlay ask, instead of re-deriving a scale from the DOM and getting
+// it subtly wrong.
+
+const mountedViews = new WeakMap<HTMLElement, DocumentView>();
+
+/**
+ * The view most recently mounted in the app.
+ *
+ * The reader mounts its view inside a throwaway host element that it then
+ * moves under `#document-view`, so the element an overlay can find by id is
+ * the grandparent, not the key. Only one document view exists at a time (the
+ * previous one is destroyed before the next mounts), so the newest is also the
+ * current one.
+ */
+let activeView: DocumentView | null = null;
+
+function registerDocumentView(host: HTMLElement, view: DocumentView): DocumentView {
+  mountedViews.set(host, view);
+  activeView = view;
+  return view;
+}
+
+function forgetDocumentView(host: HTMLElement): void {
+  const view = mountedViews.get(host);
+  mountedViews.delete(host);
+  if (view && activeView === view) activeView = null;
+}
+
+/** The document view mounted in `host` (or most recently mounted), if any. */
+export function findDocumentView(host: HTMLElement | null | undefined): DocumentView | null {
+  if (host) {
+    const scoped = mountedViews.get(host);
+    if (scoped) return scoped;
+  }
+  return activeView;
 }
 
 function querySearchElements(host: HTMLElement): SearchUiElements {
@@ -813,7 +870,7 @@ export async function mountPdfView(
   setCount(windowCentre + 1);
   paintWindow();
   if (options.initialPage && options.initialPage > 1) setWindowCentre(windowCentre, true, false);
-  return {
+  return registerDocumentView(host, {
     get pageCount() { return pageCount; },
     get activePage() { return windowCentre + 1; },
     get scale() { return scale; },
@@ -841,6 +898,25 @@ export async function mountPdfView(
       annotations = next.slice();
       paintHighlights();
     },
+    pageSurfaces() {
+      return slots.flatMap(slot => {
+        const box = slot.surface.getBoundingClientRect();
+        if (box.width <= 0 || box.height <= 0) return [];
+        return [{
+          page: slot.pageNumber,
+          left: box.left,
+          top: box.top,
+          width: box.width,
+          height: box.height,
+          scale,
+        }];
+      });
+    },
+    textAnchors: () => searchAnchors.slice(),
+    setTextAnchors(next) {
+      searchAnchors = next.slice();
+      paintHighlights();
+    },
     search: {
       focus: () => search.focus(),
       next: () => search.jump(1),
@@ -856,9 +932,10 @@ export async function mountPdfView(
       for (const slot of slots) slot.canvas?.remove();
       host.replaceChildren();
       host.classList.remove('docview');
+      forgetDocumentView(host);
       void loadingTask.destroy();
     },
-  };
+  });
 
   function goToOffset(offset: number): void {
     const page = firstPageOf(searchAnchors, { start: offset, end: offset + 1 });
@@ -1573,7 +1650,7 @@ export function mountHtmlView(
   }
   updatePageLabel();
 
-  return {
+  return registerDocumentView(host, {
     get pageCount() { return paginated ? Math.max(1, pagination?.pageCount ?? 1) : 0; },
     get activePage() { return paginated ? activePageState : 0; },
     get scale() { return fontScale; },
@@ -1612,8 +1689,9 @@ export function mountHtmlView(
       clear();
       host.replaceChildren();
       host.classList.remove('docview', 'docview--html', 'docview--pages');
+      forgetDocumentView(host);
     },
-  };
+  });
 }
 
 // ─── Outline plumbing shared by both views ────────────────────────

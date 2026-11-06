@@ -11,6 +11,7 @@ import {
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
 import { bindRegionOcr } from './ui/region-ocr';
+import { bindReadingRegions } from './ui/reading-regions';
 import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
 import { bindVoiceTags } from './ui/voice-tags-panel';
@@ -183,6 +184,7 @@ async function render(): Promise<void> {
   // binders above does not matter.
   bindFeatureLocks();
   bindRegionOcr();
+  bindReadingRegions({ state });
   bindWriteEvents(state);
   bindPronunciationPanel(state);
   bindVoiceTags(state);
