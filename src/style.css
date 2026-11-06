@@ -18,6 +18,13 @@
      --accent-fill is the darker indigo used wherever #fff sits on a solid
      accent background (~6.3:1). */
   --accent-fill: #4f46e5;
+  /* Dual reader highlight: amber for the reading unit, indigo for the word.
+     Two hues rather than two shades of one — a same-hue pair disappeared
+     against the dark page and again against light paper. */
+  --reader-unit-bg: rgba(245, 158, 11, 0.20);
+  --reader-unit-edge: #fbbf24;
+  --reader-word-bg: #4f46e5;
+  --reader-word-ink: #ffffff;
   --success: #22c55e;
   --success-bg: rgba(34, 197, 94, 0.1);
   --warning: #f59e0b;
@@ -53,6 +60,13 @@
   --accent-hover: #4338ca;
   --accent-glow: rgba(79, 70, 229, 0.07);
   --accent-fill: #4338ca;
+  /* The unit band keeps the amber hue so the two themes agree on what the
+     colours mean; it is darker and denser on white so it still reads as a
+     mark rather than a smudge. */
+  --reader-unit-bg: rgba(245, 158, 11, 0.30);
+  --reader-unit-edge: #b45309;
+  --reader-word-bg: #4338ca;
+  --reader-word-ink: #ffffff;
   /* Both semantic colours were ~4:1 on their tinted backgrounds — below
      the 4.5:1 small-text floor — so the light palette uses darker stops
      than a naive inversion of the dark palette would. */
@@ -1501,18 +1515,31 @@ body {
   background: var(--bg-surface);
   color: var(--text-dim);
 }
+/* Kept as an alias: earlier builds painted the unit on the sentence span.
+   The band now lives on the word spans so it can follow any unit choice. */
 .reader-active-sentence {
-  background: rgba(99, 102, 241, 0.22);
+  background: var(--reader-unit-bg);
 }
 .reader-word {
   border-radius: 2px;
-  transition: background 0.05s ease;
+  transition: background 0.05s ease, box-shadow 0.05s ease;
 }
-.reader-active-word {
-  background: var(--accent-fill);
-  color: #fff;
+/* Dual highlight, first colour: the reading unit is a soft amber band with
+   a rule under it. `:not()` keeps the current word's solid chip from being
+   overridden by the band it sits inside. */
+.reader-word.reader-unit:not(.reader-active-word) {
+  background: var(--reader-unit-bg);
+  box-shadow: inset 0 -0.22em 0 var(--reader-unit-edge);
+}
+/* Dual highlight, second colour: the current word is a solid indigo chip.
+   Different hue *and* different shape from the band, so the two remain
+   distinguishable in both themes and for readers who cannot tell the hues
+   apart. */
+.reader-word.reader-active-word {
+  background: var(--reader-word-bg);
+  color: var(--reader-word-ink);
   font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.12);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 .reader-view:focus-visible {
   outline: 2px solid var(--border-focus);
@@ -1547,6 +1574,11 @@ body {
 .reader-overlay__header-controls {
   display: flex;
   gap: 8px;
+  /* The controls now include skip, a unit selector and the silent toggle;
+     wrapping keeps them reachable in one row on a narrow window instead of
+     pushing Close off-screen. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .reader-overlay__status {
   padding: 8px 20px 0;
@@ -1589,8 +1621,67 @@ body {
   border-radius: var(--radius-sm);
 }
 .reader-legend--past::before { background: var(--bg-surface); border: 1px solid var(--border); }
-.reader-legend--active::before { background: var(--accent); }
+.reader-legend--word::before { background: var(--reader-word-bg); }
+.reader-legend--unit::before {
+  background: var(--reader-unit-bg);
+  border-bottom: 2px solid var(--reader-unit-edge);
+}
 .reader-legend--future::before { background: transparent; border: 1px solid var(--border); }
+
+/* Skip controls and the reading-unit selector. The selector is a segmented
+   control rather than a dropdown: the active unit is part of how the page
+   is being read, so it should be readable at a glance, not one click deep. */
+.reader-skip {
+  display: inline-flex;
+  gap: 4px;
+}
+.reader-skip__btn {
+  min-width: 36px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.reader-skip__btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.unit-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+.unit-switch__btn {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.unit-switch__btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.unit-switch__btn--active {
+  background: var(--accent-fill);
+  color: #fff;
+}
+.unit-switch__btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+.unit-switch--compact .unit-switch__btn {
+  font-size: 0.7rem;
+  padding: 4px 7px;
+}
 
 .document-options { margin: 16px 0; }
 .document-progress-row {

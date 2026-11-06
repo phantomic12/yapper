@@ -1,6 +1,7 @@
 import { MODELS, visibleModels, LANGUAGE_NAMES, getSupportedLanguages } from '../engine';
 import { CAPABILITY_INFO, type CapabilityClass } from '../capability';
 import { QUALITY_PRESETS, presetForModel } from '../quality-presets';
+import { READING_UNITS } from '../reading-units';
 
 export interface LayoutOptions {
   /** Three-class WebGPU capability of this browser ('none' | 'partial' | 'full'). */
@@ -23,6 +24,16 @@ export function buildAppMarkup(opts: LayoutOptions): string {
   // Main-thread models (SpeechT5, MMS) freeze the UI during synthesis —
   // warn up front so the choice is honest (see docs/capability-banner.md).
   const showMainThreadWarning = !!selectedModel?.runsOnMainThread;
+  /**
+   * The unit selector, rendered once per control surface (top bar and the
+   * full-screen overlay). Buttons rather than a <select> so the current
+   * choice is visible at a glance while reading, and so the choice is one
+   * click away instead of two.
+   */
+  const unitButtons = READING_UNITS.map(unit => `
+                  <button class="unit-switch__btn" type="button" data-reading-unit="${unit.id}"
+                          aria-pressed="${unit.id === 'sentence'}"
+                          title="Highlight one ${unit.label.toLowerCase()} at a time; skip moves by ${unit.label.toLowerCase()}">${unit.label}</button>`).join('');
 
   return `
     <div class="app">
@@ -364,6 +375,20 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               </button>
               <button class="document-btn" id="pause-document-btn" type="button" style="display:none">Pause</button>
               <button class="document-btn" id="stop-document-btn" type="button" style="display:none">Stop</button>
+              <!-- Silent reading: the highlight advances at a pace derived
+                   from the text, with no synthesis and no audio at all. It
+                   therefore works with no model loaded. -->
+              <button class="document-btn" id="silent-read-btn" type="button"
+                      data-reader-toggle="silent" aria-pressed="false"
+                      title="Read without sound — the highlight advances at a reading pace">Silent</button>
+              <div class="reader-skip" role="group" aria-label="Skip reading unit">
+                <button class="document-btn reader-skip__btn" type="button" data-reader-nav="back"
+                        disabled aria-label="Previous reading unit" title="Previous reading unit ([)">◀</button>
+                <button class="document-btn reader-skip__btn" type="button" data-reader-nav="forward"
+                        disabled aria-label="Next reading unit" title="Next reading unit (])">▶</button>
+              </div>
+              <div class="unit-switch" role="group" aria-label="Reading unit">${unitButtons}
+              </div>
               <!-- Instant browser-voice read-aloud: no model required. -->
               <button class="document-btn" id="readaloud-btn" type="button" title="Read aloud now with the browser voice">▶ Quick read</button>
               <button class="document-btn" id="readaloud-speed-btn" type="button" title="Quick-read speed">1.0×</button>
@@ -647,6 +672,16 @@ export function buildAppMarkup(opts: LayoutOptions): string {
         <div class="reader-overlay__header-controls">
           <button class="document-btn" id="reader-overlay-pause" type="button">Pause</button>
           <button class="document-btn" id="reader-overlay-stop" type="button">Stop</button>
+          <button class="document-btn" type="button" data-reader-toggle="silent" aria-pressed="false"
+                  title="Read without sound — the highlight advances at a reading pace">Silent</button>
+          <div class="reader-skip" role="group" aria-label="Skip reading unit">
+            <button class="document-btn reader-skip__btn" type="button" data-reader-nav="back"
+                    disabled aria-label="Previous reading unit" title="Previous reading unit ([)">◀</button>
+            <button class="document-btn reader-skip__btn" type="button" data-reader-nav="forward"
+                    disabled aria-label="Next reading unit" title="Next reading unit (])">▶</button>
+          </div>
+          <div class="unit-switch unit-switch--compact" role="group" aria-label="Reading unit">${unitButtons}
+          </div>
           <button class="document-btn" id="reader-overlay-close" type="button" aria-label="Close reader">Close</button>
         </div>
       </div>
@@ -655,8 +690,9 @@ export function buildAppMarkup(opts: LayoutOptions): string {
       </div>
       <div class="reader-overlay__content" id="reader-overlay-content" role="region" aria-label="Document text" tabindex="0"></div>
       <div class="reader-overlay__legend" aria-hidden="true">
+        <span class="reader-legend reader-legend--word">Current word</span>
+        <span class="reader-legend reader-legend--unit">Reading unit</span>
         <span class="reader-legend reader-legend--past">Read</span>
-        <span class="reader-legend reader-legend--active">Current</span>
         <span class="reader-legend reader-legend--future">Upcoming</span>
       </div>
     </div>
@@ -685,6 +721,8 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <dt>+ / −</dt><dd>Zoom in / out</dd>
           <dt>q</dt><dd>Quick read aloud from the current position</dd>
           <dt>r</dt><dd>Review your highlights and notes aloud</dd>
+          <dt>[ / ]</dt><dd>Previous / next reading unit</dd>
+          <dt>v</dt><dd>Toggle silent reading</dd>
           <dt>?</dt><dd>Show or hide this help</dd>
         </dl>
         <!-- WCAG 2.1.4: single-character shortcuts must be able to be turned

@@ -73,6 +73,7 @@ import {
   notifyFeatureLockClosed,
   notifyFeatureLockOpened,
 } from './feature-locks-panel';
+import { isReadingUnit, type ReadingUnit } from '../reading-units';
 
 const MAX_RENDERED_BLOCKS = 60;
 
@@ -206,6 +207,21 @@ export function bindDocumentEvents(state: AppState): void {
   const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
   const wordListEl = document.getElementById('word-list') as HTMLElement;
   const studyGuideBtn = document.getElementById('study-guide-btn') as HTMLButtonElement;
+  /**
+   * Reader controls are rendered twice — once in the document's top bar and
+   * once in the full-screen overlay — so they are collected by data
+   * attribute rather than by id. One binding paints both surfaces, which is
+   * what keeps the two copies from disagreeing about the current mode.
+   */
+  const silentToggles = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-reader-toggle="silent"]'),
+  );
+  const skipButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-reader-nav]'),
+  );
+  const readingUnitButtons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-reading-unit]'),
+  );
 
   /**
    * The file the reader is currently showing, kept so the document view can
@@ -219,6 +235,26 @@ export function bindDocumentEvents(state: AppState): void {
   /** Sentences of the current document, so a highlight can be resolved to a
    *  character range and handed to the document view. */
   let readerSentences: ReaderSentence[] = [];
+  /**
+   * Reading preferences, not document state: the unit and the silent mode
+   * are how this person reads, so they survive a reload and carry over to
+   * the next file. Storing them per document would silently reset both every
+   * time a new PDF opened.
+   */
+  const READING_UNIT_KEY = 'yapper.reading-unit';
+  const SILENT_KEY = 'yapper.silent-reading';
+  let readingUnit: ReadingUnit = (() => {
+    try {
+      const stored = localStorage.getItem(READING_UNIT_KEY);
+      return isReadingUnit(stored) ? stored : 'sentence';
+    } catch {
+      return 'sentence'; // private mode — the default is honest
+    }
+  })();
+  let silentReading = false;
+  try {
+    silentReading = localStorage.getItem(SILENT_KEY) === '1';
+  } catch { /* private mode — start speaking */ }
   let progressKey: string | null = null;
   let savedProgress: ReturnType<typeof loadDocumentProgress> = null;
   let progressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -423,10 +459,6 @@ export function bindDocumentEvents(state: AppState): void {
 
   function renderOverlay(text: string, atomicRanges?: ReadonlyArray<readonly [number, number]>) {
     return renderReaderContent(readerOverlayContent, text, atomicRanges);
-  }
-
-  function findOverlaySentence(globalIndex: number): HTMLElement | null {
-    return readerOverlayContent.querySelector(`[data-sentence-index="${globalIndex}"]`) as HTMLElement | null;
   }
 
   let classifiedBlocks: ClassifiedBlock[] = [];
@@ -940,10 +972,16 @@ export function bindDocumentEvents(state: AppState): void {
       if (lastProgressOffset > 0) docView.goToOffset(lastProgressOffset);
       applyAnnotationsToView();
       // A document opened while the reader is already part-way through should
-      // not start with its highlight missing.
-      if (lastHighlightedWord) {
-        const s = readerSentences.find(x => x.globalIndex === lastHighlightedWord!.sentence);
-        if (s?.start !== undefined && s.end !== undefined) docView.highlight(s.start, s.end);
+      // not start with its highlight missing. Repaint the same dual highlight
+      // the text view is showing, not just a sentence wash.
+      if (lastHighlightInfo) {
+        const s = readerSentences.find(x => x.globalIndex === lastHighlightInfo!.sentenceIndex);
+        if (s?.start !== undefined && s.end !== undefined) {
+          const word = wordSpanInDocument(s, lastHighlightInfo.wordIndex);
+          const unit = unitDocumentSpan(lastHighlightInfo);
+          if (word) docView.highlight(word.start, word.end, unit ?? { start: s.start, end: s.end });
+          else docView.highlight(s.start, s.end);
+        }
       }
     } catch (err) {
       // Falling back to the text view is a working reader with fewer pixels,
@@ -1282,66 +1320,142 @@ export function bindDocumentEvents(state: AppState): void {
     radio.checked = radio.value === state.ocrMode;
   }
 
-  let lastHighlightedWord: { sentence: number; word: number } | null = null;
-  let activeSentenceElement: HTMLElement | null = null;
+  /**
+   * The highlight is dual by design: one colour marks the reading unit (the
+   * sentence by default) and a second marks the exact word inside it. They
+   * answer different questions — "where am I reading?" and "which word is
+   * this?" — and one wash cannot answer both on a dense page.
+   */
+  let lastHighlightInfo: HighlightInfo | null = null;
+  /** Cheap identity of the painted state, so a repeated tick is a no-op. */
+  let lastPaintSignature = '';
+  /** Every element currently carrying a reader paint class. */
+  let paintedElements: HTMLElement[] = [];
 
-  function clearHighlight() {
-    if (activeSentenceElement) {
-      activeSentenceElement.classList.remove('reader-active-sentence');
-      activeSentenceElement.querySelector('.reader-active-word')?.classList.remove('reader-active-word');
-    }
-    activeSentenceElement = null;
-    lastHighlightedWord = null;
-    // Reset all past-state markers in overlay / inline view
+  function readerSurfaces(): HTMLElement[] {
+    return [readerView, readerOverlayContent];
+  }
+
+  function sentenceElementIn(root: HTMLElement, globalIndex: number): HTMLElement | null {
+    return root.querySelector<HTMLElement>(`[data-sentence-index="${globalIndex}"]`);
+  }
+
+  function clearPaintMarks(): void {
+    for (const el of paintedElements) el.classList.remove('reader-unit', 'reader-active-word');
+    paintedElements = [];
+  }
+
+  function clearPastMarks(): void {
     document.querySelectorAll('.reader-sentence--past').forEach(el => {
       el.classList.remove('reader-sentence--past');
     });
   }
 
+  function clearHighlight() {
+    clearPaintMarks();
+    lastHighlightInfo = null;
+    lastPaintSignature = '';
+    // Reset all past-state markers in overlay / inline view
+    clearPastMarks();
+  }
+
   function markSentencePast(globalIndex: number) {
-    const el = findOverlaySentence(globalIndex) ?? readerView.querySelector(`[data-sentence-index="${globalIndex}"]`);
-    if (el) el.classList.add('reader-sentence--past');
+    for (const root of readerSurfaces()) {
+      sentenceElementIn(root, globalIndex)?.classList.add('reader-sentence--past');
+    }
+  }
+
+  /**
+   * Paint the unit band and the current word into one surface.
+   *
+   * Returns the word element so the caller can scroll the surface that is
+   * actually visible. Both surfaces are painted, so switching views mid-read
+   * shows the highlight already in place instead of an unmarked page until
+   * the next word arrives.
+   */
+  function paintHighlight(
+    root: HTMLElement,
+    info: HighlightInfo,
+  ): { word: HTMLElement | null; marked: HTMLElement[] } {
+    const marked: HTMLElement[] = [];
+    let activeWord: HTMLElement | null = null;
+    for (const range of info.unitRanges) {
+      const sentenceEl = sentenceElementIn(root, range.sentenceIndex);
+      if (!sentenceEl) continue;
+      const words = sentenceEl.querySelectorAll<HTMLElement>('.reader-word');
+      for (let i = Math.max(0, range.startWord); i < range.endWord && i < words.length; i++) {
+        words[i].classList.add('reader-unit');
+        marked.push(words[i]);
+        if (range.sentenceIndex === info.sentenceIndex && i === info.wordIndex) {
+          activeWord = words[i];
+        }
+      }
+    }
+    activeWord ??= sentenceElementIn(root, info.sentenceIndex)
+      ?.querySelectorAll<HTMLElement>('.reader-word')[info.wordIndex] ?? null;
+    if (activeWord) {
+      activeWord.classList.add('reader-active-word');
+      marked.push(activeWord);
+    }
+    return { word: activeWord, marked };
+  }
+
+  /** The document-text range of the current unit, for the rendered page. */
+  function unitDocumentSpan(info: HighlightInfo): { start: number; end: number } | null {
+    const first = info.unitRanges[0];
+    const last = info.unitRanges[info.unitRanges.length - 1];
+    if (!first || !last) return null;
+    const firstSentence = readerSentences.find(s => s.globalIndex === first.sentenceIndex);
+    const lastSentence = readerSentences.find(s => s.globalIndex === last.sentenceIndex);
+    if (firstSentence?.start === undefined || lastSentence?.start === undefined) return null;
+    const start = wordSpanInDocument(firstSentence, first.startWord);
+    const end = wordSpanInDocument(lastSentence, last.endWord - 1);
+    if (!start || !end) return null;
+    return { start: start.start, end: end.end };
   }
 
   function applyHighlight(info: HighlightInfo) {
-    if (
-      lastHighlightedWord &&
-      lastHighlightedWord.sentence === info.sentenceIndex &&
-      lastHighlightedWord.word === info.wordIndex
-    ) {
-      return;
-    }
-    const sentence = findOverlaySentence(info.sentenceIndex) ?? readerView.querySelector(`[data-sentence-index="${info.sentenceIndex}"]`);
-    if (!sentence) return;
+    const signature = `${info.sentenceIndex}:${info.wordIndex}:${info.unit}:${info.silent ? 's' : 'a'}:`
+      + info.unitRanges.map(r => `${r.sentenceIndex}/${r.startWord}-${r.endWord}`).join(',');
+    if (signature === lastPaintSignature) return;
+    const previous = lastHighlightInfo;
+    lastHighlightInfo = info;
+    lastPaintSignature = signature;
 
-    if (lastHighlightedWord && lastHighlightedWord.sentence !== info.sentenceIndex) {
-      markSentencePast(lastHighlightedWord.sentence);
+    if (previous && previous.sentenceIndex !== info.sentenceIndex) {
+      if (previous.sentenceIndex < info.sentenceIndex) {
+        markSentencePast(previous.sentenceIndex);
+      } else {
+        // Moving backwards: the trail belongs behind the cursor, so the
+        // sentences it had marked as read are no longer read. Clearing the
+        // whole trail is cheaper and more honest than recomputing it per
+        // sentence on a document that may have thousands.
+        clearPastMarks();
+      }
     }
 
-    if (activeSentenceElement && activeSentenceElement !== sentence) {
-      activeSentenceElement.classList.remove('reader-active-sentence');
+    clearPaintMarks();
+    const overlayOpen = readerOverlay.style.display !== 'none';
+    let scrollTarget: HTMLElement | null = null;
+    for (const root of readerSurfaces()) {
+      const painted = paintHighlight(root, info);
+      paintedElements.push(...painted.marked);
+      if (root === (overlayOpen ? readerOverlayContent : readerView)) scrollTarget = painted.word;
     }
-    activeSentenceElement?.querySelector('.reader-active-word')?.classList.remove('reader-active-word');
-
-    sentence.classList.add('reader-active-sentence');
-    activeSentenceElement = sentence as HTMLElement;
-    const word = sentence.querySelector(`[data-word-index="${info.wordIndex}"]`);
-    word?.classList.add('reader-active-word');
-    lastHighlightedWord = { sentence: info.sentenceIndex, word: info.wordIndex };
-    word?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollTarget?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
 
     // Drive the document view from the same signal. The span comes from the
     // sentence segmentation rather than from anything view-specific, so the
     // text view and the rendered page always agree on where the reader is.
-    // The engine's word timings arrive as `wordIndex`, so the page gets a
-    // karaoke word box inside a faint sentence trail instead of a fresh
-    // sentence wash on every word.
+    // The unit paints the trail and the word paints the box — the same two
+    // colours as the text surface, on the real page.
     const active = readerSentences.find(s => s.globalIndex === info.sentenceIndex);
     if (active?.start !== undefined && active.end !== undefined) {
       lastProgressOffset = active.start;
       const word = wordSpanInDocument(active, info.wordIndex);
+      const unit = unitDocumentSpan(info);
       if (word) {
-        docView?.highlight(word.start, word.end, { start: active.start, end: active.end });
+        docView?.highlight(word.start, word.end, unit ?? { start: active.start, end: active.end });
       } else {
         docView?.highlight(active.start, active.end);
       }
@@ -1349,13 +1463,86 @@ export function bindDocumentEvents(state: AppState): void {
     }
   }
 
+  /** Reflect the silent-mode preference on both copies of the toggle. */
+  function applySilentUi(): void {
+    for (const button of silentToggles) {
+      button.setAttribute('aria-pressed', String(silentReading));
+      button.classList.toggle('document-btn--on', silentReading);
+      button.title = silentReading
+        ? 'Silent reading is on — click to speak again'
+        : 'Read without sound — the highlight advances at a reading pace';
+    }
+  }
+
+  /** Reflect the reading-unit choice on both copies of the selector. */
+  function applyReadingUnitUi(): void {
+    for (const button of readingUnitButtons) {
+      const active = button.dataset.readingUnit === readingUnit;
+      button.setAttribute('aria-pressed', String(active));
+      button.classList.toggle('unit-switch__btn--active', active);
+    }
+  }
+
+  function setReadingUnitChoice(unit: ReadingUnit): void {
+    readingUnit = unit;
+    try { localStorage.setItem(READING_UNIT_KEY, unit); } catch { /* private mode */ }
+    applyReadingUnitUi();
+    // The session re-emits at the same word, so the unit band changes shape
+    // without the reading position moving.
+    state.readerSession?.setReadingUnit(unit);
+  }
+
+  /**
+   * Silent reading: the highlight advances, the speaker stays quiet.
+   *
+   * With no session the toggle is also the way in — silent mode needs no
+   * model, so someone who has not downloaded one can still read along. With
+   * a session it hands over at the current word instead of restarting.
+   */
+  function toggleSilentReading(): void {
+    const next = !silentReading;
+    const session = state.readerSession;
+    if (session) {
+      if (!next && !session.hasEngine()) {
+        showReaderNotice('Load a model on the Studio page to hear this document read aloud.');
+        return;
+      }
+      session.setSilentMode(next);
+      silentReading = next;
+      try { localStorage.setItem(SILENT_KEY, next ? '1' : '0'); } catch { /* private mode */ }
+      applySilentUi();
+      return;
+    }
+    silentReading = next;
+    try { localStorage.setItem(SILENT_KEY, next ? '1' : '0'); } catch { /* private mode */ }
+    applySilentUi();
+    if (next && state.extractedDocument) {
+      const from = sentenceAtOffset(readerSentences, lastProgressOffset)?.globalIndex ?? 0;
+      beginReading(from, false, { silent: true });
+    }
+  }
+
   function renderReaderState(readerState: ReaderState) {
     let statusText = `${readerState.currentIndex + 1}/${readerState.totalChunks}`;
-    if (readerState.totalChunks > 1 && readerState.bufferedIndex >= 0) {
+    if (readerState.silent) {
+      // Nothing is being buffered in silent mode, so a buffered figure would
+      // be a lie; the mode is what the reader needs to see instead.
+      statusText += ' · silent';
+    } else if (readerState.totalChunks > 1 && readerState.bufferedIndex >= 0) {
       statusText += ` · buffered ${readerState.bufferedIndex + 1}/${readerState.totalChunks}`;
     }
     readerStatus.textContent = statusText;
     readerOverlayStatus.textContent = statusText;
+    // Skip only means something while a session is holding a position.
+    const canSkip = readerState.status === 'playing' || readerState.status === 'paused';
+    for (const button of skipButtons) button.disabled = !canSkip;
+    // A session can change mode on its own (a silent session started from a
+    // click); keep the buttons and the persisted preference in step.
+    if (readerState.silent !== silentReading) {
+      silentReading = readerState.silent;
+      try { localStorage.setItem(SILENT_KEY, silentReading ? '1' : '0'); } catch { /* private mode */ }
+      applySilentUi();
+    }
     readerOverlayPause.textContent =
       readerState.status === 'playing'
         ? 'Pause'
@@ -1402,9 +1589,20 @@ export function bindDocumentEvents(state: AppState): void {
    * the kind of difference that surfaces later as "clicking reads at a
    * different rate".
    */
-  function beginReading(fromSentenceIndex: number, overlay: boolean) {
+  function beginReading(
+    fromSentenceIndex: number,
+    overlay: boolean,
+    opts: { silent?: boolean } = {},
+  ) {
     const text = state.extractedDocument?.text?.trim();
     if (!text) return;
+    // Read aloud means aloud; the silent toggle is a separate way in. Any
+    // other caller (a click on the text, the silent toggle) follows the mode.
+    const silent = opts.silent ?? silentReading;
+    if (!silent && !state.engine) {
+      showReaderNotice('Load a model on the Studio page to read this document aloud.');
+      return;
+    }
     // The row ranges are offsets into the untrimmed extraction text, and
     // `text` above had its outer whitespace trimmed off — so slide them by
     // exactly that much. (The reader view renders the untrimmed text and
@@ -1426,10 +1624,12 @@ export function bindDocumentEvents(state: AppState): void {
     clearReaderError();
     renderOverlay(text, atomicRanges);
     modelSpeechKind = 'document';
-    state.readerSession = new DocumentReaderSession(state.engine!, text, {
+    state.readerSession = new DocumentReaderSession(state.engine ?? null, text, {
       chunkSize: 300,
       lookahead: 2,
       speed: state.currentSpeed,
+      silent,
+      readingUnit,
       onStateChange: renderReaderState,
       onHighlight: applyHighlight,
       atomicRanges,
@@ -1475,7 +1675,22 @@ export function bindDocumentEvents(state: AppState): void {
     beginReading(sentence.globalIndex, false);
   }
 
-  readBtn.addEventListener('click', () => beginReading(0, true));
+  readBtn.addEventListener('click', () => beginReading(0, true, { silent: false }));
+
+  for (const button of silentToggles) {
+    button.addEventListener('click', toggleSilentReading);
+  }
+  for (const button of skipButtons) {
+    button.addEventListener('click', () => {
+      state.readerSession?.skip(button.dataset.readerNav === 'back' ? -1 : 1);
+    });
+  }
+  for (const button of readingUnitButtons) {
+    button.addEventListener('click', () => {
+      const unit = button.dataset.readingUnit;
+      if (isReadingUnit(unit)) setReadingUnitChoice(unit);
+    });
+  }
 
   pauseBtn.addEventListener('click', () => {
     if (!state.readerSession) return;
@@ -1504,6 +1719,12 @@ export function bindDocumentEvents(state: AppState): void {
   readerOverlay.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       stopAllSpeech();
+    } else if (e.key === '[') {
+      e.preventDefault();
+      state.readerSession?.skip(-1);
+    } else if (e.key === ']') {
+      e.preventDefault();
+      state.readerSession?.skip(1);
     } else if (e.key === 'Tab') {
       trapTabFocus(readerOverlay, e);
     }
@@ -2326,6 +2547,15 @@ export function bindDocumentEvents(state: AppState): void {
       case 'r':
         reviewBtn.click();
         break;
+      case '[':
+        state.readerSession?.skip(-1);
+        break;
+      case ']':
+        state.readerSession?.skip(1);
+        break;
+      case 'v':
+        silentToggles[0]?.click();
+        break;
       case '?':
         toggleShortcutHelp();
         break;
@@ -2340,4 +2570,8 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   renderRecentDocuments();
+  // The controls ship in the markup with their defaults; paint the persisted
+  // preferences over them before the first document opens.
+  applySilentUi();
+  applyReadingUnitUi();
 }
