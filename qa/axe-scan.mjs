@@ -224,12 +224,12 @@ async function scanTheme(browser, port, theme) {
 
   // 10. Notes column
   try {
-    await page.click('#colnotes-btn');
-    await page.waitForSelector('#colnotes:not([hidden])');
-    await scan(page, theme, 'colnotes-open');
-    await page.click('#colnotes-close-btn');
+    await page.click('#three-column-notes-btn');
+    await page.waitForSelector('#threeColumnNotes:not([hidden])');
+    await scan(page, theme, 'three-column-notes-open');
+    await page.click('#three-column-notes-close-btn');
   } catch (e) {
-    stepErrors.push(`${theme}/colnotes-open: ${e.message.split('\n')[0]}`);
+    stepErrors.push(`${theme}/three-column-notes-open: ${e.message.split('\n')[0]}`);
   }
 
   // 11. Close document → focus must not drop to <body> (lands on file input).

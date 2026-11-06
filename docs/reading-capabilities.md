@@ -139,26 +139,26 @@ Working order, by (readers helped) ÷ (effort).
 - Voice notes, prompt notes, and the three-column-note self-test
 - Per-section voices
 - Document export, audiobook bundle, spoken notes review
+- DAISY 3 talking-book export, wired to the open-document bar
 - Vocabulary study guide and test sheets
 
 ### Remaining
 
 | # | Work | Effort |
 |---|---|---|
-| 1 | Wire the DAISY 3 book builder into the export menu | small |
-| 2 | Stop at end of page, and pause at a bookmark | small |
-| 3 | Extract highlights into three-column notes by colour | small |
-| 4 | Extract highlights into a vocabulary study guide | small |
-| 5 | Page range on open | small |
-| 6 | Letter / word / line spacing controls | small |
-| 7 | Self-paced reading mode | moderate |
-| 8 | Per-page correction of the recognised text | moderate |
-| 9 | Configurable hotkeys | moderate |
-| 10 | Homophones and confusables | moderate |
-| 11 | Editable review checklist | moderate |
-| 12 | Bibliography (MLA / APA) | moderate |
-| 13 | Brainstorm → outline → draft as linked views | large |
-| 14 | Reading regions — reorder, skip, or silence recognised blocks | large |
+| 1 | Stop at end of page, and pause at a bookmark | small |
+| 2 | Extract highlights into three-column notes by colour | small |
+| 3 | Extract highlights into a vocabulary study guide | small |
+| 4 | Page range on open | small |
+| 5 | Letter / word / line spacing controls | small |
+| 6 | Self-paced reading mode | moderate |
+| 7 | Per-page correction of the recognised text | moderate |
+| 8 | Configurable hotkeys | moderate |
+| 9 | Homophones and confusables | moderate |
+| 10 | Editable review checklist | moderate |
+| 11 | Bibliography (MLA / APA) | moderate |
+| 12 | Brainstorm → outline → draft as linked views | large |
+| 13 | Reading regions — reorder, skip, or silence recognised blocks | large |
 
 ### Open decisions, not tasks
 

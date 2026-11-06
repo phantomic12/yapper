@@ -25,7 +25,7 @@
 import type { ChunkSegment, ReaderChunk, ReaderSentence } from './reader';
 
 /** One section of a document read in a particular voice. */
-export interface VoiceTag {
+export interface SectionVoice {
   /** Stable id, so a single tag can be removed from the list. */
   id: string;
   /** First character of the section in the extracted text, inclusive. */
@@ -37,9 +37,9 @@ export interface VoiceTag {
 }
 
 /** Upper bound on stored tags; a document does not need more than this. */
-export const MAX_VOICE_TAGS_PER_DOCUMENT = 200;
+export const MAX_SECTION_VOICES_PER_DOCUMENT = 200;
 
-const VOICE_TAGS_PREFIX = 'yapper.document-voices.v1:';
+const SECTION_VOICES_PREFIX = 'yapper.document-voices.v1:';
 
 /**
  * Per-document storage key, following the same file-identity convention as
@@ -48,10 +48,10 @@ const VOICE_TAGS_PREFIX = 'yapper.document-voices.v1:';
  * name still get separate tags, and the tags cost a few hundred bytes rather
  * than the document itself.
  */
-export function documentVoiceTagsKey(
+export function documentSectionVoicesKey(
   file: Pick<File, 'name' | 'size' | 'lastModified'>,
 ): string {
-  return `${VOICE_TAGS_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+  return `${SECTION_VOICES_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
 }
 
 /**
@@ -62,7 +62,7 @@ export function documentVoiceTagsKey(
  * NaN offset or an empty voice id. Sorting by start (then end) makes
  * `voiceAt` cheap and makes the UI list read in document order.
  */
-export function normalizeVoiceTags(tags: readonly VoiceTag[]): VoiceTag[] {
+export function normalizeSectionVoices(tags: readonly SectionVoice[]): SectionVoice[] {
   const seen = new Set<string>();
   return tags
     .filter(tag =>
@@ -77,7 +77,7 @@ export function normalizeVoiceTags(tags: readonly VoiceTag[]): VoiceTag[] {
     .filter(tag => {
       // Duplicate ids cannot be cleared individually; keep the first, which
       // after sorting is the leftmost occurrence.
-      const id = tag.id || `voice-tag-${tag.start}-${tag.end}`;
+      const id = tag.id || `section-voice-${tag.start}-${tag.end}`;
       if (seen.has(id)) return false;
       seen.add(id);
       tag.id = id;
@@ -94,8 +94,8 @@ export function normalizeVoiceTags(tags: readonly VoiceTag[]): VoiceTag[] {
  * reason. `undefined` means "the model's own default voice" — the absence of
  * a tag is not an error.
  */
-export function voiceAt(tags: readonly VoiceTag[], offset: number): string | undefined {
-  let best: VoiceTag | undefined;
+export function voiceAt(tags: readonly SectionVoice[], offset: number): string | undefined {
+  let best: SectionVoice | undefined;
   for (const tag of tags) {
     if (offset < tag.start || offset >= tag.end) continue;
     if (!best || tag.start > best.start || (tag.start === best.start && tag.end < best.end)) {
@@ -115,10 +115,10 @@ export function voiceAt(tags: readonly VoiceTag[], offset: number): string | und
  * dropped where it is entirely covered. Retrimmed pieces get derived ids so
  * each remains individually removable.
  */
-export function applyVoiceTag(tags: readonly VoiceTag[], tag: VoiceTag): VoiceTag[] {
-  if (!(tag.end > tag.start) || !tag.voiceId.trim()) return normalizeVoiceTags(tags);
-  const next: VoiceTag[] = [];
-  for (const existing of normalizeVoiceTags(tags)) {
+export function applySectionVoice(tags: readonly SectionVoice[], tag: SectionVoice): SectionVoice[] {
+  if (!(tag.end > tag.start) || !tag.voiceId.trim()) return normalizeSectionVoices(tags);
+  const next: SectionVoice[] = [];
+  for (const existing of normalizeSectionVoices(tags)) {
     if (existing.end <= tag.start || existing.start >= tag.end) {
       next.push(existing);
       continue;
@@ -131,12 +131,12 @@ export function applyVoiceTag(tags: readonly VoiceTag[], tag: VoiceTag): VoiceTa
     }
   }
   next.push({ ...tag });
-  return normalizeVoiceTags(next);
+  return normalizeSectionVoices(next);
 }
 
 /** Remove one tag by id. */
-export function removeVoiceTag(tags: readonly VoiceTag[], id: string): VoiceTag[] {
-  return normalizeVoiceTags(tags.filter(tag => tag.id !== id));
+export function removeSectionVoice(tags: readonly SectionVoice[], id: string): SectionVoice[] {
+  return normalizeSectionVoices(tags.filter(tag => tag.id !== id));
 }
 
 /**
@@ -247,9 +247,9 @@ interface WordSlot {
  */
 export function splitChunksByVoice(
   chunks: readonly ReaderChunk[],
-  tags: readonly VoiceTag[],
+  tags: readonly SectionVoice[],
 ): ReaderChunk[] {
-  const ordered = normalizeVoiceTags(tags);
+  const ordered = normalizeSectionVoices(tags);
   if (!ordered.length) return chunks.map((chunk, index) => ({ ...chunk, index }));
   const startsBySentence = new Map<number, number[] | null>();
   const out: ReaderChunk[] = [];
@@ -325,19 +325,19 @@ export function splitChunksByVoice(
 // Best-effort, like everything in `persistence.ts`: a private browser or a
 // full quota must lose the tags, not the reading session.
 
-export function loadVoiceTags(key: string): VoiceTag[] {
+export function loadSectionVoices(key: string): SectionVoice[] {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return [];
     const values = JSON.parse(raw) as unknown;
     if (!Array.isArray(values)) return [];
-    return normalizeVoiceTags(values.slice(0, MAX_VOICE_TAGS_PER_DOCUMENT).flatMap((value, index) => {
-      const entry = value as Partial<VoiceTag>;
+    return normalizeSectionVoices(values.slice(0, MAX_SECTION_VOICES_PER_DOCUMENT).flatMap((value, index) => {
+      const entry = value as Partial<SectionVoice>;
       if (!Number.isFinite(entry.start) || !Number.isFinite(entry.end)) return [];
       if ((entry.start ?? -1) < 0 || (entry.end ?? -1) <= (entry.start ?? Infinity)) return [];
       if (typeof entry.voiceId !== 'string' || !entry.voiceId.trim()) return [];
       return [{
-        id: typeof entry.id === 'string' && entry.id ? entry.id : `voice-tag-${index}`,
+        id: typeof entry.id === 'string' && entry.id ? entry.id : `section-voice-${index}`,
         start: entry.start!,
         end: entry.end!,
         voiceId: entry.voiceId,
@@ -348,9 +348,9 @@ export function loadVoiceTags(key: string): VoiceTag[] {
   }
 }
 
-export function saveVoiceTags(key: string, tags: readonly VoiceTag[]): void {
+export function saveSectionVoices(key: string, tags: readonly SectionVoice[]): void {
   try {
-    localStorage.setItem(key, JSON.stringify(normalizeVoiceTags(tags).slice(0, MAX_VOICE_TAGS_PER_DOCUMENT)));
+    localStorage.setItem(key, JSON.stringify(normalizeSectionVoices(tags).slice(0, MAX_SECTION_VOICES_PER_DOCUMENT)));
   } catch {
     // Best-effort: a blocked/full store must not interrupt reading.
   }

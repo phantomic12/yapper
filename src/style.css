@@ -3640,11 +3640,11 @@ body.document-open .document-preview--lookup .document-view {
 }
 .docwords__chip:hover { border-color: var(--border-focus); color: var(--accent-hover); }
 
-/* ─── Column notes rail ───────────────────────────────────────
+/* ─── Three-column notes rail ───────────────────────────────────────
    The margin column: a right-hand rail of notes pinned to document
    offsets. In document-open mode it slides over the page edge; the
    views step aside so text and notes sit side by side. */
-.colnotes {
+.three-column-notes {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3652,9 +3652,9 @@ body.document-open .document-preview--lookup .document-view {
   border-left: 1px solid var(--border);
   background: var(--bg-elevated);
 }
-.colnotes[hidden] { display: none; }
+.three-column-notes[hidden] { display: none; }
 
-body.document-open .colnotes {
+body.document-open .three-column-notes {
   position: fixed;
   top: 0;
   right: 0;
@@ -3671,34 +3671,34 @@ body.document-open .document-preview--notes .reader-view {
   margin-right: min(320px, 85vw);
 }
 
-.colnotes__head { display: flex; align-items: center; gap: 8px; }
-.colnotes__head #colnotes-close-btn { margin-left: auto; padding: 4px 10px; }
-.colnotes__form { display: grid; gap: 6px; }
-.colnotes__form[hidden] { display: none; }
-.colnotes__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.colnotes__item {
+.three-column-notes__head { display: flex; align-items: center; gap: 8px; }
+.three-column-notes__head #three-column-notes-close-btn { margin-left: auto; padding: 4px 10px; }
+.three-column-notes__form { display: grid; gap: 6px; }
+.three-column-notes__form[hidden] { display: none; }
+.three-column-notes__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.three-column-notes__item {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-surface);
 }
-.colnotes__anchor {
+.three-column-notes__anchor {
   font-size: 0.72rem;
   color: var(--text-muted);
   font-style: italic;
   overflow-wrap: anywhere;
 }
-.colnotes__note { margin: 4px 0 6px; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.three-column-notes__note { margin: 4px 0 6px; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* ─── Bubble notes (inline callouts) ──────────────────────────
+/* ─── Prompt notes (inline callouts) ──────────────────────────
    A 💬 marker at the end of a noted highlight; its body floats off
-   the text like a margin bubble while the marker stays in flow. */
-.bubble-note {
+   the text like a margin prompt while the marker stays in flow. */
+.prompt-note {
   position: relative;
   display: inline-block;
   vertical-align: baseline;
 }
-.bubble-note__marker {
+.prompt-note__marker {
   border: none;
   background: none;
   padding: 0 2px;
@@ -3706,8 +3706,8 @@ body.document-open .document-preview--notes .reader-view {
   cursor: pointer;
   opacity: 0.75;
 }
-.bubble-note__marker:hover { opacity: 1; transform: scale(1.15); }
-.bubble-note__body {
+.prompt-note__marker:hover { opacity: 1; transform: scale(1.15); }
+.prompt-note__body {
   display: none;
   position: absolute;
   top: calc(100% + 4px);
@@ -3726,8 +3726,8 @@ body.document-open .document-preview--notes .reader-view {
   overflow-wrap: anywhere;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
-.bubble-note--open .bubble-note__body,
-.bubble-note:focus-within .bubble-note__body { display: block; }
+.prompt-note--open .prompt-note__body,
+.prompt-note:focus-within .prompt-note__body { display: block; }
 
 /* ─── Write page ──────────────────────────────────────────────
    The talking editor: one drafting surface, prediction above it,
@@ -3810,7 +3810,7 @@ body.document-open .document-preview--notes .reader-view {
 }
 .document-web__input:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
 
-/* ─── Study tools (voice notes, bubble notes, column-note self-test) ───
+/* ─── Study tools (voice notes, prompt notes, three-column-note self-test) ───
    Three surfaces under one heading. Each is its own card so a reader can tell
    the microphone controls from the quiz controls without reading a label. */
 .study-tools { display: grid; gap: 14px; margin: 4px 0 18px; }
@@ -3834,7 +3834,7 @@ body.document-open .document-preview--notes .reader-view {
 /* Opaque on purpose: a see-through cover can be read at an angle, and a
    colour-only one disappears in high-contrast mode. The hatching says
    "something is under here" without showing any of it. */
-.colnotes__cover {
+.three-column-notes__cover {
   display: block;
   width: 100%;
   margin: 4px 0 6px;
@@ -3851,19 +3851,19 @@ body.document-open .document-preview--notes .reader-view {
   font-size: 0.78rem;
   cursor: pointer;
 }
-.colnotes__cover:hover,
-.colnotes__cover:focus-visible {
+.three-column-notes__cover:hover,
+.three-column-notes__cover:focus-visible {
   color: var(--text);
   border-color: var(--accent);
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-/* The question bubble carries an answer box, so it is a small form rather
+/* The question prompt carries an answer box, so it is a small form rather
    than a one-line note — and it is wider than the default callout. */
-.bubble-note__question { display: grid; gap: 6px; }
-.bubble-note__prompt { font-size: 0.85rem; font-weight: 600; }
-.bubble-note__answer {
+.prompt-note__question { display: grid; gap: 6px; }
+.prompt-note__prompt { font-size: 0.85rem; font-weight: 600; }
+.prompt-note__answer {
   width: 100%;
   min-width: min(240px, 70vw);
   padding: 6px 8px;
@@ -3875,4 +3875,4 @@ body.document-open .document-preview--notes .reader-view {
   font-size: 0.82rem;
   resize: vertical;
 }
-.bubble-note__answer:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.prompt-note__answer:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }

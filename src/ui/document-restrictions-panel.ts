@@ -1,5 +1,5 @@
-// ─── Feature lock panel ─────────────────────────────────────────────
-// The UI half of src/feature-locks.ts: one bar above the open document that
+// ─── Document restriction panel ─────────────────────────────────────────────
+// The UI half of src/document-restrictions.ts: one bar above the open document that
 // says, unmistakably, whether the document is locked and what that stops; a
 // password form to turn a lock on or off; and the guards that make the
 // restriction real.
@@ -11,7 +11,7 @@
 // document see the event first, so the app's own handler never runs: the
 // action is blocked, not just greyed out. The few places where the handler is
 // the only honest gate (an export function called from more than one button)
-// also call guardFeatureLock() directly.
+// also call guardDocumentRestriction() directly.
 //
 // The styles are injected from here for the same reason: this feature's CSS
 // travels with the feature instead of growing the shared stylesheet.
@@ -20,19 +20,19 @@ import {
   LOCK_ACTIONS,
   LOCK_ACTION_LABELS,
   blockedActionMessage,
-  clearFeatureLock,
-  createFeatureLock,
+  clearDocumentRestriction,
+  createDocumentRestriction,
   disabledActions,
-  featureLockKey,
+  documentRestrictionKey,
   getActiveLockState,
   isActionAllowed,
-  loadFeatureLock,
-  saveFeatureLock,
+  loadDocumentRestriction,
+  saveDocumentRestriction,
   setActiveLockState,
-  verifyFeatureLockPassword,
+  verifyDocumentRestrictionPassword,
   type LockAction,
   type LockState,
-} from '../feature-locks';
+} from '../document-restrictions';
 
 // ─── Module state ──────────────────────────────────────────────────
 // What the reader page is currently showing. `stored` is the lock as it was
@@ -48,8 +48,8 @@ let sessionUnlocked = false;
 let guardsInstalled = false;
 let boundRoot: HTMLElement | null = null;
 
-const STATUS_ID = 'feature-lock-status';
-const BAR_ID = 'feature-lock';
+const STATUS_ID = 'document-restriction-status';
+const BAR_ID = 'document-restriction';
 
 // ─── Small DOM helpers ────────────────────────────────────────────
 
@@ -87,51 +87,51 @@ function reportBlocked(action: LockAction): void {
 // ─── Styles ───────────────────────────────────────────────────────
 
 function ensureStyles(): void {
-  if (document.getElementById('feature-lock-styles')) return;
+  if (document.getElementById('document-restriction-styles')) return;
   const style = document.createElement('style');
-  style.id = 'feature-lock-styles';
+  style.id = 'document-restriction-styles';
   style.textContent = `
-    .feature-lock { margin: 0 0 10px; }
-    .feature-lock__bar {
+    .document-restriction { margin: 0 0 10px; }
+    .document-restriction__bar {
       display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
       padding: 10px 14px; border-radius: var(--radius, 10px);
       border: 1px solid var(--border); background: var(--bg-elevated);
       font-size: 0.85rem;
     }
-    .feature-lock[data-lock-state='locked'] .feature-lock__bar,
-    .feature-lock[data-lock-state='corrupt'] .feature-lock__bar {
+    .document-restriction[data-lock-state='locked'] .document-restriction__bar,
+    .document-restriction[data-lock-state='corrupt'] .document-restriction__bar {
       border-color: var(--danger); background: var(--danger-bg);
     }
-    .feature-lock[data-lock-state='session-unlocked'] .feature-lock__bar {
+    .document-restriction[data-lock-state='session-unlocked'] .document-restriction__bar {
       border-color: var(--warning); background: var(--warning-bg);
     }
-    .feature-lock__badge { font-size: 1.1rem; line-height: 1; }
-    .feature-lock__state { font-weight: 600; }
-    .feature-lock__detail { flex: 1 1 240px; color: var(--text-muted); }
-    .feature-lock__form {
+    .document-restriction__badge { font-size: 1.1rem; line-height: 1; }
+    .document-restriction__state { font-weight: 600; }
+    .document-restriction__detail { flex: 1 1 240px; color: var(--text-muted); }
+    .document-restriction__form {
       display: grid; gap: 10px; margin-top: 10px; padding: 12px 14px;
       border: 1px dashed var(--border); border-radius: var(--radius, 10px);
       background: var(--bg-surface);
     }
-    .feature-lock__hint { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
-    .feature-lock__choices { display: grid; gap: 6px; }
-    .feature-lock__choice { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
-    .feature-lock__field {
+    .document-restriction__hint { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+    .document-restriction__choices { display: grid; gap: 6px; }
+    .document-restriction__choice { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+    .document-restriction__field {
       display: grid; gap: 4px; max-width: 320px;
       font-size: 0.8rem; color: var(--text-muted);
     }
-    .feature-lock__field input {
+    .document-restriction__field input {
       padding: 7px 9px; border-radius: var(--radius-sm, 6px);
       border: 1px solid var(--border); background: var(--bg); color: var(--text);
       font: inherit;
     }
-    .feature-lock__actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .feature-lock__status { margin: 8px 0 0; min-height: 1em; font-size: 0.8rem; color: var(--text-muted); }
-    .feature-lock__status[data-tone='error'],
-    .feature-lock__status[data-tone='blocked'] { color: var(--danger); }
+    .document-restriction__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .document-restriction__status { margin: 8px 0 0; min-height: 1em; font-size: 0.8rem; color: var(--text-muted); }
+    .document-restriction__status[data-tone='error'],
+    .document-restriction__status[data-tone='blocked'] { color: var(--danger); }
     /* A locked control looks unavailable, but stays clickable: a disabled
        button fires no click, and then the reader never learns why. */
-    [data-feature-locked='true'] { opacity: 0.55; cursor: not-allowed; }
+    [data-document-restricted='true'] { opacity: 0.55; cursor: not-allowed; }
     body.document-locked .document-actions { border-bottom: 3px solid var(--danger); }
   `;
   document.head.appendChild(style);
@@ -176,11 +176,11 @@ const GUARD_RULES: GuardRule[] = [
   },
   { action: 'change-voice', selector: '#custom-voice-url', events: ['change'] },
 
-  // Audio exports: the audiobook bundle, "Download all", and every per-job
-  // WAV / captions / karaoke download in the queue.
+  // Audio exports: the audiobook bundle, the DAISY book, "Download all", and
+  // every per-job WAV / captions / karaoke download in the queue.
   {
     action: 'export-audio',
-    selector: '#export-audiobook-btn, #download-all-btn, [data-action="download"], [data-action="download-captions"], [data-action="download-karaoke"]',
+    selector: '#export-audiobook-btn, #export-daisy-btn, #download-all-btn, [data-action="download"], [data-action="download-captions"], [data-action="download-karaoke"]',
     events: ['click'],
   },
 
@@ -203,7 +203,7 @@ const GUARD_RULES: GuardRule[] = [
 const GATED_CONTROLS: Array<[LockAction, string]> = [
   ['edit-text', '#ocr-toggle'],
   ['copy-text', '#export-md-btn, #export-html-btn, #export-txt-btn, #export-notes-btn, #study-guide-btn, #test-sheet-btn'],
-  ['export-audio', '#export-audiobook-btn, #download-all-btn'],
+  ['export-audio', '#export-audiobook-btn, #export-daisy-btn, #download-all-btn'],
   ['change-voice', '.voice-card__pick, .model-card__pick, .quality-preset, #custom-voice-url'],
   [
     'browse-documents',
@@ -252,7 +252,7 @@ function installGuards(): void {
     const hosts = ['document-reader-view', 'document-view', 'reader-overlay-content']
       .map(id => byId<HTMLElement>(id));
     const target = event.target instanceof HTMLElement ? event.target : null;
-    if (target?.closest('input, textarea, #feature-lock')) return;
+    if (target?.closest('input, textarea, #document-restriction')) return;
     const selection = document.getSelection();
     const nodes: Array<Node | null> = [
       selection?.anchorNode ?? null,
@@ -309,14 +309,14 @@ function markGatedControls(): void {
   for (const [action, selector] of GATED_CONTROLS) {
     for (const node of document.querySelectorAll<HTMLElement>(selector)) {
       if (blocked.has(action)) {
-        node.dataset.featureLocked = 'true';
+        node.dataset.documentRestricted = 'true';
         node.setAttribute('aria-disabled', 'true');
         if (node.dataset.lockTitle === undefined) {
           node.dataset.lockTitle = node.getAttribute('title') ?? '';
         }
         node.title = `Locked: ${LOCK_ACTION_LABELS[action].toLowerCase()} is disabled.`;
       } else {
-        delete node.dataset.featureLocked;
+        delete node.dataset.documentRestricted;
         node.removeAttribute('aria-disabled');
         if (node.dataset.lockTitle !== undefined) {
           const original = node.dataset.lockTitle;
@@ -330,17 +330,17 @@ function markGatedControls(): void {
 }
 
 function showForm(which: 'create' | 'unlock' | null): void {
-  const createForm = byId<HTMLFormElement>('feature-lock-form');
-  const unlockForm = byId<HTMLFormElement>('feature-lock-unlock-form');
+  const createForm = byId<HTMLFormElement>('document-restriction-form');
+  const unlockForm = byId<HTMLFormElement>('document-restriction-unlock-form');
   if (createForm) createForm.hidden = which !== 'create';
   if (unlockForm) unlockForm.hidden = which !== 'unlock';
-  byId<HTMLButtonElement>('feature-lock-manage-btn')?.setAttribute('aria-expanded', String(which !== null));
-  if (which === 'create') byId<HTMLInputElement>('feature-lock-password')?.focus();
-  if (which === 'unlock') byId<HTMLInputElement>('feature-lock-unlock-password')?.focus();
+  byId<HTMLButtonElement>('document-restriction-manage-btn')?.setAttribute('aria-expanded', String(which !== null));
+  if (which === 'create') byId<HTMLInputElement>('document-restriction-password')?.focus();
+  if (which === 'unlock') byId<HTMLInputElement>('document-restriction-unlock-password')?.focus();
 }
 
 function formIsOpen(which: 'create' | 'unlock'): boolean {
-  const form = byId<HTMLFormElement>(which === 'create' ? 'feature-lock-form' : 'feature-lock-unlock-form');
+  const form = byId<HTMLFormElement>(which === 'create' ? 'document-restriction-form' : 'document-restriction-unlock-form');
   return !!form && !form.hidden;
 }
 
@@ -360,10 +360,10 @@ function renderLockUi(): void {
   const state = uiState();
   bar.dataset.lockState = state;
 
-  const badge = byId<HTMLElement>('feature-lock-badge');
-  const stateLabel = byId<HTMLElement>('feature-lock-state');
-  const detail = byId<HTMLElement>('feature-lock-detail');
-  const manage = byId<HTMLButtonElement>('feature-lock-manage-btn');
+  const badge = byId<HTMLElement>('document-restriction-badge');
+  const stateLabel = byId<HTMLElement>('document-restriction-state');
+  const detail = byId<HTMLElement>('document-restriction-detail');
+  const manage = byId<HTMLButtonElement>('document-restriction-manage-btn');
 
   switch (state) {
     case 'unlocked':
@@ -418,12 +418,12 @@ function describeStoredLock(): string {
 // ─── Forms ────────────────────────────────────────────────────────
 
 function buildChoices(): void {
-  const host = byId<HTMLElement>('feature-lock-choices');
+  const host = byId<HTMLElement>('document-restriction-choices');
   if (!host) return;
   host.replaceChildren();
   for (const action of LOCK_ACTIONS) {
     const label = document.createElement('label');
-    label.className = 'feature-lock__choice';
+    label.className = 'document-restriction__choice';
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = action;
@@ -438,7 +438,7 @@ function buildChoices(): void {
 
 function selectedActions(): LockAction[] {
   const chosen: LockAction[] = [];
-  for (const input of document.querySelectorAll<HTMLInputElement>('#feature-lock-choices input:checked')) {
+  for (const input of document.querySelectorAll<HTMLInputElement>('#document-restriction-choices input:checked')) {
     const value = input.value;
     if (LOCK_ACTIONS.includes(value as LockAction)) chosen.push(value as LockAction);
   }
@@ -450,7 +450,7 @@ function busy(form: HTMLFormElement, on: boolean): void {
 }
 
 function wireForms(): void {
-  byId<HTMLButtonElement>('feature-lock-manage-btn')?.addEventListener('click', () => {
+  byId<HTMLButtonElement>('document-restriction-manage-btn')?.addEventListener('click', () => {
     const state = uiState();
     if (state === 'unlocked') {
       showForm(formIsOpen('create') ? null : 'create');
@@ -469,37 +469,37 @@ function wireForms(): void {
     }
   });
 
-  byId<HTMLButtonElement>('feature-lock-cancel-btn')?.addEventListener('click', () => {
+  byId<HTMLButtonElement>('document-restriction-cancel-btn')?.addEventListener('click', () => {
     showForm(null);
     setStatus('');
   });
-  byId<HTMLButtonElement>('feature-lock-cancel-unlock-btn')?.addEventListener('click', () => {
+  byId<HTMLButtonElement>('document-restriction-cancel-unlock-btn')?.addEventListener('click', () => {
     showForm(null);
     setStatus('');
   });
 
-  const createForm = byId<HTMLFormElement>('feature-lock-form');
+  const createForm = byId<HTMLFormElement>('document-restriction-form');
   createForm?.addEventListener('submit', event => {
     event.preventDefault();
     void turnOnLock(createForm);
   });
 
-  const unlockForm = byId<HTMLFormElement>('feature-lock-unlock-form');
+  const unlockForm = byId<HTMLFormElement>('document-restriction-unlock-form');
   unlockForm?.addEventListener('submit', event => {
     event.preventDefault();
     void liftLock(unlockForm);
   });
 
-  byId<HTMLButtonElement>('feature-lock-remove-btn')?.addEventListener('click', () => {
-    const form = byId<HTMLFormElement>('feature-lock-unlock-form');
+  byId<HTMLButtonElement>('document-restriction-remove-btn')?.addEventListener('click', () => {
+    const form = byId<HTMLFormElement>('document-restriction-unlock-form');
     if (form) void removeLock(form);
   });
 }
 
 async function turnOnLock(form: HTMLFormElement): Promise<void> {
   if (!currentKey) return;
-  const password = byId<HTMLInputElement>('feature-lock-password');
-  const confirm = byId<HTMLInputElement>('feature-lock-confirm');
+  const password = byId<HTMLInputElement>('document-restriction-password');
+  const confirm = byId<HTMLInputElement>('document-restriction-confirm');
   const chosen = selectedActions();
 
   if (chosen.length === 0) {
@@ -519,8 +519,8 @@ async function turnOnLock(form: HTMLFormElement): Promise<void> {
 
   busy(form, true);
   try {
-    const lock = await createFeatureLock(password.value, chosen);
-    if (!saveFeatureLock(currentKey, lock)) {
+    const lock = await createDocumentRestriction(password.value, chosen);
+    if (!saveDocumentRestriction(currentKey, lock)) {
       // Saying "locked" here would be a lie the next reload exposes.
       setStatus('This browser refused to store the lock, so it was not turned on.', 'error');
       return;
@@ -542,12 +542,12 @@ async function turnOnLock(form: HTMLFormElement): Promise<void> {
 
 async function liftLock(form: HTMLFormElement): Promise<void> {
   const state = getActiveLockState();
-  const password = byId<HTMLInputElement>('feature-lock-unlock-password');
+  const password = byId<HTMLInputElement>('document-restriction-unlock-password');
   if (state.kind !== 'locked' || !password) return;
 
   busy(form, true);
   try {
-    const ok = await verifyFeatureLockPassword(state.lock, password.value);
+    const ok = await verifyDocumentRestrictionPassword(state.lock, password.value);
     if (!ok) {
       setStatus('That password does not match this document’s lock.', 'error');
       password.select();
@@ -566,18 +566,18 @@ async function liftLock(form: HTMLFormElement): Promise<void> {
 
 async function removeLock(form: HTMLFormElement): Promise<void> {
   const state = getActiveLockState();
-  const password = byId<HTMLInputElement>('feature-lock-unlock-password');
+  const password = byId<HTMLInputElement>('document-restriction-unlock-password');
   if (!currentKey || state.kind !== 'locked' || !password) return;
 
   busy(form, true);
   try {
-    const ok = await verifyFeatureLockPassword(state.lock, password.value);
+    const ok = await verifyDocumentRestrictionPassword(state.lock, password.value);
     if (!ok) {
       setStatus('Enter the lock password to remove the lock.', 'error');
       password.focus();
       return;
     }
-    if (!clearFeatureLock(currentKey)) {
+    if (!clearDocumentRestriction(currentKey)) {
       setStatus('This browser refused to remove the stored lock.', 'error');
       return;
     }
@@ -600,7 +600,7 @@ async function removeLock(form: HTMLFormElement): Promise<void> {
  * document-level guards are installed once, while the form handlers are
  * re-attached only when the bar is a different element.
  */
-export function bindFeatureLocks(): void {
+export function bindDocumentRestrictions(): void {
   ensureStyles();
   installGuards();
 
@@ -616,10 +616,10 @@ export function bindFeatureLocks(): void {
  * A document was opened. Loads its lock and makes the guards enforce it.
  * Called from the reader after the document (and its file) are in place.
  */
-export function notifyFeatureLockOpened(file: File | null): void {
+export function notifyDocumentRestrictionOpened(file: File | null): void {
   currentFile = file;
-  currentKey = file ? featureLockKey(file) : null;
-  stored = currentKey ? loadFeatureLock(currentKey) : { kind: 'unlocked' };
+  currentKey = file ? documentRestrictionKey(file) : null;
+  stored = currentKey ? loadDocumentRestriction(currentKey) : { kind: 'unlocked' };
   sessionUnlocked = false;
   syncActiveState();
   showForm(null);
@@ -628,7 +628,7 @@ export function notifyFeatureLockOpened(file: File | null): void {
 }
 
 /** The document was closed: nothing is restricted until another opens. */
-export function notifyFeatureLockClosed(): void {
+export function notifyDocumentRestrictionClosed(): void {
   currentFile = null;
   currentKey = null;
   stored = { kind: 'unlocked' };
@@ -644,7 +644,7 @@ export function notifyFeatureLockClosed(): void {
  * Use it where a click is not the only way in (an exported function with
  * several callers) or where a capture guard would be too broad.
  */
-export function guardFeatureLock(action: LockAction): boolean {
+export function guardDocumentRestriction(action: LockAction): boolean {
   if (!activeBlocks(action)) return false;
   reportBlocked(action);
   return true;

@@ -125,7 +125,7 @@ describe('column-cover — announcing state', () => {
 
   it('says so when there is nothing to cover', () => {
     expect(coverStatusText(start([]), []))
-      .toBe('Self-test is on, but there are no column notes to cover yet.');
+      .toBe('Self-test is on, but there are no three-column notes to cover yet.');
   });
 
   it('never quotes the hidden text, only the action', () => {

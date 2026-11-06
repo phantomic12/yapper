@@ -4,8 +4,8 @@ import {
   chunkWordCount,
   chunkWordPosition,
   splitChunksByVoice,
-  type VoiceTag,
-} from './voice-tags';
+  type SectionVoice,
+} from './section-voices';
 import {
   buildReadingUnits,
   nextReadingUnitIndex,
@@ -139,9 +139,9 @@ export interface ReaderOptions {
   voiceId?: string;
   /**
    * Per-section voices: character ranges of `fullText`, each naming a voice.
-   * Chunks are planned so no chunk spans two of them; see `voice-tags.ts`.
+   * Chunks are planned so no chunk spans two of them; see `section-voices.ts`.
    */
-  voiceTags?: readonly VoiceTag[];
+  sectionVoices?: readonly SectionVoice[];
   /**
    * Opaque id of the document this session is reading.
    *
@@ -245,7 +245,7 @@ export class DocumentReaderSession {
       this.fullText,
       this.options.chunkSize,
       this.options.atomicRanges,
-      this.options.voiceTags,
+      this.options.sectionVoices,
     );
     this.allSentences = sentences;
     this.chunks = chunks;
@@ -318,7 +318,7 @@ export class DocumentReaderSession {
    * Exposed so the tagging UI can say it at the moment the user tags a
    * section, rather than letting them start a read that will refuse to play.
    */
-  getVoiceTagsError(): string | null {
+  getSectionVoicesError(): string | null {
     return this.voiceIssue;
   }
 
@@ -335,7 +335,7 @@ export class DocumentReaderSession {
    * to get wrong.
    */
   private resolveVoiceIssue(): string | null {
-    const tags = this.options.voiceTags;
+    const tags = this.options.sectionVoices;
     if (!tags?.length || !this.engine || this.silent) return null;
     const model = this.engine.getCurrentModel();
     if (!model) return 'Load a model before reading with section voices.';
@@ -361,7 +361,7 @@ export class DocumentReaderSession {
    * voice for their new position, and letting them play would be the exact
    * mismatch this feature exists to avoid.
    */
-  applyVoiceTags(tags: readonly VoiceTag[]): void {
+  applySectionVoices(tags: readonly SectionVoice[]): void {
     const wasPlaying = this.state.status === 'playing';
     const anchor = { ...this.position };
     if (this.engine) {
@@ -371,12 +371,12 @@ export class DocumentReaderSession {
         }
       }
     }
-    this.options = { ...this.options, voiceTags: [...tags] };
+    this.options = { ...this.options, sectionVoices: [...tags] };
     const { chunks } = prepareReaderData(
       this.fullText,
       this.options.chunkSize,
       this.options.atomicRanges,
-      this.options.voiceTags,
+      this.options.sectionVoices,
     );
     this.chunks = chunks;
     this.voiceIssue = this.resolveVoiceIssue();
@@ -1129,7 +1129,7 @@ export function prepareReaderData(
   text: string,
   maxChars: number = 300,
   atomicRanges?: ReadonlyArray<readonly [number, number]>,
-  voiceTags?: readonly VoiceTag[],
+  sectionVoices?: readonly SectionVoice[],
 ): PreparedReaderData {
   const sentences = segmentSentences(text, atomicRanges);
   assignOffsets(sentences, text);
@@ -1140,7 +1140,7 @@ export function prepareReaderData(
     // list above is the same one the page was rendered from, so offsets,
     // highlighting and click-to-read keep working whichever side of a voice
     // boundary a word ends up on.
-    chunks: voiceTags?.length ? splitChunksByVoice(chunks, voiceTags) : chunks,
+    chunks: sectionVoices?.length ? splitChunksByVoice(chunks, sectionVoices) : chunks,
   };
 }
 

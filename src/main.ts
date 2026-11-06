@@ -14,7 +14,7 @@ import { bindRegionOcr } from './ui/region-ocr';
 import { bindReadingRegions } from './ui/reading-regions';
 import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
-import { bindVoiceTags } from './ui/voice-tags-panel';
+import { bindSectionVoices } from './ui/section-voices-panel';
 import { bindReadingQualityPanel } from './ui/reading-quality-panel';
 import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
@@ -39,7 +39,7 @@ import {
   updateDocumentSectionVisibility,
 } from './ui/document-panel';
 import { bindVoiceNotes } from './ui/voice-notes-panel';
-import { bindFeatureLocks } from './ui/feature-locks-panel';
+import { bindDocumentRestrictions } from './ui/document-restrictions-panel';
 import { disposeAllOcrEngines } from './ocr';
 import { disposeLlmOcrEngine } from './engines/llm-ocr';
 
@@ -179,15 +179,15 @@ async function render(): Promise<void> {
   // Listens for the reader's own document event, so it is bound after the
   // panel that dispatches it.
   bindVoiceNotes();
-  // Document-level capture guards for the per-document feature lock. They run
+  // Document-level capture guards for the per-document restriction. They run
   // before any control's own handler, so registration order against the
   // binders above does not matter.
-  bindFeatureLocks();
+  bindDocumentRestrictions();
   bindRegionOcr();
   bindReadingRegions({ state });
   bindWriteEvents(state);
   bindPronunciationPanel(state);
-  bindVoiceTags(state);
+  bindSectionVoices(state);
   bindReadingQualityPanel();
   bindDictation(state);
   bindStreamPlayer(state);
