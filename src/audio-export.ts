@@ -9,6 +9,25 @@ export interface AudioClip {
 }
 
 /**
+ * The samples between `startSeconds` and `endSeconds`, clamped to the clip.
+ *
+ * Chapter audio in a DAISY book is a cut of the assembled timeline rather than
+ * a fresh synthesis: slicing keeps one decode-free copy of the audio and lets
+ * chapter files start exactly where the chapter does. A range past either end
+ * yields the samples that exist instead of throwing, because chapter times
+ * come from word timings and a rounding error at the boundary is normal.
+ */
+export function sliceClip(clip: AudioClip, startSeconds: number, endSeconds: number): Float32Array {
+  const length = clip.audio.length;
+  const from = Math.min(length, Math.max(0, Math.round(startSeconds * clip.sampleRate)));
+  const to = Math.min(length, Math.max(from, Math.round(endSeconds * clip.sampleRate)));
+  // A view, not a copy: the caller encodes it straight to a WAV, and a book's
+  // merged audio can be tens of megabytes.
+  return clip.audio.subarray(from, to);
+}
+
+
+/**
  * Resample a clip to `targetRate` with linear interpolation, preserving
  * its duration. Same-rate clips are returned as-is (no copy).
  */
