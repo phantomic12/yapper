@@ -10,6 +10,7 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindRegionOcr } from './ui/region-ocr';
 import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
 import { bindReadingQualityPanel } from './ui/reading-quality-panel';
@@ -171,6 +172,7 @@ async function render(): Promise<void> {
   bindAdvancedToggle();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
+  bindRegionOcr();
   bindWriteEvents(state);
   bindPronunciationPanel(state);
   bindReadingQualityPanel();
