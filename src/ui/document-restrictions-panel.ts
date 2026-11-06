@@ -176,11 +176,11 @@ const GUARD_RULES: GuardRule[] = [
   },
   { action: 'change-voice', selector: '#custom-voice-url', events: ['change'] },
 
-  // Audio exports: the audiobook bundle, "Download all", and every per-job
-  // WAV / captions / karaoke download in the queue.
+  // Audio exports: the audiobook bundle, the DAISY book, "Download all", and
+  // every per-job WAV / captions / karaoke download in the queue.
   {
     action: 'export-audio',
-    selector: '#export-audiobook-btn, #download-all-btn, [data-action="download"], [data-action="download-captions"], [data-action="download-karaoke"]',
+    selector: '#export-audiobook-btn, #export-daisy-btn, #download-all-btn, [data-action="download"], [data-action="download-captions"], [data-action="download-karaoke"]',
     events: ['click'],
   },
 
@@ -203,7 +203,7 @@ const GUARD_RULES: GuardRule[] = [
 const GATED_CONTROLS: Array<[LockAction, string]> = [
   ['edit-text', '#ocr-toggle'],
   ['copy-text', '#export-md-btn, #export-html-btn, #export-txt-btn, #export-notes-btn, #study-guide-btn, #test-sheet-btn'],
-  ['export-audio', '#export-audiobook-btn, #download-all-btn'],
+  ['export-audio', '#export-audiobook-btn, #export-daisy-btn, #download-all-btn'],
   ['change-voice', '.voice-card__pick, .model-card__pick, .quality-preset, #custom-voice-url'],
   [
     'browse-documents',

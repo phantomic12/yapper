@@ -438,6 +438,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                    click lands on nothing and the export silently never runs. -->
               <button class="document-btn" id="export-audiobook-btn" type="button"
                       title="Download the read-aloud audio as a zip: merged WAV, captions, and a karaoke page">Audiobook</button>
+              <!-- The same session's audio as a DAISY 3 talking book: text and
+                   audio stay synchronized, so a player can navigate it. -->
+              <button class="document-btn" id="export-daisy-btn" type="button"
+                      title="Download a DAISY 3 talking book as a zip: synchronized text, phrase timings, and audio">DAISY</button>
               <div class="docview-switch" role="group" aria-label="How to show the document">
                 <span class="section-label docview-switch__label">View</span>
                 <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"

@@ -57,6 +57,7 @@ import { buildExport, buildNotesExport, type ExportFile, type ExportFormat } fro
 import { ReadAloudController } from './read-aloud';
 import { wordIndexAtChar, wordSpanInDocument } from '../karaoke';
 import { createAudiobookBundle } from '../audiobook';
+import { createDaisyBook } from '../daisy';
 import {
   buildReviewScript,
   reviewScriptText,
@@ -200,6 +201,7 @@ export function bindDocumentEvents(state: AppState): void {
   const readaloudSpeedBtn = document.getElementById('readaloud-speed-btn') as HTMLButtonElement;
   const reviewBtn = document.getElementById('review-notes-btn') as HTMLButtonElement;
   const audiobookBtn = document.getElementById('export-audiobook-btn') as HTMLButtonElement;
+  const daisyBtn = document.getElementById('export-daisy-btn') as HTMLButtonElement;
   const shortcutsBtn = document.getElementById('shortcuts-btn') as HTMLButtonElement;
   const shortcutHelp = document.getElementById('shortcut-help') as HTMLElement;
   const shortcutHelpClose = document.getElementById('shortcut-help-close') as HTMLButtonElement;
@@ -918,20 +920,17 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   /**
-   * The audiobook bundle: the last read-aloud session's generated clips as
-   * one zip — merged WAV, document-wide captions, and a karaoke page. Only
-   * what has actually been synthesised goes in; stopping early gives a
-   * shorter book, not a broken one.
+   * The finished clips of the last read-aloud session, in reading order.
+   *
+   * The id, not the session: stopping a read must not strand the clips it
+   * already produced — anything assembled from finished clips exports a
+   * partial read as a shorter book rather than a broken one. Shared by every
+   * audio export, so the audiobook and the DAISY book cannot be built from
+   * different audio.
    */
-  async function exportAudiobook() {
-    // Guarded in the handler as well as at the click: the restriction belongs
-    // to the action, not to one button.
-    if (guardDocumentRestriction('export-audio')) return;
-    // The id, not the session: stopping a read must not strand the clips it
-    // already produced — the bundle is assembled from finished clips, so a
-    // partial read exports as a shorter book.
+  function sessionClips() {
     const sessionId = lastReadSessionId;
-    const clips = state.currentJobs
+    return state.currentJobs
       .filter(job => job.status === 'done' && job.audio && job.sampleRate
         && sessionId && job.readerSessionId === sessionId)
       .sort((a, b) => (a.readerIndex ?? 0) - (b.readerIndex ?? 0))
@@ -941,6 +940,19 @@ export function bindDocumentEvents(state: AppState): void {
         sampleRate: job.sampleRate!,
         wordTimings: job.wordTimings,
       }));
+  }
+
+  /**
+   * The audiobook bundle: the last read-aloud session's generated clips as
+   * one zip — merged WAV, document-wide captions, and a karaoke page. Only
+   * what has actually been synthesised goes in; stopping early gives a
+   * shorter book, not a broken one.
+   */
+  async function exportAudiobook() {
+    // Guarded in the handler as well as at the click: the restriction belongs
+    // to the action, not to one button.
+    if (guardDocumentRestriction('export-audio')) return;
+    const clips = sessionClips();
     if (!clips.length) {
       showReaderNotice('Read the document aloud first — the audiobook is assembled from the generated audio.');
       return;
@@ -958,6 +970,35 @@ export function bindDocumentEvents(state: AppState): void {
       downloadBlob(`${name}-audiobook.zip`, bundle.zip);
     } catch (err) {
       showReaderNotice(`Could not assemble the audiobook: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * The DAISY 3 talking book: the same finished clips as the audiobook, laid
+   * out as a synchronized file set — DTBook text, SMIL phrase timings and one
+   * WAV per chapter — so a DAISY player can navigate and follow the reading
+   * rather than only play a single merged track.
+   */
+  async function exportDaisy() {
+    if (guardDocumentRestriction('export-audio')) return;
+    const clips = sessionClips();
+    if (!clips.length) {
+      showReaderNotice('Read the document aloud first — the DAISY book is assembled from the generated audio.');
+      return;
+    }
+    try {
+      const doc = state.extractedDocument;
+      const name = doc?.name.replace(/\.[^./\\]+$/, '') || 'daisy';
+      const book = await createDaisyBook(clips, {
+        title: name,
+        // Sections and text are the same lookup the audiobook's chapters use:
+        // offsets are into the extracted text, not into the merged audio.
+        sections: doc?.sections,
+        documentText: doc?.text ?? '',
+      });
+      downloadBlob(`${name}-daisy.zip`, book.zip);
+    } catch (err) {
+      showReaderNotice(`Could not assemble the DAISY book: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1933,6 +1974,9 @@ export function bindDocumentEvents(state: AppState): void {
   });
   audiobookBtn.addEventListener('click', () => {
     void exportAudiobook();
+  });
+  daisyBtn.addEventListener('click', () => {
+    void exportDaisy();
   });
 
   // ── Quick read: the loaded model's voice when ready, the browser's
