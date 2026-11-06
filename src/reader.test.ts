@@ -857,3 +857,76 @@ describe('DocumentReaderSession — dual highlighting', () => {
     expect(info.unitRanges[0].endWord).toBeGreaterThan(info.wordIndex);
   });
 });
+
+// ─── Per-section voices ────────────────────────────────────────────
+
+describe('DocumentReaderSession — per-section voices', () => {
+  const ENGINE = {
+    enqueue: vi.fn(() => ({ id: 'job-1', status: 'pending', url: undefined })),
+    cancel: vi.fn(),
+    on: vi.fn(() => () => {}),
+    getCurrentModel: vi.fn(() => ({
+      id: 'kokoro-82m',
+      name: 'Kokoro-82M',
+      voices: [{ id: 'af_heart', name: 'Heart' }, { id: 'am_adam', name: 'Adam' }],
+      defaultVoiceId: 'af_heart',
+    })),
+  } as unknown as TTSEngine;
+
+  const TEXT = 'One two three. Four five six. Seven eight nine.';
+  /** Boundary inside "Four" (which starts at 15), so the split is mid-word. */
+  const TAGS = [{ id: 'dialogue', start: 16, end: TEXT.length, voiceId: 'am_adam' }];
+
+  it('does not start a sentence in the voice of its second half', () => {
+    const session = new DocumentReaderSession(ENGINE, TEXT, {
+      chunkSize: 300,
+      voiceTags: TAGS,
+    });
+    expect(session.getChunks()).toHaveLength(2);
+
+    session.start(1);
+    // Starting at sentence 1 means starting at its first word, which is still
+    // in the untagged half — so chunk 0, not the chunk that holds "five".
+    expect(session.getState().currentIndex).toBe(0);
+
+    session.setReadingUnit('word');
+    session.skip(1);
+    // "five" is the first word of the split-off chunk; seeking there must land
+    // in that chunk, not in the one that merely contains the same sentence.
+    expect(session.getState().currentIndex).toBe(1);
+  });
+
+  it('maps highlight words through a chunk split mid-sentence', () => {
+    const highlights: HighlightInfo[] = [];
+    const session = new DocumentReaderSession(ENGINE, TEXT, {
+      chunkSize: 300,
+      voiceTags: TAGS,
+      onHighlight: info => highlights.push(info),
+    });
+    session.start(1);
+    session.setReadingUnit('word');
+    session.skip(1);
+    expect(session.getState().currentIndex).toBe(1);
+
+    const audio = audioOf(session);
+    let time = 0;
+    Object.defineProperty(audio, 'paused', { configurable: true, value: false });
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 6 });
+    Object.defineProperty(audio, 'currentTime', {
+      configurable: true,
+      get: () => time,
+      set: (value: number) => { time = value; },
+    });
+    const updateHighlight = (session as unknown as { updateHighlight: () => void }).updateHighlight.bind(session);
+
+    // The chunk begins at "five" — sentence 1, word 1 — not at word 0 of that
+    // sentence. Without the segment window this would highlight "Four".
+    updateHighlight();
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 1, wordIndex: 1, chunkIndex: 1 });
+
+    // Halfway into five words lands on "six." → the next sentence starts.
+    time = 3;
+    updateHighlight();
+    expect(highlights.at(-1)).toMatchObject({ sentenceIndex: 2, wordIndex: 0 });
+  });
+});

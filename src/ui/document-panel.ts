@@ -88,6 +88,11 @@ import {
 import { READER_DOCUMENT_EVENT, type ReaderDocumentDetail } from './voice-notes-panel';
 import { extractWebDocument } from '../web-document';
 import {
+  currentVoiceTags,
+  setVoiceTagDocument,
+  voiceTagDocumentId,
+} from './voice-tags-panel';
+import {
   guardFeatureLock,
   notifyFeatureLockClosed,
   notifyFeatureLockOpened,
@@ -265,6 +270,13 @@ export function bindDocumentEvents(state: AppState): void {
   /** Sentences of the current document, so a highlight can be resolved to a
    *  character range and handed to the document view. */
   let readerSentences: ReaderSentence[] = [];
+  /**
+   * The reader error currently on screen, so it is shown once and taken down
+   * when the session clears it. Without this the banner would either repeat on
+   * every state change or outlive the problem — "Browser blocked autoplay"
+   * still sitting there while the audio plays.
+   */
+  let shownReaderError: string | undefined;
   /**
    * Reading preferences, not document state: the unit and the silent mode
    * are how this person reads, so they survive a reload and carry over to
@@ -1073,6 +1085,7 @@ export function bindDocumentEvents(state: AppState): void {
     state.extractedDocument = doc;
     sourceFile = file;
     progressKey = file ? documentProgressKey(file) : null;
+    setVoiceTagDocument(file, true);
     savedProgress = progressKey ? loadDocumentProgress(progressKey) : null;
     lastProgressOffset = savedProgress?.offset ?? 0;
     bookmarksKey = file ? documentBookmarksKey(file) : null;
@@ -1314,6 +1327,7 @@ export function bindDocumentEvents(state: AppState): void {
     state.extractedDocument = null;
     sourceFile = null;
     progressKey = null;
+    setVoiceTagDocument(null, false);
     savedProgress = null;
     lastProgressOffset = 0;
     clearTimeout(progressTimer);
@@ -1633,6 +1647,15 @@ export function bindDocumentEvents(state: AppState): void {
         : readerState.needsUserGesture
           ? 'Click to play'
           : 'Resume';
+    // Errors (an untaggable voice, a failed playback) are otherwise invisible:
+    // the session sets them, and nothing on the page listened.
+    if (readerState.error && readerState.error !== shownReaderError) {
+      shownReaderError = readerState.error;
+      showReaderNotice(readerState.error);
+    } else if (!readerState.error && shownReaderError) {
+      shownReaderError = undefined;
+      clearReaderError();
+    }
     if (readerState.status === 'playing') {
       readBtn.style.display = 'none';
       pauseBtn.style.display = '';
@@ -1712,6 +1735,9 @@ export function bindDocumentEvents(state: AppState): void {
       chunkSize: 300,
       lookahead: 2,
       speed: state.currentSpeed,
+      voiceId: state.selectedVoiceId,
+      voiceTags: currentVoiceTags(),
+      documentId: voiceTagDocumentId() ?? undefined,
       silent,
       readingUnit,
       onStateChange: renderReaderState,

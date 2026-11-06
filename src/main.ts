@@ -13,6 +13,7 @@ import { bindStreamPlayer } from './ui/stream-player';
 import { bindRegionOcr } from './ui/region-ocr';
 import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
+import { bindVoiceTags } from './ui/voice-tags-panel';
 import { bindReadingQualityPanel } from './ui/reading-quality-panel';
 import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
@@ -184,6 +185,7 @@ async function render(): Promise<void> {
   bindRegionOcr();
   bindWriteEvents(state);
   bindPronunciationPanel(state);
+  bindVoiceTags(state);
   bindReadingQualityPanel();
   bindDictation(state);
   bindStreamPlayer(state);
