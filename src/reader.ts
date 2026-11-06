@@ -1,5 +1,14 @@
 import type { GenerationJob, TTSEngine } from './engine';
 import { applyPronunciations, toWrittenWordIndex, type PronunciationEntry } from './pronunciation';
+import {
+  buildReadingUnits,
+  nextReadingUnitIndex,
+  readingUnitAt,
+  silentWordDurationMs,
+  type ReadingUnit,
+  type ReadingUnitSpan,
+  type UnitRange,
+} from './reading-units';
 
 export interface ReaderSentence {
   /** Clean sentence text. */
@@ -47,6 +56,12 @@ export interface ReaderState {
   /** Highest chunk index that is ready to play (or already playing). */
   bufferedIndex: number;
   status: 'idle' | 'playing' | 'paused' | 'finished';
+  /**
+   * True while the highlight is driven by the silent clock rather than by
+   * audio. The UI says so in the status line, because "paused" and "reading
+   * silently" look identical otherwise — a moving highlight with no sound.
+   */
+  silent: boolean;
   error?: string;
   /**
    * Set to true when the browser refused to autoplay because no user
@@ -60,6 +75,17 @@ export interface HighlightInfo {
   sentenceIndex: number;
   wordIndex: number;
   chunkIndex: number;
+  /** The reading unit that was active when this highlight was produced. */
+  unit: ReadingUnit;
+  /**
+   * The ranges the active reading unit covers. A paragraph unit spans
+   * several sentences, so this is a list rather than one box — the UI paints
+   * every range and the document view draws its trail from the first word of
+   * the first range to the last word of the last.
+   */
+  unitRanges: UnitRange[];
+  /** True when a silent clock produced this, not audio playback. */
+  silent: boolean;
 }
 
 export interface ReaderOptions {
@@ -71,6 +97,15 @@ export interface ReaderOptions {
   lookahead?: number;
   /** Playback speed passed to the engine. */
   speed?: number;
+  /**
+   * Start silent: advance the highlight on a text-derived clock without
+   * synthesising or playing anything. Silent sessions need no engine at all.
+   */
+  silent?: boolean;
+  /** How much text one highlight covers and one skip moves over. */
+  readingUnit?: ReadingUnit;
+  /** Approximate characters per display line for the 'line' unit. */
+  lineChars?: number;
   /**
    * Character ranges of the text that must be spoken as one sentence —
    * table rows, so a period inside a cell cannot split the row.
@@ -96,7 +131,8 @@ export interface ReaderOptions {
  * not overwhelmed.
  */
 export class DocumentReaderSession {
-  private engine: TTSEngine;
+  /** Null for a silent session: nothing is synthesised, so nothing is queued. */
+  private engine: TTSEngine | null;
   private sessionId: string;
   private chunks: ReaderChunk[] = [];
   private allSentences: ReaderSentence[] = [];
@@ -108,8 +144,27 @@ export class DocumentReaderSession {
   private highlightRaf?: number;
   /** Set once the audio element has played inside a user gesture (iOS unlock). */
   private audioPrimed = false;
+  /** Where the reading cursor is, in document coordinates. */
+  private position: { sentenceIndex: number; wordIndex: number } = { sentenceIndex: 0, wordIndex: 0 };
+  /** The active unit list, rebuilt when the unit choice changes. */
+  private units: ReadingUnitSpan[] = [];
+  private readingUnit: ReadingUnit;
+  private silent: boolean;
+  /** Silent-mode pacing timer. A timeout, not a frame loop: a word lasts
+   *  hundreds of milliseconds, and a timeout keeps ticking in a background
+   *  tab where requestAnimationFrame is throttled to near-zero. */
+  private silentTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * A word to seek to once the current chunk's metadata is available.
+   *
+   * Skip can land inside a chunk whose audio has not loaded yet, where
+   * `duration` is NaN and `currentTime` cannot be set meaningfully. Holding
+   * the target here lets the same seek run from `loadedmetadata` instead of
+   * being silently dropped.
+   */
+  private pendingSeekWord: number | null = null;
 
-  constructor(engine: TTSEngine, fullText: string, options: ReaderOptions = {}) {
+  constructor(engine: TTSEngine | null, fullText: string, options: ReaderOptions = {}) {
     this.engine = engine;
     this.options = {
       chunkSize: options.chunkSize ?? 300,
@@ -121,12 +176,20 @@ export class DocumentReaderSession {
     const { sentences, chunks } = prepareReaderData(fullText.trim(), this.options.chunkSize, this.options.atomicRanges);
     this.allSentences = sentences;
     this.chunks = chunks;
+    this.silent = options.silent ?? false;
+    this.readingUnit = options.readingUnit ?? 'sentence';
+    this.units = buildReadingUnits(this.allSentences, this.readingUnit, this.options.lineChars);
+    this.position = {
+      sentenceIndex: this.allSentences[0]?.globalIndex ?? 0,
+      wordIndex: 0,
+    };
     this.state = {
       isPlaying: false,
       currentIndex: 0,
       totalChunks: this.chunks.length,
       bufferedIndex: -1,
       status: 'idle',
+      silent: this.silent,
     };
     this.audio = new Audio();
     this.audio.addEventListener('ended', () => {
@@ -162,6 +225,96 @@ export class DocumentReaderSession {
     return this.sessionId;
   }
 
+  getReadingUnit(): ReadingUnit {
+    return this.readingUnit;
+  }
+
+  isSilent(): boolean {
+    return this.silent;
+  }
+
+  /** Whether this session has an engine to speak with if silent mode ends. */
+  hasEngine(): boolean {
+    return this.engine !== null;
+  }
+
+  /**
+   * Change how much text a highlight covers and how far skip moves.
+   *
+   * The current position is the anchor: switching from sentence to word must
+   * keep the reader on the word being spoken, not restart the paragraph, so
+   * the cursor is re-resolved against the new unit list and re-emitted
+   * instead of being reset.
+   */
+  setReadingUnit(unit: ReadingUnit): void {
+    if (unit === this.readingUnit) return;
+    this.readingUnit = unit;
+    this.units = buildReadingUnits(this.allSentences, unit, this.options.lineChars);
+    this.emitPosition();
+  }
+
+  /**
+   * Turn silent reading on or off mid-session.
+   *
+   * Handing over happens at the current word: silent-to-audio starts playback
+   * from the chunk already loaded, and audio-to-silent pauses the element
+   * before the clock takes over. The cursor does not move because the user
+   * changed the *medium*, not the place in the document.
+   */
+  setSilentMode(on: boolean): void {
+    if (on === this.silent) return;
+    this.silent = on;
+    this.setState({ silent: on });
+    if (on) {
+      if (this.state.status === 'playing') {
+        this.audio.pause();
+        this.cancelHighlightLoop();
+        this.scheduleSilentTick();
+      }
+    } else {
+      this.cancelSilentTimer();
+      // Park the word the silent cursor reached so audio resumes there
+      // rather than at the top of a chunk the eye is already past.
+      this.pendingSeekWord = this.writtenWordIndexInChunk(
+        this.chunks[this.state.currentIndex],
+        this.position.sentenceIndex,
+        this.position.wordIndex,
+      );
+      // A session that started silent never queued anything. Queueing is not
+      // gated on "playing" because the handover may happen while paused, and
+      // resuming then needs jobs already in flight.
+      this.subscribe();
+      this.ensureBuffered(
+        Math.min(this.state.currentIndex + this.options.lookahead! - 1, this.chunks.length - 1),
+      );
+      if (this.state.status === 'playing') {
+        this.scheduleHighlightLoop();
+        this.tryPlayNext();
+      }
+    }
+    this.emitPosition();
+  }
+
+  /**
+   * Move one reading unit forward or back. Returns false at the document's
+   * ends, where the cursor stays put rather than wrapping to the other end.
+   *
+   * Skipping while paused is a read-position change, so the highlight moves
+   * immediately; skipping while playing also moves the audio, seeking inside
+   * the current chunk and changing chunks when the target lies elsewhere.
+   */
+  skip(direction: 1 | -1): boolean {
+    if (!this.units.length) return false;
+    const current = readingUnitAt(this.units, this.position.sentenceIndex, this.position.wordIndex);
+    const next = nextReadingUnitIndex(this.units, current, direction);
+    if (next < 0 || next === current) return false;
+    const target = this.units[next];
+    const first = target.ranges[0];
+    if (!first) return false;
+    this.moveTo(first.sentenceIndex, first.startWord);
+    return true;
+  }
+
   private setState(partial: Partial<ReaderState>) {
     this.state = { ...this.state, ...partial };
     this.options.onStateChange?.({ ...this.state });
@@ -173,20 +326,42 @@ export class DocumentReaderSession {
    * `fromSentenceIndex` starts at the chunk holding that sentence, which is how
    * clicking a sentence in the document view reads from there. It defaults to
    * the beginning, so existing callers that just want to play are unchanged.
+   *
+   * A silent session skips synthesis entirely: it positions the cursor,
+   * emits one highlight and starts the pacing clock. No engine is touched, so
+   * silent reading works with no model loaded and makes no audio at all.
    */
   start(fromSentenceIndex = 0) {
     if (this.chunks.length === 0) {
       this.setState({ status: 'finished' });
       return;
     }
-    this.primeAudioForAutoplay();
     this.cancelHighlightLoop();
-    this.subscribe();
+    this.cancelSilentTimer();
     const from = this.chunkIndexForSentence(fromSentenceIndex);
-    this.setState({ isPlaying: true, status: 'playing', currentIndex: from, bufferedIndex: -1 });
+    const sentence = this.sentenceFor(fromSentenceIndex) ?? this.allSentences[0];
+    this.position = { sentenceIndex: sentence?.globalIndex ?? 0, wordIndex: 0 };
+    this.setState({
+      isPlaying: true,
+      status: 'playing',
+      currentIndex: from,
+      bufferedIndex: -1,
+      silent: this.silent,
+    });
+    if (this.silent) {
+      this.emitPosition();
+      this.scheduleSilentTick();
+      return;
+    }
+    this.primeAudioForAutoplay();
+    this.subscribe();
     this.ensureBuffered(Math.min(from + this.options.lookahead! - 1, this.chunks.length - 1));
     this.tryPlayNext();
     this.scheduleHighlightLoop();
+  }
+
+  private sentenceFor(globalIndex: number): ReaderSentence | undefined {
+    return this.allSentences.find(s => s.globalIndex === globalIndex);
   }
 
   /**
@@ -207,6 +382,7 @@ export class DocumentReaderSession {
   pause() {
     this.audio.pause();
     this.cancelHighlightLoop();
+    this.cancelSilentTimer();
     this.setState({ isPlaying: false, status: 'paused' });
   }
 
@@ -214,6 +390,11 @@ export class DocumentReaderSession {
   resume() {
     if (this.state.status === 'finished') return;
     this.setState({ isPlaying: true, status: 'playing', needsUserGesture: undefined });
+    if (this.silent) {
+      this.emitPosition();
+      this.scheduleSilentTick();
+      return;
+    }
     this.ensureBuffered(Math.min(this.state.currentIndex + this.options.lookahead! - 1, this.chunks.length - 1));
     this.tryPlayNext();
     this.scheduleHighlightLoop();
@@ -232,7 +413,7 @@ export class DocumentReaderSession {
    */
   resumeAfterGesture() {
     if (this.state.status === 'playing') return;
-    this.primeAudioForAutoplay();
+    if (!this.silent) this.primeAudioForAutoplay();
     this.resume();
   }
 
@@ -275,16 +456,25 @@ export class DocumentReaderSession {
   stop() {
     this.pause();
     this.unsubscribe();
-    // Cancel any pending reader jobs that haven't generated yet.
-    for (const chunk of this.chunks) {
-      if (chunk.job && (chunk.job.status === 'pending' || chunk.job.status === 'generating')) {
-        this.engine.cancel(chunk.job.id);
+    this.pendingSeekWord = null;
+    // Cancel any pending reader jobs that haven't generated yet. A silent
+    // session never queued any.
+    if (this.engine) {
+      for (const chunk of this.chunks) {
+        if (chunk.job && (chunk.job.status === 'pending' || chunk.job.status === 'generating')) {
+          this.engine.cancel(chunk.job.id);
+        }
       }
     }
     this.setState({ currentIndex: 0, bufferedIndex: -1, status: 'idle' });
   }
 
   private subscribe() {
+    if (!this.engine) return;
+    // One subscription per session: start() after a stop, or a silent-to-audio
+    // handover, must not stack a second listener that would advance the
+    // reader twice per finished job.
+    if (this.unsubscribes.length) return;
     // Use the typed emitter API instead of monkey-patching engine.events.
     // The returned unsubscribe fn is captured so stop()/destroy can release
     // the listener without affecting other consumers.
@@ -336,6 +526,7 @@ export class DocumentReaderSession {
 
   /** Queue synthesis for chunks [0 .. targetIndex] that don't have a job yet. */
   private ensureBuffered(targetIndex: number) {
+    if (!this.engine) return;
     const modelId = this.engine.getCurrentModel()?.id ?? '';
     const pronunciations = this.options.pronunciations ?? [];
     for (let i = 0; i <= targetIndex && i < this.chunks.length; i++) {
@@ -356,6 +547,8 @@ export class DocumentReaderSession {
   }
 
   private tryPlayNext() {
+    // A silent session has no clips to play; its clock is the only driver.
+    if (this.silent) return;
     if (!this.state.isPlaying) return;
     if (!this.audio.paused) return;
     if (this.state.currentIndex >= this.chunks.length) {
@@ -386,10 +579,17 @@ export class DocumentReaderSession {
       });
       this.cancelHighlightLoop();
     });
+    // A skip may have parked a word for this chunk while its audio was
+    // still loading. Seeking here — after play() so the media pipeline
+    // exists — lands on the skipped word instead of the chunk's first one.
+    this.applyPendingSeek();
     this.updateHighlight();
   }
 
   private advance() {
+    // The clip that just ended is behind us; a seek parked for it must not
+    // be applied to the next chunk.
+    this.pendingSeekWord = null;
     // Move to next chunk and try to continue playback.
     this.setState({ currentIndex: this.state.currentIndex + 1 });
     this.ensureBuffered(Math.min(this.state.currentIndex + this.options.lookahead! - 1, this.chunks.length - 1));
@@ -402,6 +602,196 @@ export class DocumentReaderSession {
   }
 
   // ─── Word/sentence highlighting ────────────────────────────────────
+
+  /**
+   * Report where the cursor is, with the reading unit it sits in.
+   *
+   * Every highlight path funnels through here — audio ticks, the silent
+   * clock, skip and unit changes — so the "current word" and the "current
+   * unit" can never disagree about which step of the document is active.
+   */
+  private emitPosition(): void {
+    const unitIndex = readingUnitAt(this.units, this.position.sentenceIndex, this.position.wordIndex);
+    const unit = unitIndex >= 0 ? this.units[unitIndex] : null;
+    this.options.onHighlight?.({
+      sentenceIndex: this.position.sentenceIndex,
+      wordIndex: this.position.wordIndex,
+      chunkIndex: this.chunkIndexForSentence(this.position.sentenceIndex),
+      unit: this.readingUnit,
+      unitRanges: unit
+        ? unit.ranges.map(range => ({ ...range }))
+        : [{
+          sentenceIndex: this.position.sentenceIndex,
+          startWord: this.position.wordIndex,
+          endWord: this.position.wordIndex + 1,
+        }],
+      silent: this.silent,
+    });
+  }
+
+  /**
+   * Move the cursor and bring the audio along when there is any.
+   *
+   * The chunk decides how the move happens. Inside a chunk the clip is
+   * already loaded, so a seek lands exactly; across chunks the old clip
+   * belongs to different audio and is paused, and the new chunk starts when
+   * its job is ready. The seek is parked rather than dropped because
+   * `duration` is unknown until that clip loads.
+   */
+  private moveTo(sentenceIndex: number, wordIndex: number): void {
+    const previousChunk = this.state.currentIndex;
+    const chunkIndex = this.chunkIndexForSentence(sentenceIndex);
+    this.position = { sentenceIndex, wordIndex };
+    if (chunkIndex !== previousChunk) {
+      this.setState({ currentIndex: chunkIndex });
+      if (!this.silent) {
+        this.audio.pause();
+        this.ensureBuffered(Math.min(chunkIndex + this.options.lookahead! - 1, this.chunks.length - 1));
+      }
+    }
+    if (this.silent) {
+      if (this.state.status === 'playing') this.scheduleSilentTick();
+    } else {
+      this.pendingSeekWord = this.writtenWordIndexInChunk(this.chunks[chunkIndex], sentenceIndex, wordIndex);
+      if (this.state.status === 'playing') this.tryPlayNext();
+      this.applyPendingSeek();
+    }
+    this.emitPosition();
+  }
+
+  /** The chunk-relative written-word index of a position, or null off-chunk. */
+  private writtenWordIndexInChunk(
+    chunk: ReaderChunk | undefined,
+    sentenceIndex: number,
+    wordIndex: number,
+  ): number | null {
+    if (!chunk) return null;
+    let offset = 0;
+    for (const sentence of chunk.sentences) {
+      if (sentence.globalIndex === sentenceIndex) {
+        return wordIndex >= 0 && wordIndex < sentence.words.length ? offset + wordIndex : null;
+      }
+      offset += sentence.words.length;
+    }
+    return null;
+  }
+
+  /**
+   * Seek the current clip to the parked word.
+   *
+   * Word timings are used when the engine supplied them; otherwise the word's
+   * share of the chunk duration is the best available estimate. A chunk with
+   * no readable duration yet keeps the target parked until `loadedmetadata`
+   * fires, or discards it when the target stopped making sense.
+   */
+  private applyPendingSeek(): void {
+    if (this.pendingSeekWord === null) return;
+    const current = this.chunks[this.state.currentIndex];
+    if (!current?.job?.url || this.audio.src !== current.job.url) {
+      // The element is not pointing at this chunk's clip yet. Leave the
+      // target parked: tryPlayNext() sets the URL and calls this again, and
+      // seeking the previous clip's duration would be meaningless audio.
+      return;
+    }
+    const word = this.pendingSeekWord;
+    const apply = () => {
+      const chunk = this.chunks[this.state.currentIndex];
+      const time = chunk ? this.timeForWord(chunk, word) : null;
+      if (time === null) return;
+      this.pendingSeekWord = null;
+      try {
+        this.audio.currentTime = time;
+      } catch {
+        // The element reset between the check and the write; the highlight
+        // already moved, and the next loaded clip will start from its word.
+      }
+      this.updateHighlight();
+    };
+    if (Number.isFinite(this.audio.duration) && this.audio.duration > 0) {
+      apply();
+    } else {
+      // Duration is unknown until metadata arrives. Register the same seek
+      // for that moment instead of dropping it: a skip into a chunk that is
+      // still loading would otherwise land on the chunk's first word.
+      this.audio.addEventListener('loadedmetadata', () => {
+        if (this.pendingSeekWord !== null) apply();
+      }, { once: true });
+    }
+  }
+
+  /** Seconds into a chunk at which a written word starts. */
+  private timeForWord(chunk: ReaderChunk, writtenWordIndex: number): number | null {
+    const duration = this.audio.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return null;
+    const totalWritten = chunk.sentences.reduce((sum, s) => sum + s.words.length, 0);
+    if (totalWritten <= 0) return null;
+    const timings = chunk.job?.wordTimings;
+    const totalSpoken = chunk.wordMap?.length ?? totalWritten;
+    if (timings && timings.length >= totalSpoken) {
+      // Timings index the spoken words. With a pronunciation rewrite the
+      // written word the user skipped to may sit at a different spoken
+      // index, so translate through the map before indexing. When the map
+      // has no entry, the ratio estimate below is safer than word zero.
+      let spoken = writtenWordIndex;
+      if (chunk.wordMap) {
+        const mapped = chunk.wordMap.indexOf(writtenWordIndex);
+        if (mapped >= 0) spoken = mapped;
+      }
+      const timing = timings[Math.min(spoken, timings.length - 1)];
+      if (timing !== undefined) return timing;
+    }
+    return (writtenWordIndex / totalWritten) * duration;
+  }
+
+  private scheduleSilentTick(): void {
+    this.cancelSilentTimer();
+    if (!this.silent || this.state.status !== 'playing') return;
+    const word = this.sentenceFor(this.position.sentenceIndex)?.words[this.position.wordIndex] ?? '';
+    this.silentTimer = setTimeout(
+      () => this.silentTick(),
+      silentWordDurationMs(word, this.options.speed ?? 1),
+    );
+  }
+
+  private cancelSilentTimer(): void {
+    if (this.silentTimer !== undefined) {
+      clearTimeout(this.silentTimer);
+      this.silentTimer = undefined;
+    }
+  }
+
+  private silentTick(): void {
+    this.silentTimer = undefined;
+    if (!this.silent || this.state.status !== 'playing') return;
+    if (!this.advanceSilent()) {
+      this.setState({ isPlaying: false, status: 'finished' });
+      return;
+    }
+    this.emitPosition();
+    this.scheduleSilentTick();
+  }
+
+  /**
+   * One word forward on the silent clock. False at the end of the document.
+   *
+   * Chunk boundaries are honoured even though nothing is playing: the state's
+   * `currentIndex` is what the status line and the export path read, so a
+   * silent read that crossed ten chunks must still say so.
+   */
+  private advanceSilent(): boolean {
+    const sentence = this.sentenceFor(this.position.sentenceIndex);
+    if (!sentence) return false;
+    if (this.position.wordIndex + 1 < sentence.words.length) {
+      this.position = { sentenceIndex: sentence.globalIndex, wordIndex: this.position.wordIndex + 1 };
+      return true;
+    }
+    const next = this.allSentences.find(s => s.globalIndex > sentence.globalIndex);
+    if (!next) return false;
+    this.position = { sentenceIndex: next.globalIndex, wordIndex: 0 };
+    const chunkIndex = this.chunkIndexForSentence(next.globalIndex);
+    if (chunkIndex !== this.state.currentIndex) this.setState({ currentIndex: chunkIndex });
+    return true;
+  }
 
   private scheduleHighlightLoop() {
     this.cancelHighlightLoop();
@@ -422,6 +812,7 @@ export class DocumentReaderSession {
   }
 
   private updateHighlight() {
+    if (this.silent) return;
     if (this.audio.paused || !this.audio.duration || !Number.isFinite(this.audio.duration)) return;
     if (this.state.currentIndex >= this.chunks.length) return;
 
@@ -447,11 +838,8 @@ export class DocumentReaderSession {
     let remaining = targetWord;
     for (const sentence of chunk.sentences) {
       if (remaining < sentence.words.length) {
-        this.options.onHighlight?.({
-          sentenceIndex: sentence.globalIndex,
-          wordIndex: remaining,
-          chunkIndex: chunk.index,
-        });
+        this.position = { sentenceIndex: sentence.globalIndex, wordIndex: remaining };
+        this.emitPosition();
         return;
       }
       remaining -= sentence.words.length;
