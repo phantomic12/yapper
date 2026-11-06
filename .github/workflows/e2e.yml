@@ -56,9 +56,14 @@ jobs:
       - name: Launch Chrome with remote debugging
         run: |
           mkdir -p /tmp/chrome-profile
+          # --disable-dev-shm-usage: GitHub runners have a 64 MB /dev/shm, and
+          # Chrome is known to die silently there under headless load. Without
+          # it the port never opens and every one of the 37 e2e steps fails
+          # with an opaque 'target' error instead of naming the real problem.
           nohup google-chrome \
             --no-sandbox \
             --disable-gpu \
+            --disable-dev-shm-usage \
             --headless=new \
             --remote-debugging-port=9222 \
             --remote-debugging-address=0.0.0.0 \
@@ -69,6 +74,14 @@ jobs:
             curl -fsS http://127.0.0.1:9222/json/version > /dev/null && break
             sleep 1
           done
+          # Fail here, loudly, if the browser never came up. A silent timeout
+          # used to cascade into 37 misleading assertion failures.
+          if ! curl -fsS http://127.0.0.1:9222/json/version > /dev/null; then
+            echo "::error::Chrome never opened its debugging port"
+            echo "--- /tmp/chrome.log ---"
+            cat /tmp/chrome.log || true
+            exit 1
+          fi
 
       - name: Run e2e tests
         env:
