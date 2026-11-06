@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mountHtmlView, mountPdfView } from './document-view';
+import { findDocumentView, mountHtmlView, mountPdfView } from './document-view';
 
 const hosts: HTMLElement[] = [];
 
@@ -434,6 +434,55 @@ describe('PDF document view outline and annotations', () => {
         .toBeGreaterThan(0);
     } finally {
       view?.destroy();
+      vi.doUnmock('pdfjs-dist');
+    }
+  });
+
+  it('registers the mounted view and its live page geometry for overlays', async () => {
+    stubCanvasContext();
+    mockPdf({});
+    // The reader mounts into a throwaway host and then moves it under
+    // #document-view, so an overlay looking the view up by id finds the
+    // grandparent rather than the element the view knows.
+    const wrapper = document.createElement('div');
+    wrapper.id = 'document-view';
+    document.body.appendChild(wrapper);
+    const mountHost = document.createElement('div');
+    wrapper.appendChild(mountHost);
+    let view: Awaited<ReturnType<typeof mountPdfView>> | undefined;
+    try {
+      view = await mountPdfView(mountHost, new File(['pdf'], 'reader.pdf'), [
+        { page: 1, x: 1, y: 1, width: 10, height: 4, start: 0, end: 5 },
+      ], { text: 'Alpha' });
+      expect(findDocumentView(mountHost)).toBe(view);
+      expect(findDocumentView(wrapper)).toBe(view);
+
+      mountHost.querySelectorAll<HTMLElement>('.docview__surface').forEach((surface, index) => {
+        surface.getBoundingClientRect = () => ({
+          x: 0, y: index * 200, left: 0, top: index * 200,
+          width: 100, height: 190, right: 100, bottom: index * 200 + 190,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      });
+      const surfaces = view.pageSurfaces!();
+      expect(surfaces.map(surface => surface.page)).toEqual([1, 2]);
+      expect(surfaces[0]).toMatchObject({ left: 0, top: 0, width: 100, height: 190 });
+      expect(surfaces[0].scale).toBeCloseTo(view.scale!, 5);
+
+      // Anchors can be swapped when a read order rebases them.
+      expect(view.textAnchors!()).toEqual([
+        { page: 1, x: 1, y: 1, width: 10, height: 4, start: 0, end: 5 },
+      ]);
+      view.setTextAnchors!([{ page: 1, x: 1, y: 1, width: 10, height: 4, start: 2, end: 7 }]);
+      expect(view.textAnchors!()[0]).toMatchObject({ start: 2, end: 7 });
+
+      view.destroy();
+      view = undefined;
+      expect(findDocumentView(mountHost)).toBeNull();
+      expect(findDocumentView(wrapper)).toBeNull();
+    } finally {
+      view?.destroy();
+      wrapper.remove();
       vi.doUnmock('pdfjs-dist');
     }
   });

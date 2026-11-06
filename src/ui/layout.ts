@@ -444,6 +444,39 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <div class="doc-statusbar" id="doc-statusbar" role="status" aria-live="off"></div>
               <span class="reader-status" id="reader-status" role="status" aria-live="polite"></span>
             </div>
+
+            <!-- Reading regions: boxes drawn over a page decide what is read
+                 and in what order — a sidebar to skip, a figure to leave out,
+                 a column that should be heard first. Wired by
+                 src/ui/reading-regions.ts; the status line is its live region. -->
+            <section class="reading-regions" id="reading-regions" aria-label="Reading regions">
+              <div class="reading-regions__bar" role="toolbar" aria-label="Reading regions">
+                <button class="document-btn" id="reading-regions-btn" type="button" aria-pressed="false" aria-expanded="false"
+                        title="Draw boxes over a page to choose what is read, skip a sidebar or figure, and set the read order">Reading regions</button>
+                <span class="reading-regions__status" id="reading-regions-status" role="status" aria-live="polite"></span>
+              </div>
+              <div class="reading-regions__panel" id="reading-regions-panel" hidden>
+                <div class="reading-regions__head">
+                  <label class="reading-regions__label" for="reading-regions-page">Page</label>
+                  <select class="reading-regions__page" id="reading-regions-page" aria-label="Page to edit regions on"></select>
+                  <label class="reading-regions__label" for="reading-regions-kind">New box</label>
+                  <select class="reading-regions__kind" id="reading-regions-kind" aria-label="Kind for a new box"></select>
+                  <button class="document-btn" id="reading-regions-close-btn" type="button">Close</button>
+                </div>
+                <p class="reading-regions__hint" id="reading-regions-hint">
+                  Drag a box on the page, or press an arrow key to start one, move it with the arrows,
+                  resize it with <kbd>Shift</kbd> and the arrows, then <kbd>Enter</kbd> to add it.
+                  <kbd>Esc</kbd> exits.
+                </p>
+                <div class="reading-regions__tools">
+                  <span class="section-label">Read order</span>
+                  <button class="document-btn" id="reading-regions-clear-page-btn" type="button">Clear page</button>
+                  <button class="document-btn" id="reading-regions-clear-all-btn" type="button">Clear all</button>
+                </div>
+                <ol class="reading-regions__list" id="reading-regions-list" aria-label="Read order on this page"></ol>
+              </div>
+            </section>
+
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
 
             <!-- Feature lock: a per-document restriction for reading in an
