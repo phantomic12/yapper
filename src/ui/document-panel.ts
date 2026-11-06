@@ -68,6 +68,11 @@ import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
 import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
 import { buildTestSheet } from '../testsheet';
 import { extractWebDocument } from '../web-document';
+import {
+  guardFeatureLock,
+  notifyFeatureLockClosed,
+  notifyFeatureLockOpened,
+} from './feature-locks-panel';
 import { isReadingUnit, type ReadingUnit } from '../reading-units';
 
 const MAX_RENDERED_BLOCKS = 60;
@@ -844,6 +849,9 @@ export function bindDocumentEvents(state: AppState): void {
    * shorter book, not a broken one.
    */
   async function exportAudiobook() {
+    // Guarded in the handler as well as at the click: the restriction belongs
+    // to the action, not to one button.
+    if (guardFeatureLock('export-audio')) return;
     // The id, not the session: stopping a read must not strand the clips it
     // already produced — the bundle is assembled from finished clips, so a
     // partial read exports as a shorter book.
@@ -879,6 +887,9 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   function exportDocument(format: ExportFormat) {
+    // Text leaving as a file is copying text out; a locked document refuses it
+    // here, not only at the button.
+    if (guardFeatureLock('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc) return;
     downloadFile(buildExport({ name: doc.name, text: doc.text, html: doc.html }, format));
@@ -1060,6 +1071,9 @@ export function bindDocumentEvents(state: AppState): void {
     docViewMode = 'document';
     destroyDocView();
     void mountDocumentView(doc, request);
+    // The lock belongs to the file's identity, so it is read here — after the
+    // new document replaces the old one and before the reader can touch it.
+    notifyFeatureLockOpened(file);
     readerView.focus();
   }
 
@@ -1069,6 +1083,7 @@ export function bindDocumentEvents(state: AppState): void {
    * an honest error from extractWebDocument rather than a blank page.
    */
   function openWebPage() {
+    if (guardFeatureLock('browse-documents')) return;
     const url = webUrlInput.value.trim();
     if (!url) { webUrlInput.focus(); return; }
     let parsed: URL;
@@ -1098,6 +1113,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   sampleBtn.addEventListener('click', () => {
+    if (guardFeatureLock('browse-documents')) return;
     clearReaderError();
     setProgress('Loading sample…');
     // No file: the sample is a plain-text document, so it is read on the
@@ -1106,6 +1122,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   function handleFile(file: File) {
+    if (guardFeatureLock('browse-documents')) return;
     const request = ++activeFileRequest;
     if (file.size > 25 * 1024 * 1024) {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
@@ -1215,6 +1232,8 @@ export function bindDocumentEvents(state: AppState): void {
    * deliberately survive — closing a document is not forgetting it.
    */
   function closeDocument() {
+    if (guardFeatureLock('browse-documents')) return;
+    notifyFeatureLockClosed();
     activeFileRequest++;
     stopAllSpeech();
     destroyDocView();
@@ -1782,6 +1801,7 @@ export function bindDocumentEvents(state: AppState): void {
   document.getElementById('export-html-btn')?.addEventListener('click', () => exportDocument('html'));
   document.getElementById('export-txt-btn')?.addEventListener('click', () => exportDocument('text'));
   document.getElementById('export-notes-btn')?.addEventListener('click', () => {
+    if (guardFeatureLock('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc) return;
     downloadFile(buildNotesExport({ name: doc.name, text: doc.text }, bookmarks, highlights));
@@ -2068,6 +2088,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   studyGuideBtn.addEventListener('click', async () => {
+    if (guardFeatureLock('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc || !wordList.length) return;
     studyGuideBtn.disabled = true;
@@ -2408,6 +2429,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   testSheetBtn.addEventListener('click', () => {
+    if (guardFeatureLock('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc || !testAnswers.length) return;
     const sheet = buildTestSheet(doc.name, doc.text, testAnswers);

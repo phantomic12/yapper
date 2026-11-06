@@ -36,6 +36,7 @@ import {
   bindDocumentEvents,
   updateDocumentSectionVisibility,
 } from './ui/document-panel';
+import { bindFeatureLocks } from './ui/feature-locks-panel';
 import { disposeAllOcrEngines } from './ocr';
 import { disposeLlmOcrEngine } from './engines/llm-ocr';
 
@@ -172,6 +173,10 @@ async function render(): Promise<void> {
   bindAdvancedToggle();
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
+  // Document-level capture guards for the per-document feature lock. They run
+  // before any control's own handler, so registration order against the
+  // binders above does not matter.
+  bindFeatureLocks();
   bindRegionOcr();
   bindWriteEvents(state);
   bindPronunciationPanel(state);
