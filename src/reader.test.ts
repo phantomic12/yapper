@@ -457,3 +457,69 @@ describe('DocumentReaderSession — start at a sentence', () => {
     expect(queued.some(text => text.includes('Sentence number 5'))).toBe(true);
   });
 });
+
+// ─── Pronunciation overrides ──────────────────────────────────────
+
+describe('DocumentReaderSession — pronunciation overrides', () => {
+  const engineWithSpy = () => {
+    const enqueue = vi.fn((_text: string, _opts?: unknown) => ({
+      id: 'job-1',
+      status: 'pending',
+      url: undefined,
+    }));
+    const engine = {
+      enqueue,
+      cancel: vi.fn(),
+      on: vi.fn(() => () => {}),
+      getCurrentModel: vi.fn(() => ({ id: 'kitten-nano' })),
+    } as unknown as TTSEngine;
+    return { enqueue, engine };
+  };
+
+  it('hands the rewritten text to the engine and keeps the written text on screen', () => {
+    const { enqueue, engine } = engineWithSpy();
+    const session = new DocumentReaderSession(engine, 'Doctor Reyes arrived.', {
+      chunkSize: 200,
+      pronunciations: [{ word: 'Reyes', say: 'RAY-ess' }],
+    });
+    session.start(0);
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(String(enqueue.mock.calls[0][0])).toBe('Doctor RAY-ess arrived.');
+    // The chunk the page renders is untouched.
+    expect(session.getChunks()[0].text).toBe('Doctor Reyes arrived.');
+  });
+
+  it('records a word map only for chunks that changed', () => {
+    const { engine } = engineWithSpy();
+    const session = new DocumentReaderSession(engine, 'Doctor Reyes arrived.', {
+      chunkSize: 200,
+      pronunciations: [{ word: 'Reyes', say: 'RAY-ess' }],
+    });
+    session.start(0);
+
+    const chunk = session.getChunks()[0];
+    expect(chunk.wordMap).toEqual([0, 1, 2]);
+  });
+
+  it('leaves chunks alone when no rule matches', () => {
+    const { enqueue, engine } = engineWithSpy();
+    const session = new DocumentReaderSession(engine, 'Nothing to fix here.', {
+      chunkSize: 200,
+      pronunciations: [{ word: 'absent', say: 'x' }],
+    });
+    session.start(0);
+
+    expect(String(enqueue.mock.calls[0][0])).toBe('Nothing to fix here.');
+    expect(session.getChunks()[0].wordMap).toBeNull();
+  });
+
+  it('behaves exactly as before when no rules are configured', () => {
+    const { enqueue, engine } = engineWithSpy();
+    const session = new DocumentReaderSession(engine, 'Plain text only.', { chunkSize: 200 });
+    session.start(0);
+
+    expect(String(enqueue.mock.calls[0][0])).toBe('Plain text only.');
+    expect(session.getChunks()[0].wordMap).toBeNull();
+  });
+});

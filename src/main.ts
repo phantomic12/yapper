@@ -10,6 +10,9 @@ import {
   restoreJobsFromStore,
 } from './persistence';
 import { bindStreamPlayer } from './ui/stream-player';
+import { bindDictation } from './ui/dictation';
+import { bindPronunciationPanel } from './ui/pronunciation-panel';
+import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
 import { bindAdvancedToggle } from './advanced-mode';
 import { bindPageNav } from './ui/page-nav';
@@ -42,6 +45,10 @@ const state = createAppState();
 
 /** Apply persisted settings to fresh state before the first render. */
 function applySavedSettings(appState: AppState): string {
+  // Say-as rules are not part of PersistedSettings: they have their own
+  // store and their own editor, and a corrupt one there must not cost the
+  // reader their model choice.
+  appState.pronunciations = loadPronunciations();
   const saved = loadSettings();
   if (!saved) return '';
   if (saved.modelId) {
@@ -164,6 +171,8 @@ async function render(): Promise<void> {
   bindJobQueueEvents(state);
   bindDocumentEvents(state);
   bindWriteEvents(state);
+  bindPronunciationPanel(state);
+  bindDictation(state);
   bindStreamPlayer(state);
   installPersistence(state);
 
@@ -196,6 +205,12 @@ window.addEventListener('unhandledrejection', (event) => {
 window.addEventListener('beforeunload', () => {
   void disposeAllOcrEngines();
   disposeLlmOcrEngine();
+  // Release the ASR pipeline too, but only if dictation was ever used —
+  // the import is deferred so a session that never dictated never pays
+  // for loading the module.
+  void import('./engines/whisper-asr')
+    .then((module) => module.disposeAsr())
+    .catch(() => undefined);
 });
 
 // Register the app-shell service worker — in production builds only.

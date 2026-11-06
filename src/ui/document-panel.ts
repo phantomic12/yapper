@@ -1414,6 +1414,7 @@ export function bindDocumentEvents(state: AppState): void {
       onStateChange: renderReaderState,
       onHighlight: applyHighlight,
       atomicRanges,
+      pronunciations: state.pronunciations,
     });
     lastReadSessionId = state.readerSession.getSessionId();
     state.readerSession.start(fromSentenceIndex);
@@ -1681,6 +1682,7 @@ export function bindDocumentEvents(state: AppState): void {
       chunkSize: 300,
       lookahead: 2,
       speed: state.currentSpeed,
+      pronunciations: state.pronunciations,
       onStateChange: renderReaderState,
       onHighlight: info => {
         // The session reports sentence indexes into the script text; the

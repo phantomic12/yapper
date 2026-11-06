@@ -1676,6 +1676,69 @@ body {
   background: var(--bg-hover);
   border-color: var(--border-focus);
 }
+
+/* ─── Pronunciation editor ─────────────────────────────────────── */
+/* A list, not a form: a document needs a handful of fixes at once, and a
+   row-per-rule table would be more chrome than content. */
+.pron-editor {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.pron-editor__summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+.pron-editor__hint {
+  margin: 8px 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.pron-editor__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+}
+.pron-editor__list {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.pron-editor__list:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+.pron-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.pron-editor__status {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Dictation: the button label is the state readout, so the status span
+   only carries the longer sentence. */
+.dictate-status {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.dictate-status:empty {
+  display: none;
+}
 .document-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;

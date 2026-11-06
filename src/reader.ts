@@ -1,4 +1,5 @@
 import type { GenerationJob, TTSEngine } from './engine';
+import { applyPronunciations, toWrittenWordIndex, type PronunciationEntry } from './pronunciation';
 
 export interface ReaderSentence {
   /** Clean sentence text. */
@@ -31,6 +32,12 @@ export interface ReaderChunk {
   sentences: ReaderSentence[];
   /** Assigned generation job once queued. */
   job?: GenerationJob;
+  /**
+   * spoken-word index → written-word index, present only when a
+   * pronunciation rule fired for this chunk. Highlighting translates
+   * through it so the page lights up the word the reader is hearing.
+   */
+  wordMap?: number[] | null;
 }
 
 export interface ReaderState {
@@ -69,6 +76,12 @@ export interface ReaderOptions {
    * table rows, so a period inside a cell cannot split the row.
    */
   atomicRanges?: ReadonlyArray<readonly [number, number]>;
+  /**
+   * Say-as overrides applied to the text handed to the engine. The page
+   * keeps showing what the author wrote; only the voice hears the
+   * substitution. See `pronunciation.ts`.
+   */
+  pronunciations?: readonly PronunciationEntry[];
   /** Called whenever the reader state changes. */
   onStateChange?: (state: ReaderState) => void;
   /** Called continuously while audio plays with the current sentence/word. */
@@ -312,13 +325,28 @@ export class DocumentReaderSession {
     this.setState({ bufferedIndex: i - 1 });
   }
 
+  /**
+   * Swap the say-as rules. Already-queued chunks keep the text they were
+   * synthesized with; everything not yet sent to the engine uses the new
+   * set. Used by the pronunciation editor when rules are saved mid-read.
+   */
+  setPronunciations(entries: readonly PronunciationEntry[]): void {
+    this.options = { ...this.options, pronunciations: entries };
+  }
+
   /** Queue synthesis for chunks [0 .. targetIndex] that don't have a job yet. */
   private ensureBuffered(targetIndex: number) {
     const modelId = this.engine.getCurrentModel()?.id ?? '';
+    const pronunciations = this.options.pronunciations ?? [];
     for (let i = 0; i <= targetIndex && i < this.chunks.length; i++) {
       const chunk = this.chunks[i];
       if (chunk.job) continue;
-      chunk.job = this.engine.enqueue(chunk.text, {
+      // Rewrite for the voice only. `chunk.text` stays the written text so
+      // nothing on screen shifts; `wordMap` lets the highlight loop find its
+      // way back to the written word.
+      const spoken = applyPronunciations(chunk.text, pronunciations);
+      chunk.wordMap = spoken.wordMap;
+      chunk.job = this.engine.enqueue(spoken.text, {
         modelId,
         readerSessionId: this.sessionId,
         readerIndex: chunk.index,
@@ -403,12 +431,18 @@ export class DocumentReaderSession {
     const totalWords = chunk.sentences.reduce((sum, s) => sum + s.words.length, 0);
     if (totalWords === 0) return;
 
-    const targetWord = pickHighlightedWord(
-      totalWords,
+    // When a pronunciation rule rewrote this chunk, the engine's timings
+    // describe the spoken words, not the written ones. Search the spoken
+    // sequence, then map the hit back to the word that is actually on the
+    // page. Without a map this is the identity and costs nothing.
+    const spokenWords = chunk.wordMap?.length ?? totalWords;
+    const spokenIndex = pickHighlightedWord(
+      spokenWords,
       this.audio.currentTime,
       this.audio.duration,
       chunk.job?.wordTimings,
     );
+    const targetWord = chunk.wordMap ? toWrittenWordIndex(spokenIndex, chunk.wordMap) : spokenIndex;
 
     let remaining = targetWord;
     for (const sentence of chunk.sentences) {

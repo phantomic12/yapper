@@ -217,6 +217,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           <span id="stream-btn-label">Play</span>
         </button>
+        <!-- Dictation: push-to-talk, transcribed on device. Deliberately
+             plain text — the label doubles as the state readout. -->
+        <button class="stream-btn" id="dictate-btn" type="button" aria-pressed="false"
+                title="Speak instead of typing — transcribed in your browser">
+          Dictate
+        </button>
+        <span class="dictate-status" id="dictate-status" role="status" aria-live="polite"></span>
         <span class="queue-count" id="queue-count" hidden></span>
         <button class="clear-btn" data-advanced id="download-all-btn" disabled title="Download every finished clip as one WAV">Download all</button>
         <button class="clear-btn" data-advanced id="clear-btn" disabled>Clear finished</button>
@@ -310,6 +317,25 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <div class="document-progress" id="document-progress" role="status" aria-live="polite"></div>
             </div>
           </div>
+
+          <!-- Say-as rules: the voice hears the rewrite, the page keeps the
+               author's spelling. Lives outside document-options so it is
+               reachable whether or not a document is open. -->
+          <details class="pron-editor" id="pron-editor">
+            <summary class="pron-editor__summary">Pronunciation editor</summary>
+            <p class="pron-editor__hint">
+              One rule per line, <code>word = say</code>. Fixes names, acronyms and
+              heteronyms without changing the text on the page.
+            </p>
+            <textarea class="pron-editor__list" id="pron-list" rows="4" spellcheck="false"
+                      aria-label="Pronunciation rules, one per line as word = replacement"
+                      placeholder="Dr = Doctor&#10;SQL = sequel&#10;Reyes = RAY-ess"></textarea>
+            <div class="pron-editor__actions">
+              <button type="button" class="document-btn" id="pron-save-btn">Save rules</button>
+              <button type="button" class="document-btn" id="pron-clear-btn">Clear</button>
+              <span class="pron-editor__status" id="pron-status" role="status" aria-live="polite"></span>
+            </div>
+          </details>
 
           <!-- Session shelf and cross-document search; live before a file opens. -->
           <div class="docrecent" id="docrecent" hidden>

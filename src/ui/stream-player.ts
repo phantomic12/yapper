@@ -105,6 +105,7 @@ export function bindStreamPlayer(state: AppState): void {
       chunkSize: STREAM_CHUNK_CHARS,
       lookahead: 2,
       speed: state.currentSpeed,
+      pronunciations: state.pronunciations,
       onStateChange: renderState,
       onHighlight: (info) => {
         if (
