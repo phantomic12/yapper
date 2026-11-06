@@ -63,7 +63,7 @@ stays valid as long as the strings don't change.
 
 ## Related honest-UX behaviors
 
-- **Main-thread model warning** — selecting SpeechT5 or an MMS-TTS model shows
+- **Main-thread model warning** — selecting an MMS-TTS model shows
   a prominent amber warning (`#main-thread-warning`, AC2) that generation may
   briefly freeze the page, since those models run Transformers.js on the main
   thread instead of the Kokoro/Kitten worker path.

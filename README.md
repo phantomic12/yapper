@@ -7,9 +7,9 @@
 [![GPU smoke test](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml/badge.svg)](https://github.com/phantomic12/yapper/actions/workflows/gpu-smoke.yml)
 --->
 
-**A private document reader that reads aloud — with zero cloud.** Drop a PDF, DOCX, EPUB, or a dozen other formats into the reader; Yapper extracts the text on-device and reads it back with bookmarks, highlights, notes, and exports alongside. Kokoro, Kitten, SpeechT5, and MMS-TTS voices run entirely in your browser. No cloud processing. No data sent anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
+**A private document reader that reads aloud — with zero cloud.** Drop a PDF, DOCX, EPUB, or any of a dozen formats into the reader; Yapper extracts the text on-device and reads it back with bookmarks, highlights, notes, and exports alongside. Kokoro, Kitten, and MMS-TTS voices run entirely in your browser. Yapper does no cloud processing and sends none of your text anywhere. Models load once, then everything runs locally on your device via WebGPU (or WASM fallback).
 
-> **Note on performance:** Kokoro and Kitten are registered through `WorkerBackedEngine` (`src/engines/worker-bridge.ts` → `inference-worker.ts`), so load/generate for those models run off the main thread and the UI stays responsive while a job is in progress. SpeechT5 and MMS-TTS still run on the main thread via Transformers.js — selecting one shows an in-app warning that generation may briefly freeze the page, and a liveness indicator runs in the queue while any job generates. The non-blocking queue lets you stack multiple jobs either way.
+> **Note on performance:** Kokoro and Kitten are registered through `WorkerBackedEngine` (`src/engines/worker-bridge.ts` → `inference-worker.ts`), so load/generate for those models run off the main thread and the UI stays responsive while a job is in progress. MMS-TTS still runs on the main thread via Transformers.js — selecting one shows an in-app warning that generation may briefly freeze the page, and a liveness indicator runs in the queue while any job generates. The non-blocking queue lets you stack multiple jobs either way.
 
 ## Quick start
 
@@ -42,6 +42,8 @@
 
 ## Features
 
+**The platform**
+
 - **100% local inference** — text never leaves your browser
 - **WebGPU acceleration** — GPU-accelerated when available, WASM fallback otherwise
 - **A short path, and a long one** — the default view asks for a quality and a
@@ -49,24 +51,78 @@
   download sizes for anyone who wants them. Both views show the same truth, in
   different words
 - **Models**
-  - **Kokoro-82M** in q8f16 (~86 MB) and fp16 (~163 MB) — shared HF repo, different `modelFile` / dtype; 28 voices exposed in the picker
+  - **Kokoro-82M** in int8 (~88 MB) and fp16 (~156 MB) — shared HF repo, different `modelFile` / dtype; 28 voices exposed in the picker
   - **Kitten TTS Mini** (~78 MB) and **Nano** (~24 MB) — 8 voices, ONNX Runtime Web
-  - **SpeechT5** (~330 MB, fp32) — multi-voice via 512-dim xvector speaker embeddings
   - **MMS-TTS** (~50 MB each) — Meta's multilingual model for 9 languages (English, Spanish, French, German, Portuguese, Russian, Korean, Hindi, Arabic)
 - **Off-thread Kokoro / Kitten** — `WorkerBackedEngine` keeps the page usable during those generations
+- **Non-blocking queue** — stack multiple generations; finished clips persist in IndexedDB within a storage budget
 - **The reader is the app** — it opens first, and an open document takes the
   whole window under a top bar (voice, view, position, close). Structure,
   bookmarks, highlights, notes and exports stay one tap beneath the pages
-- **Read documents aloud** — drop PDF / DOCX / ODT / EPUB / TXT / MD; text is extracted locally and fed to the reader session + TTS queue
-- **Study along the way** — bookmarks, colour highlights with notes, reading
-  position memory, cross-document search, and notes/audiobook export
-- **Optional PDF OCR** — toggle OCR for scanned/layout pages (Tesseract.js). Self-hosted worker, WASM core, and English traineddata live under `public/lib/tesseract/`
-- **Non-blocking queue** — stack multiple generations
-- **Voice selection** — built-in voices per model, or a custom xvector for SpeechT5
-- **Keyboard accessible controls** — skip links, focus indicators, ARIA live regions
-- **Models from Hugging Face** — loaded on demand, cached by the browser
-- **WAV download** — save generated audio as standard WAV files
-- **Dark mode UI** — minimal, fast, no frameworks
+
+**Reading**
+
+- **Read aloud** with a loaded model, or **Quick read** with the browser's own voice — before any model has downloaded
+- **Pause, resume, stop** — the reading position is remembered per file
+- **Silent reading** — the highlight advances at a reading pace with no synthesis and no audio
+- **Reading unit** — word, line, sentence, or paragraph; skip forward and back by that unit
+- **Dual highlighting** — the reading unit in one colour, the current word in another
+- **Per-section voices** — give a paragraph or a selection a different voice; the page keeps its words
+- **Pronunciation editor** — say-as rules (`word = say`) for names, acronyms and heteronyms, applied to the voice only
+- **Reading themes** — light / sepia / night, serif / sans / mono, and a type-size control for reflowable documents or zoom for PDF pages
+- **Keyboard shortcuts** with an in-app cheat sheet; single-key shortcuts can be switched off
+
+**Documents**
+
+- **Twelve formats** — PDF, DOCX, DOC, ODT, RTF, EPUB, XLSX, PPTX, CSV, HTML, TXT, MD (details below)
+- **Real pages** — PDFs render from the file with page navigation, zoom and search; reflowable formats are flowed onto page sheets
+- **OCR for scans** — Tesseract (fast, small WASM core) or Florence-2 (slower, larger download), chosen per document
+- **OCR cleanup** — find/replace rules for recurring scanner mistakes, whole-word or infix, importable and exportable, plus repeating header/footer suppression
+- **Select-to-read** — drag a box over part of a page and hear only that
+- **Read a web page** by URL — the site has to allow it, and a refusal is reported as an error rather than a blank document
+- **Recent documents** — a shelf of what was opened, showing how far each was read, plus search across every document opened this session
+- **Document structure** — headings, paragraphs, lists, quotes, code and tables classified and listed, with an outline where the format has sections
+- **Document search** — case-sensitive, whole-word and regex modes, with highlight-all
+- **Document restrictions** — password-gated per-file limits on editing, copying, audio export, voice changes and opening another document; reading aloud is never restricted
+
+**Study tools**
+
+- **Bookmarks and colour highlights**, both with notes, both stored per file
+- **Three-column notes** — an editable margin rail: the line from the page, and your note beside it
+- **Self-test** — cover the notes or the cues, then reveal one card at a time
+- **Prompt notes** — pin a question to a word or paragraph; a marker in the text opens the answer
+- **Voice notes** — record, play and delete a spoken note at a spot (2 minutes max)
+- **Test answers** — answer at a question spot and export a numbered test sheet with the question context
+- **Word list and vocabulary study guide** — uncommon words ranked from the document, then a Markdown guide with syllables, senses and the sentence each came from
+- **Review notes aloud** — highlights and bookmarks read back in document order, painted as they are spoken
+- **Reading statistics** — position, word count and estimated reading time in the status bar
+
+**Writing support**
+
+- **A talking editor** — word prediction from a frequency list (Tab accepts the first), spell check with click-to-apply suggestions, speak-while-typing, and read-the-draft
+- **Dictation** — on-device Whisper Tiny (41 MB, WASM) in Studio, push-to-talk; the Write page uses the browser's own recogniser
+- **Drafts autosave** locally
+
+**Export**
+
+- **Documents** as Markdown, HTML or plain text; **notes** as Markdown
+- **Audio** as a single WAV clip, every finished clip as one WAV, or an **audiobook zip**: merged WAV, WebVTT captions, a self-contained karaoke page, and a chapter track where the document has sections
+
+**Accessibility and interface**
+
+- **Dark mode** — light, dark, or follow the system
+- **Keyboard accessible controls** — skip link, visible focus indicators, ARIA live regions on async status
+- **Reduced motion** honoured
+- **Blackout / whiteout** the screen for focus
+
+See [docs/reading-capabilities.md](docs/reading-capabilities.md) for the full capability matrix, including what is deliberately not offered and why.
+
+## Known limitations
+
+- **Dictated email addresses and URLs need checking.** The on-device model is Whisper Tiny, and it merges spelled-out punctuation: "jordan dot lee at example dot com" can come out as `jordan.lea.example.com`. Read those fields back before sending. A larger checkpoint fixes it at roughly three times the download.
+- **MP3 is not offered.** Every maintained in-browser MP3 encoder available to this project is a copyleft LAME or Shine port, and Yapper takes no copyleft dependency. Audio exports as WAV, so an audiobook is larger than an MP3 book would be.
+- **Document restrictions are per file, not per content.** A restriction is keyed to the file's name, size and last-modified time; renaming or copying the file produces a different identity, and the copy is not restricted. It is a guard against casual circumvention, not a security boundary — the reader controls the browser and can remove the stored record.
+- **The Write page's Dictate button is the browser's recogniser, not the on-device model.** On some browsers that audio goes to the browser vendor's service; the button's tooltip says so. Everything Yapper itself does with the resulting text stays in the tab. On-device dictation lives on the Studio page.
 
 ## Supported document formats
 
@@ -114,11 +170,12 @@ spinner.
 
 ## Tech Stack
 
-- [Transformers.js](https://huggingface.co/docs/transformers.js) — SpeechT5 + MMS-TTS in the browser
+- [Transformers.js](https://huggingface.co/docs/transformers.js) — MMS-TTS, Florence-2 OCR, and Whisper dictation in the browser
 - [ONNX Runtime Web](https://onnxruntime.ai) — WebGPU/WASM backend (Kitten; also used under Kokoro)
-- [kokoro-js](https://www.npmjs.com/package/kokoro-js) — Kokoro-82M integration
-- [pdfjs-dist](https://github.com/mozilla/pdf.js), [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip) — document parsing
+- Kokoro-82M runs on the app's own Transformers.js pipeline (phonemize → tokenize → StyleTTS2), not a wrapper package
+- [pdfjs-dist](https://github.com/mozilla/pdf.js), [epubjs](https://github.com/futurepress/epub.js/), [jszip](https://github.com/Stuk/jszip), [fflate](https://github.com/101arrowz/fflate) — document parsing and archive building
 - [tesseract.js](https://github.com/naptha/tesseract.js/) — client-side OCR (assets under `public/lib/tesseract/`)
+- [hypher](https://github.com/bramstein/hypher) + `hyphenation.en-us` — syllabification
 - [Vite](https://vitejs.dev) — build tooling
 - TypeScript, vanilla CSS — no framework overhead
 
@@ -183,7 +240,7 @@ npm run build
 
 ## Document reading
 
-1. Drop a file on the upload zone (or click to browse). Max 25 MB in the UI.
+1. Drop a file on the drop area (or click to browse). Max 25 MB in the UI.
 2. Optionally enable **Use OCR for scanned PDFs** before extract.
 3. Review extracted text in the reader view.
 4. **Read document** queues chunks through the loaded model; the active sentence is highlighted as audio plays.
