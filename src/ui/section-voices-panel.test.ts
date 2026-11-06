@@ -2,7 +2,7 @@
  * The section-voice panel, exercised through the real markup and the real
  * document bindings.
  *
- * The pure splitter is proven in `voice-tags.test.ts`; this file proves the
+ * The pure splitter is proven in `section-voices.test.ts`; this file proves the
  * affordance reaches it — that "Tag paragraph" really tags the paragraph at
  * the cursor, that a selection really becomes a range, that Clear all really
  * returns the document to one voice, and that none of it offers a voice the
@@ -12,10 +12,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createAppState } from '../app-state';
 import type { TTSEngine } from '../engine';
-import { documentVoiceTagsKey, loadVoiceTags } from '../voice-tags';
+import { documentSectionVoicesKey, loadSectionVoices } from '../section-voices';
 import { buildAppMarkup } from './layout';
 import { bindDocumentEvents } from './document-panel';
-import { bindVoiceTags, setVoiceTagDocument } from './voice-tags-panel';
+import { bindSectionVoices, setSectionVoiceDocument } from './section-voices-panel';
 
 const VOICES = [
   { id: 'af_heart', name: 'Heart' },
@@ -43,7 +43,7 @@ function mount(options: { engine?: TTSEngine } = {}) {
   state.engine = options.engine ?? null;
   state.selectedVoiceId = 'af_heart';
   bindDocumentEvents(state);
-  bindVoiceTags(state);
+  bindSectionVoices(state);
   (document.getElementById('document-sample-btn') as HTMLButtonElement).click();
   return state;
 }
@@ -52,10 +52,10 @@ const button = (selector: string): HTMLButtonElement =>
   document.querySelector<HTMLButtonElement>(selector)!;
 
 function tagListItems(): HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>('#voice-tag-list [data-voice-tag-id]'));
+  return Array.from(document.querySelectorAll<HTMLElement>('#section-voice-list [data-section-voice-id]'));
 }
 
-describe('voice tags panel', () => {
+describe('section voices panel', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.useFakeTimers();
@@ -67,19 +67,19 @@ describe('voice tags panel', () => {
 
   it('disables tagging when no model is loaded', () => {
     mount();
-    const select = document.getElementById('voice-tag-voice') as HTMLSelectElement;
+    const select = document.getElementById('section-voice-picker') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
-    expect(button('#voice-tag-paragraph-btn').disabled).toBe(true);
-    expect(button('#voice-tag-selection-btn').disabled).toBe(true);
-    expect(button('#voice-tag-clear-btn').disabled).toBe(true);
+    expect(button('#section-voice-paragraph-btn').disabled).toBe(true);
+    expect(button('#section-voice-selection-btn').disabled).toBe(true);
+    expect(button('#section-voice-clear-btn').disabled).toBe(true);
   });
 
   it('offers the active model’s voices', () => {
     mount({ engine: fakeEngine() });
-    const select = document.getElementById('voice-tag-voice') as HTMLSelectElement;
+    const select = document.getElementById('section-voice-picker') as HTMLSelectElement;
     expect(Array.from(select.options).map(option => option.textContent)).toEqual(['Heart', 'Adam']);
     expect(select.disabled).toBe(false);
-    expect(button('#voice-tag-paragraph-btn').disabled).toBe(false);
+    expect(button('#section-voice-paragraph-btn').disabled).toBe(false);
   });
 
   it('tags the paragraph at the reading cursor', () => {
@@ -87,12 +87,12 @@ describe('voice tags panel', () => {
     button('#silent-read-btn').click();
     expect(state.readerSession).not.toBeNull();
 
-    const select = document.getElementById('voice-tag-voice') as HTMLSelectElement;
+    const select = document.getElementById('section-voice-picker') as HTMLSelectElement;
     select.value = 'am_adam';
-    button('#voice-tag-paragraph-btn').click();
+    button('#section-voice-paragraph-btn').click();
 
     expect(tagListItems()).toHaveLength(1);
-    expect(document.getElementById('voice-tag-status')?.textContent).toContain('Adam');
+    expect(document.getElementById('section-voice-status')?.textContent).toContain('Adam');
     // The live session was re-planned: some chunk now speaks in Adam's voice.
     expect(state.readerSession!.getChunks().some(chunk => chunk.voiceId === 'am_adam')).toBe(true);
     // The page text is untouched — the view still holds the same words.
@@ -112,9 +112,9 @@ describe('voice tags panel', () => {
     selection.removeAllRanges();
     selection.addRange(range);
 
-    const select = document.getElementById('voice-tag-voice') as HTMLSelectElement;
+    const select = document.getElementById('section-voice-picker') as HTMLSelectElement;
     select.value = 'am_adam';
-    button('#voice-tag-selection-btn').click();
+    button('#section-voice-selection-btn').click();
 
     expect(tagListItems()).toHaveLength(1);
     const tagged = state.readerSession!.getChunks().find(chunk => chunk.voiceId === 'am_adam');
@@ -126,31 +126,31 @@ describe('voice tags panel', () => {
     mount({ engine: fakeEngine() });
     button('#silent-read-btn').click();
     window.getSelection()?.removeAllRanges();
-    button('#voice-tag-selection-btn').click();
-    expect(document.getElementById('voice-tag-status')?.textContent).toMatch(/select some text/i);
+    button('#section-voice-selection-btn').click();
+    expect(document.getElementById('section-voice-status')?.textContent).toMatch(/select some text/i);
     expect(tagListItems()).toHaveLength(0);
   });
 
   it('clears every tag and returns the document to one voice', () => {
     const state = mount({ engine: fakeEngine() });
     button('#silent-read-btn').click();
-    button('#voice-tag-paragraph-btn').click();
+    button('#section-voice-paragraph-btn').click();
     expect(tagListItems()).toHaveLength(1);
 
-    button('#voice-tag-clear-btn').click();
+    button('#section-voice-clear-btn').click();
 
     expect(tagListItems()).toHaveLength(0);
     expect(state.readerSession!.getChunks().every(chunk => chunk.voiceId === undefined)).toBe(true);
-    expect(document.getElementById('voice-tag-status')?.textContent).toMatch(/cleared/i);
+    expect(document.getElementById('section-voice-status')?.textContent).toMatch(/cleared/i);
   });
 
   it('removes one tag from the list', () => {
     mount({ engine: fakeEngine() });
     button('#silent-read-btn').click();
-    button('#voice-tag-paragraph-btn').click();
+    button('#section-voice-paragraph-btn').click();
     expect(tagListItems()).toHaveLength(1);
 
-    const remove = document.querySelector<HTMLButtonElement>('[data-voice-tag-remove]')!;
+    const remove = document.querySelector<HTMLButtonElement>('[data-section-voice-remove]')!;
     remove.click();
 
     expect(tagListItems()).toHaveLength(0);
@@ -162,14 +162,14 @@ describe('voice tags panel', () => {
     // Swap in a file identity and tag; this is the same path an uploaded
     // document takes through `showDocument`.
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
-    setVoiceTagDocument(file);
-    button('#voice-tag-paragraph-btn').click();
+    setSectionVoiceDocument(file);
+    button('#section-voice-paragraph-btn').click();
 
-    expect(loadVoiceTags(documentVoiceTagsKey(file))).toHaveLength(1);
+    expect(loadSectionVoices(documentSectionVoicesKey(file))).toHaveLength(1);
   });
 
   it('does nothing when the markup is absent', () => {
     document.body.innerHTML = '';
-    expect(() => bindVoiceTags(createAppState())).not.toThrow();
+    expect(() => bindSectionVoices(createAppState())).not.toThrow();
   });
 });

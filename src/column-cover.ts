@@ -1,5 +1,5 @@
 /**
- * Column-note self-test: the state machine behind covering a column of notes.
+ * Three-column-note self-test: the state machine behind covering a column of notes.
  *
  * The rail already holds the reader's notes and the document text they hang
  * off. Covering one of those two columns turns the rail into a quiz card:
@@ -86,7 +86,7 @@ export function revealedCount(state: CoverState): number {
 export function coverStatusText(state: CoverState, ids: readonly string[]): string {
   if (!state.active) return '';
   if (ids.length === 0) {
-    return 'Self-test is on, but there are no column notes to cover yet.';
+    return 'Self-test is on, but there are no three-column notes to cover yet.';
   }
   const revealed = ids.filter(id => state.revealed.includes(id)).length;
   const covered = ids.length - revealed;

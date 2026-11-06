@@ -1,5 +1,5 @@
 /**
- * Per-section voice tagging: the UI half of `voice-tags.ts`.
+ * Per-section voices: the UI half of `section-voices.ts`.
  *
  * Three affordances, because those are the three things a reader actually
  * wants to say: "this paragraph is somebody else", "this passage I selected is
@@ -18,20 +18,20 @@
 import type { AppState } from '../app-state';
 import { parseOffsetAttr } from '../document-html';
 import {
-  applyVoiceTag,
-  documentVoiceTagsKey,
-  loadVoiceTags,
-  normalizeVoiceTags,
+  applySectionVoice,
+  documentSectionVoicesKey,
+  loadSectionVoices,
+  normalizeSectionVoices,
   paragraphRangeAt,
-  removeVoiceTag,
-  saveVoiceTags,
-  type VoiceTag,
-} from '../voice-tags';
+  removeSectionVoice,
+  saveSectionVoices,
+  type SectionVoice,
+} from '../section-voices';
 
 /** The document the panel is tagging, or null when nothing is open. */
 let documentFile: File | null = null;
 let documentOpen = false;
-let tags: VoiceTag[] = [];
+let tags: SectionVoice[] = [];
 let boundState: AppState | null = null;
 
 /**
@@ -47,18 +47,18 @@ const MEMORY_DOCUMENT_KEY = 'yapper.document-voices.v1:memory';
  * `showDocument`, which is the one place that knows both the File and the
  * extracted text.
  */
-export function setVoiceTagDocument(
+export function setSectionVoiceDocument(
   file: File | null,
   open: boolean = file !== null,
 ): void {
   documentFile = file;
   documentOpen = open;
-  tags = file ? loadVoiceTags(documentVoiceTagsKey(file)) : [];
+  tags = file ? loadSectionVoices(documentSectionVoicesKey(file)) : [];
   if (boundState) render(boundState);
 }
 
 /** The tag list for the open document, in document order. */
-export function currentVoiceTags(): VoiceTag[] {
+export function currentSectionVoices(): SectionVoice[] {
   return tags.map(tag => ({ ...tag }));
 }
 
@@ -66,19 +66,19 @@ export function currentVoiceTags(): VoiceTag[] {
  * Identity of the open document, handed to the reader so the live session can
  * be told apart from a review script built from the same text.
  */
-export function voiceTagDocumentId(): string | null {
+export function sectionVoiceDocumentId(): string | null {
   if (!documentOpen) return null;
-  return documentFile ? documentVoiceTagsKey(documentFile) : MEMORY_DOCUMENT_KEY;
+  return documentFile ? documentSectionVoicesKey(documentFile) : MEMORY_DOCUMENT_KEY;
 }
 
 /** Wire the panel. Safe to call on a page that lacks the markup. */
-export function bindVoiceTags(state: AppState): void {
-  const container = document.getElementById('voice-tags');
-  const select = document.getElementById('voice-tag-voice') as HTMLSelectElement | null;
-  const paragraphBtn = document.getElementById('voice-tag-paragraph-btn');
-  const selectionBtn = document.getElementById('voice-tag-selection-btn');
-  const clearBtn = document.getElementById('voice-tag-clear-btn');
-  const list = document.getElementById('voice-tag-list');
+export function bindSectionVoices(state: AppState): void {
+  const container = document.getElementById('section-voices');
+  const select = document.getElementById('section-voice-picker') as HTMLSelectElement | null;
+  const paragraphBtn = document.getElementById('section-voice-paragraph-btn');
+  const selectionBtn = document.getElementById('section-voice-selection-btn');
+  const clearBtn = document.getElementById('section-voice-clear-btn');
+  const list = document.getElementById('section-voice-list');
   if (!container || !select || !paragraphBtn || !selectionBtn || !clearBtn || !list) return;
 
   boundState = state;
@@ -122,10 +122,10 @@ export function bindVoiceTags(state: AppState): void {
   });
 
   list.addEventListener('click', event => {
-    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-voice-tag-remove]');
+    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-section-voice-remove]');
     if (!button) return;
-    const id = button.dataset.voiceTagRemove ?? '';
-    commit(state, removeVoiceTag(tags, id), 'Section voice removed.');
+    const id = button.dataset.sectionVoiceRemove ?? '';
+    commit(state, removeSectionVoice(tags, id), 'Section voice removed.');
   });
 
   // The model (and therefore the voice list) can change while a document is
@@ -135,13 +135,13 @@ export function bindVoiceTags(state: AppState): void {
 }
 
 function addTag(state: AppState, range: { start: number; end: number }, kind: 'paragraph' | 'selection'): void {
-  const select = document.getElementById('voice-tag-voice') as HTMLSelectElement | null;
+  const select = document.getElementById('section-voice-picker') as HTMLSelectElement | null;
   const voiceId = select?.value ?? '';
   if (!voiceId) {
     setStatus('Load a model with more than one voice (Kokoro or Kitten) to tag a section.');
     return;
   }
-  const tag: VoiceTag = {
+  const tag: SectionVoice = {
     id: `voice-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     start: range.start,
     end: range.end,
@@ -151,7 +151,7 @@ function addTag(state: AppState, range: { start: number; end: number }, kind: 'p
   const quote = quoteFor(state, range);
   commit(
     state,
-    applyVoiceTag(tags, tag),
+    applySectionVoice(tags, tag),
     `${kind === 'paragraph' ? 'Paragraph' : 'Selection'} tagged${quote ? `: “${quote}”` : ''} — reads as ${name}.`,
   );
 }
@@ -164,24 +164,24 @@ function addTag(state: AppState, range: { start: number; end: number }, kind: 'p
  * saying "saved" alone would be the silent lie this feature is meant to
  * avoid.
  */
-function commit(state: AppState, next: readonly VoiceTag[], message: string): void {
-  tags = normalizeVoiceTags(next);
+function commit(state: AppState, next: readonly SectionVoice[], message: string): void {
+  tags = normalizeSectionVoices(next);
   // A file-backed document is persisted; the sample lives for the session.
-  if (documentFile) saveVoiceTags(documentVoiceTagsKey(documentFile), tags);
+  if (documentFile) saveSectionVoices(documentSectionVoicesKey(documentFile), tags);
   const session = state.readerSession;
-  const live = session && session.getDocumentId() === voiceTagDocumentId() ? session : null;
-  if (live) live.applyVoiceTags(tags);
+  const live = session && session.getDocumentId() === sectionVoiceDocumentId() ? session : null;
+  if (live) live.applySectionVoices(tags);
   render(state);
-  setStatus(live?.getVoiceTagsError() ?? message);
+  setStatus(live?.getSectionVoicesError() ?? message);
 }
 
 function render(state: AppState): void {
-  const select = document.getElementById('voice-tag-voice') as HTMLSelectElement | null;
-  const container = document.getElementById('voice-tags');
-  const list = document.getElementById('voice-tag-list');
-  const clearBtn = document.getElementById('voice-tag-clear-btn');
-  const paragraphBtn = document.getElementById('voice-tag-paragraph-btn');
-  const selectionBtn = document.getElementById('voice-tag-selection-btn');
+  const select = document.getElementById('section-voice-picker') as HTMLSelectElement | null;
+  const container = document.getElementById('section-voices');
+  const list = document.getElementById('section-voice-list');
+  const clearBtn = document.getElementById('section-voice-clear-btn');
+  const paragraphBtn = document.getElementById('section-voice-paragraph-btn');
+  const selectionBtn = document.getElementById('section-voice-selection-btn');
   if (!select || !container || !list || !clearBtn || !paragraphBtn || !selectionBtn) return;
 
   populateVoices(state, select);
@@ -190,13 +190,13 @@ function render(state: AppState): void {
   paragraphBtn.toggleAttribute('disabled', !hasVoices || !hasDocument);
   selectionBtn.toggleAttribute('disabled', !hasVoices || !hasDocument);
   clearBtn.toggleAttribute('disabled', !tags.length);
-  container.dataset.voiceTags = String(tags.length);
+  container.dataset.sectionVoices = String(tags.length);
 
   list.replaceChildren();
   for (const tag of tags) {
     const item = document.createElement('li');
     item.className = 'docbookmarks__item';
-    item.dataset.voiceTagId = tag.id;
+    item.dataset.sectionVoiceId = tag.id;
 
     const text = document.createElement('div');
     text.className = 'docbookmarks__text';
@@ -211,7 +211,7 @@ function render(state: AppState): void {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'document-btn';
-    remove.dataset.voiceTagRemove = tag.id;
+    remove.dataset.sectionVoiceRemove = tag.id;
     remove.textContent = 'Remove';
     actions.appendChild(remove);
 
@@ -221,7 +221,7 @@ function render(state: AppState): void {
 
   if (!tags.length) {
     const empty = document.createElement('li');
-    empty.className = 'voice-tags__empty';
+    empty.className = 'section-voices__empty';
     empty.textContent = hasDocument
       ? 'No section voices yet — the whole document reads in the selected voice.'
       : 'Open a document to give one of its sections a different voice.';
@@ -341,6 +341,6 @@ function textOffsetIn(root: Element, node: Node, nodeOffset: number): number | n
 }
 
 function setStatus(message: string): void {
-  const status = document.getElementById('voice-tag-status');
+  const status = document.getElementById('section-voice-status');
   if (status) status.textContent = message;
 }

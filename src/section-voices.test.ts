@@ -11,22 +11,22 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import {
-  applyVoiceTag,
+  applySectionVoice,
   chunkWordCount,
   chunkWordPosition,
-  documentVoiceTagsKey,
-  loadVoiceTags,
-  normalizeVoiceTags,
+  documentSectionVoicesKey,
+  loadSectionVoices,
+  normalizeSectionVoices,
   paragraphRangeAt,
-  removeVoiceTag,
-  saveVoiceTags,
+  removeSectionVoice,
+  saveSectionVoices,
   voiceAt,
-  type VoiceTag,
-} from './voice-tags';
+  type SectionVoice,
+} from './section-voices';
 import { DocumentReaderSession, prepareReaderData, type ReaderChunk } from './reader';
 import type { TTSEngine } from './engine';
 
-const tag = (start: number, end: number, voiceId = 'af_bella', id = `t-${start}`): VoiceTag =>
+const tag = (start: number, end: number, voiceId = 'af_bella', id = `t-${start}`): SectionVoice =>
   ({ id, start, end, voiceId });
 
 /** Every word a chunk speaks, in order. */
@@ -60,7 +60,7 @@ describe('voiceAt', () => {
   });
 });
 
-describe('normalizeVoiceTags', () => {
+describe('normalizeSectionVoices', () => {
   it('drops ranges that cannot describe text', () => {
     const tags = [
       tag(10, 10), // empty
@@ -69,26 +69,26 @@ describe('normalizeVoiceTags', () => {
       { ...tag(1, 5), voiceId: '  ' }, // no voice
       tag(0, 5, 'ok'),
     ];
-    expect(normalizeVoiceTags(tags).map(t => t.voiceId)).toEqual(['ok']);
+    expect(normalizeSectionVoices(tags).map(t => t.voiceId)).toEqual(['ok']);
   });
 
   it('orders by position in the document', () => {
-    const ordered = normalizeVoiceTags([tag(50, 60), tag(5, 10), tag(20, 30)]);
+    const ordered = normalizeSectionVoices([tag(50, 60), tag(5, 10), tag(20, 30)]);
     expect(ordered.map(t => t.start)).toEqual([5, 20, 50]);
   });
 
   it('does not mutate the input', () => {
     const original = tag(5, 10);
     const input = [original];
-    normalizeVoiceTags(input);
+    normalizeSectionVoices(input);
     expect(input[0]).toBe(original);
     expect(original.start).toBe(5);
   });
 });
 
-describe('applyVoiceTag', () => {
+describe('applySectionVoice', () => {
   it('trims an older tag that overlaps the new one', () => {
-    const result = applyVoiceTag([tag(0, 100, 'old', 'old')], tag(40, 50, 'new', 'new'));
+    const result = applySectionVoice([tag(0, 100, 'old', 'old')], tag(40, 50, 'new', 'new'));
     expect(result.map(t => [t.start, t.end, t.voiceId])).toEqual([
       [0, 40, 'old'],
       [40, 50, 'new'],
@@ -97,20 +97,20 @@ describe('applyVoiceTag', () => {
   });
 
   it('drops an older tag entirely inside the new range', () => {
-    const result = applyVoiceTag([tag(20, 30, 'old', 'old')], tag(0, 100, 'new', 'new'));
+    const result = applySectionVoice([tag(20, 30, 'old', 'old')], tag(0, 100, 'new', 'new'));
     expect(result).toHaveLength(1);
     expect(result[0].voiceId).toBe('new');
   });
 
   it('leaves disjoint tags alone', () => {
-    const result = applyVoiceTag([tag(0, 10, 'a', 'a')], tag(20, 30, 'b', 'b'));
+    const result = applySectionVoice([tag(0, 10, 'a', 'a')], tag(20, 30, 'b', 'b'));
     expect(result).toHaveLength(2);
   });
 });
 
-describe('removeVoiceTag', () => {
+describe('removeSectionVoice', () => {
   it('removes exactly one tag', () => {
-    const result = removeVoiceTag([tag(0, 10, 'a', 'a'), tag(20, 30, 'b', 'b')], 'a');
+    const result = removeSectionVoice([tag(0, 10, 'a', 'a'), tag(20, 30, 'b', 'b')], 'a');
     expect(result.map(t => t.id)).toEqual(['b']);
   });
 });
@@ -138,7 +138,7 @@ const ONE_CHUNK = 'One two three. Four five six. Seven eight nine.';
 //    Seven 30, eight 36, nine. 42 — "Four" begins the second sentence.
 const MATCHING_WORDS = ['One', 'two', 'three.', 'Four', 'five', 'six.', 'Seven', 'eight', 'nine.'];
 
-function chunksOf(text: string, size = 300, tags: VoiceTag[] = []): ReaderChunk[] {
+function chunksOf(text: string, size = 300, tags: SectionVoice[] = []): ReaderChunk[] {
   return prepareReaderData(text, size, undefined, tags).chunks;
 }
 
@@ -358,7 +358,7 @@ describe('DocumentReaderSession — section voices', () => {
     const { enqueue, engine } = engineWithVoices();
     const session = new DocumentReaderSession(engine as unknown as TTSEngine, ONE_CHUNK, {
       chunkSize: 300,
-      voiceTags: [tag(15, 47, 'am_adam')],
+      sectionVoices: [tag(15, 47, 'am_adam')],
     });
     session.start(0);
 
@@ -374,7 +374,7 @@ describe('DocumentReaderSession — section voices', () => {
     const session = new DocumentReaderSession(engine as unknown as TTSEngine, ONE_CHUNK, {
       chunkSize: 300,
       voiceId: 'af_heart',
-      voiceTags: [tag(15, 47, 'am_adam')],
+      sectionVoices: [tag(15, 47, 'am_adam')],
     });
     session.start(0);
     expect(enqueue.mock.calls[0][1]?.voiceId).toBe('af_heart');
@@ -386,13 +386,13 @@ describe('DocumentReaderSession — section voices', () => {
     const { enqueue, engine } = engineWithVoices([]);
     const session = new DocumentReaderSession(engine as unknown as TTSEngine, ONE_CHUNK, {
       chunkSize: 300,
-      voiceTags: [tag(15, 47, 'am_adam')],
+      sectionVoices: [tag(15, 47, 'am_adam')],
     });
     session.start(0);
 
     expect(session.getState().status).toBe('paused');
     expect(session.getState().error).toMatch(/single fixed voice/i);
-    expect(session.getVoiceTagsError()).toMatch(/single fixed voice/i);
+    expect(session.getSectionVoicesError()).toMatch(/single fixed voice/i);
     // Nothing was queued in the wrong voice.
     expect(enqueue).not.toHaveBeenCalled();
   });
@@ -401,7 +401,7 @@ describe('DocumentReaderSession — section voices', () => {
     const { engine } = engineWithVoices();
     const session = new DocumentReaderSession(engine as unknown as TTSEngine, ONE_CHUNK, {
       chunkSize: 300,
-      voiceTags: [tag(15, 47, 'not-a-voice')],
+      sectionVoices: [tag(15, 47, 'not-a-voice')],
     });
     session.start(0);
     expect(session.getState().status).toBe('paused');
@@ -411,11 +411,11 @@ describe('DocumentReaderSession — section voices', () => {
   it('does not block silent reading, which has no voice to honour', () => {
     const session = new DocumentReaderSession(null, ONE_CHUNK, {
       silent: true,
-      voiceTags: [tag(15, 47, 'am_adam')],
+      sectionVoices: [tag(15, 47, 'am_adam')],
     });
     session.start(0);
     expect(session.getState().status).toBe('playing');
-    expect(session.getVoiceTagsError()).toBeNull();
+    expect(session.getSectionVoicesError()).toBeNull();
   });
 
   it('re-plans mid-session without losing the position', () => {
@@ -427,7 +427,7 @@ describe('DocumentReaderSession — section voices', () => {
     expect(session.getChunks()).toHaveLength(1);
 
     const before = session.getPosition();
-    session.applyVoiceTags([tag(15, 47, 'am_adam')]);
+    session.applySectionVoices([tag(15, 47, 'am_adam')]);
 
     expect(session.getChunks()).toHaveLength(2);
     expect(session.getState().totalChunks).toBe(2);
@@ -441,20 +441,20 @@ describe('DocumentReaderSession — section voices', () => {
 
 // ─── Storage ────────────────────────────────────────────────────────
 
-describe('voice tag storage', () => {
+describe('section voice storage', () => {
   it('keys by file identity, never content', () => {
     const file = { name: 'A Tale.pdf', size: 42, lastModified: 1_700_000_000 };
-    const key = documentVoiceTagsKey(file);
+    const key = documentSectionVoicesKey(file);
     expect(key).toContain(encodeURIComponent('A Tale.pdf'));
     expect(key).toContain(':42:1700000000');
-    expect(documentVoiceTagsKey({ ...file, size: 43 })).not.toBe(key);
+    expect(documentSectionVoicesKey({ ...file, size: 43 })).not.toBe(key);
   });
 
   it('round-trips tags through localStorage', () => {
     localStorage.clear();
-    const key = documentVoiceTagsKey({ name: 'x.txt', size: 1, lastModified: 2 });
-    saveVoiceTags(key, [tag(5, 10)]);
-    expect(loadVoiceTags(key)).toEqual([tag(5, 10)]);
+    const key = documentSectionVoicesKey({ name: 'x.txt', size: 1, lastModified: 2 });
+    saveSectionVoices(key, [tag(5, 10)]);
+    expect(loadSectionVoices(key)).toEqual([tag(5, 10)]);
   });
 
   it('drops corrupt saved entries instead of trusting them', () => {
@@ -466,12 +466,12 @@ describe('voice tag storage', () => {
       { start: 1, end: 4 },
       { start: 1, end: 4, voiceId: 'ok' },
     ]));
-    expect(loadVoiceTags(key).map(t => t.voiceId)).toEqual(['ok']);
+    expect(loadSectionVoices(key).map(t => t.voiceId)).toEqual(['ok']);
   });
 
   it('returns nothing when the store is unreadable', () => {
-    expect(loadVoiceTags('yapper.document-voices.v1:missing')).toEqual([]);
+    expect(loadSectionVoices('yapper.document-voices.v1:missing')).toEqual([]);
     localStorage.setItem('yapper.document-voices.v1:garbage', '{not json');
-    expect(loadVoiceTags('yapper.document-voices.v1:garbage')).toEqual([]);
+    expect(loadSectionVoices('yapper.document-voices.v1:garbage')).toEqual([]);
   });
 });

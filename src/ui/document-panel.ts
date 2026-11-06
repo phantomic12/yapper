@@ -34,15 +34,15 @@ import {
   documentWordListKey,
   loadDocumentWordList,
   saveDocumentWordList,
-  documentColumnNotesKey,
-  loadDocumentColumnNotes,
-  saveDocumentColumnNotes,
+  documentThreeColumnNotesKey,
+  loadDocumentThreeColumnNotes,
+  saveDocumentThreeColumnNotes,
   documentTestAnswersKey,
   loadDocumentTestAnswers,
   saveDocumentTestAnswers,
   type DocumentBookmark,
   type DocumentTestAnswer,
-  type DocumentColumnNote,
+  type DocumentThreeColumnNote,
   type DocumentHighlight,
   type DocumentReadingProgress,
   type DocumentWordEntry,
@@ -68,15 +68,15 @@ import { loadDictionary, loadFrequencyList, wordSpanAt } from '../dictionary';
 import { buildStudyGuide, COMMON_VOCABULARY_SIZE, extractCandidateWords } from '../vocabulary';
 import { buildTestSheet } from '../testsheet';
 import {
-  bubbleAnchorAt,
-  bubbleAnchorText,
-  documentBubbleNotesKey,
-  loadDocumentBubbleNotes,
-  saveDocumentBubbleNotes,
-  setBubbleAnswer,
-  type BubbleAnchorKind,
-  type DocumentBubbleNote,
-} from '../bubble-notes';
+  promptAnchorAt,
+  promptAnchorText,
+  documentPromptNotesKey,
+  loadDocumentPromptNotes,
+  saveDocumentPromptNotes,
+  setPromptAnswer,
+  type PromptAnchorKind,
+  type DocumentPromptNote,
+} from '../prompt-notes';
 import {
   INITIAL_COVER_STATE,
   coverActionLabel,
@@ -88,15 +88,15 @@ import {
 import { READER_DOCUMENT_EVENT, type ReaderDocumentDetail } from './voice-notes-panel';
 import { extractWebDocument } from '../web-document';
 import {
-  currentVoiceTags,
-  setVoiceTagDocument,
-  voiceTagDocumentId,
-} from './voice-tags-panel';
+  currentSectionVoices,
+  setSectionVoiceDocument,
+  sectionVoiceDocumentId,
+} from './section-voices-panel';
 import {
-  guardFeatureLock,
-  notifyFeatureLockClosed,
-  notifyFeatureLockOpened,
-} from './feature-locks-panel';
+  guardDocumentRestriction,
+  notifyDocumentRestrictionClosed,
+  notifyDocumentRestrictionOpened,
+} from './document-restrictions-panel';
 import { isReadingUnit, type ReadingUnit } from '../reading-units';
 
 const MAX_RENDERED_BLOCKS = 60;
@@ -211,14 +211,14 @@ export function bindDocumentEvents(state: AppState): void {
   const classifyPanel = document.getElementById('classify-panel') as HTMLElement;
   const webUrlInput = document.getElementById('web-url-input') as HTMLInputElement;
   const webOpenBtn = document.getElementById('web-open-btn') as HTMLButtonElement;
-  const colnotesBtn = document.getElementById('colnotes-btn') as HTMLButtonElement;
-  const colnotesEl = document.getElementById('colnotes') as HTMLElement;
-  const colnotesAddBtn = document.getElementById('colnotes-add-btn') as HTMLButtonElement;
-  const colnotesCloseBtn = document.getElementById('colnotes-close-btn') as HTMLButtonElement;
-  const colnotesForm = document.getElementById('colnotes-form') as HTMLFormElement;
-  const colnotesText = document.getElementById('colnotes-text') as HTMLTextAreaElement;
-  const colnotesCancelBtn = document.getElementById('colnotes-cancel-btn') as HTMLButtonElement;
-  const colnotesList = document.getElementById('colnotes-list') as HTMLElement;
+  const threeColumnNotesBtn = document.getElementById('three-column-notes-btn') as HTMLButtonElement;
+  const threeColumnNotesEl = document.getElementById('three-column-notes') as HTMLElement;
+  const threeColumnNotesAddBtn = document.getElementById('three-column-notes-add-btn') as HTMLButtonElement;
+  const threeColumnNotesCloseBtn = document.getElementById('three-column-notes-close-btn') as HTMLButtonElement;
+  const threeColumnNotesForm = document.getElementById('three-column-notes-form') as HTMLFormElement;
+  const threeColumnNotesText = document.getElementById('three-column-notes-text') as HTMLTextAreaElement;
+  const threeColumnNotesCancelBtn = document.getElementById('three-column-notes-cancel-btn') as HTMLButtonElement;
+  const threeColumnNotesList = document.getElementById('three-column-notes-list') as HTMLElement;
   const testPanel = document.getElementById('doctest') as HTMLElement;
   const testAnswerBtn = document.getElementById('test-answer-btn') as HTMLButtonElement;
   const testSheetBtn = document.getElementById('test-sheet-btn') as HTMLButtonElement;
@@ -231,17 +231,17 @@ export function bindDocumentEvents(state: AppState): void {
   const wordsSuggest = document.getElementById('words-suggest') as HTMLElement;
   const wordListEl = document.getElementById('word-list') as HTMLElement;
   const studyGuideBtn = document.getElementById('study-guide-btn') as HTMLButtonElement;
-  const bubblePanel = document.getElementById('docbubbles') as HTMLElement;
-  const bubbleAddBtn = document.getElementById('bubble-add-btn') as HTMLButtonElement;
-  const bubbleAnchorKind = document.getElementById('bubble-anchor') as HTMLSelectElement;
-  const bubbleForm = document.getElementById('bubble-form') as HTMLFormElement;
-  const bubblePrompt = document.getElementById('bubble-prompt') as HTMLTextAreaElement;
-  const bubbleCancelBtn = document.getElementById('bubble-cancel-btn') as HTMLButtonElement;
-  const bubbleList = document.getElementById('bubble-list') as HTMLElement;
-  const quizBtn = document.getElementById('colnote-quiz-btn') as HTMLButtonElement;
-  const quizField = document.getElementById('colnote-cover-field') as HTMLSelectElement;
-  const quizRevealAllBtn = document.getElementById('colnote-reveal-all-btn') as HTMLButtonElement;
-  const quizStatus = document.getElementById('colnote-quiz-status') as HTMLElement;
+  const promptPanel = document.getElementById('docprompts') as HTMLElement;
+  const promptAddBtn = document.getElementById('prompt-add-btn') as HTMLButtonElement;
+  const promptAnchorKind = document.getElementById('prompt-anchor') as HTMLSelectElement;
+  const promptForm = document.getElementById('prompt-form') as HTMLFormElement;
+  const promptInput = document.getElementById('prompt-input') as HTMLTextAreaElement;
+  const promptCancelBtn = document.getElementById('prompt-cancel-btn') as HTMLButtonElement;
+  const promptList = document.getElementById('prompt-list') as HTMLElement;
+  const quizBtn = document.getElementById('three-column-note-quiz-btn') as HTMLButtonElement;
+  const quizField = document.getElementById('three-column-note-cover-field') as HTMLSelectElement;
+  const quizRevealAllBtn = document.getElementById('three-column-note-reveal-all-btn') as HTMLButtonElement;
+  const quizStatus = document.getElementById('three-column-note-quiz-status') as HTMLElement;
   /**
    * Reader controls are rendered twice — once in the document's top bar and
    * once in the full-screen overlay — so they are collected by data
@@ -308,8 +308,8 @@ export function bindDocumentEvents(state: AppState): void {
   let highlights: DocumentHighlight[] = [];
   let wordsKey: string | null = null;
   let wordList: DocumentWordEntry[] = [];
-  let colnotesKey: string | null = null;
-  let colNotes: DocumentColumnNote[] = [];
+  let threeColumnNotesKey: string | null = null;
+  let threeColumnNotes: DocumentThreeColumnNote[] = [];
   /** Note id being edited in the rail's form, or null when adding. */
   let editingNoteId: string | null = null;
   /** Offset the open note form will anchor to. */
@@ -318,13 +318,13 @@ export function bindDocumentEvents(state: AppState): void {
   let testAnswers: DocumentTestAnswer[] = [];
   let editingAnswerId: string | null = null;
   let pendingAnswerOffset = 0;
-  let bubblesKey: string | null = null;
-  let bubbleNotes: DocumentBubbleNote[] = [];
-  /** Offset the open bubble form will pin its question to. */
-  let pendingBubbleOffset = 0;
-  let bubbleAnswerTimer: ReturnType<typeof setTimeout> | undefined;
+  let promptsKey: string | null = null;
+  let promptNotes: DocumentPromptNote[] = [];
+  /** Offset the open prompt form will pin its question to. */
+  let pendingPromptOffset = 0;
+  let promptAnswerTimer: ReturnType<typeof setTimeout> | undefined;
   /** The newest answer typed but not yet written to storage. */
-  let pendingBubbleAnswer: { id: string; value: string } | null = null;
+  let pendingPromptAnswer: { id: string; value: string } | null = null;
   /** Which column of the notes rail is covered, and what has been revealed. */
   let cover: CoverState = INITIAL_COVER_STATE;
   /** Note whose revealed body should take focus after the next repaint. */
@@ -899,7 +899,7 @@ export function bindDocumentEvents(state: AppState): void {
       item.append(text, actions);
       highlightList.appendChild(item);
     }
-    renderBubbleNotes();
+    renderPromptNotes();
   }
 
   function downloadFile(file: ExportFile) {
@@ -926,7 +926,7 @@ export function bindDocumentEvents(state: AppState): void {
   async function exportAudiobook() {
     // Guarded in the handler as well as at the click: the restriction belongs
     // to the action, not to one button.
-    if (guardFeatureLock('export-audio')) return;
+    if (guardDocumentRestriction('export-audio')) return;
     // The id, not the session: stopping a read must not strand the clips it
     // already produced — the bundle is assembled from finished clips, so a
     // partial read exports as a shorter book.
@@ -964,7 +964,7 @@ export function bindDocumentEvents(state: AppState): void {
   function exportDocument(format: ExportFormat) {
     // Text leaving as a file is copying text out; a locked document refuses it
     // here, not only at the button.
-    if (guardFeatureLock('copy-text')) return;
+    if (guardDocumentRestriction('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc) return;
     downloadFile(buildExport({ name: doc.name, text: doc.text, html: doc.html }, format));
@@ -1085,7 +1085,7 @@ export function bindDocumentEvents(state: AppState): void {
     state.extractedDocument = doc;
     sourceFile = file;
     progressKey = file ? documentProgressKey(file) : null;
-    setVoiceTagDocument(file, true);
+    setSectionVoiceDocument(file, true);
     savedProgress = progressKey ? loadDocumentProgress(progressKey) : null;
     lastProgressOffset = savedProgress?.offset ?? 0;
     bookmarksKey = file ? documentBookmarksKey(file) : null;
@@ -1096,17 +1096,17 @@ export function bindDocumentEvents(state: AppState): void {
     wordsKey = file ? documentWordListKey(file) : null;
     wordList = wordsKey ? loadDocumentWordList(wordsKey) : [];
     renderWordList();
-    colnotesKey = file ? documentColumnNotesKey(file) : null;
-    colNotes = colnotesKey ? loadDocumentColumnNotes(colnotesKey) : [];
+    threeColumnNotesKey = file ? documentThreeColumnNotesKey(file) : null;
+    threeColumnNotes = threeColumnNotesKey ? loadDocumentThreeColumnNotes(threeColumnNotesKey) : [];
     // A self-test belongs to one document: a quiz half-finished on the last
     // file must not decide what is covered on this one.
     cover = INITIAL_COVER_STATE;
-    renderColNotes();
-    bubblesKey = file ? documentBubbleNotesKey(file) : null;
-    bubbleNotes = bubblesKey ? loadDocumentBubbleNotes(bubblesKey, doc.text.length) : [];
-    bubbleForm.hidden = true;
-    bubbleAddBtn.setAttribute('aria-expanded', 'false');
-    renderBubbleList();
+    renderThreeColumnNotes();
+    promptsKey = file ? documentPromptNotesKey(file) : null;
+    promptNotes = promptsKey ? loadDocumentPromptNotes(promptsKey, doc.text.length) : [];
+    promptForm.hidden = true;
+    promptAddBtn.setAttribute('aria-expanded', 'false');
+    renderPromptList();
     testKey = file ? documentTestAnswersKey(file) : null;
     testAnswers = testKey ? loadDocumentTestAnswers(testKey) : [];
     renderTestAnswers();
@@ -1133,7 +1133,7 @@ export function bindDocumentEvents(state: AppState): void {
     }
     updateStatusBar();
     renderReaderView(doc.text, doc.atomicRanges);
-    renderBubbleNotes();
+    renderPromptNotes();
     classifiedBlocks = renderClassification(doc);
     preview.style.display = '';
     // The document takes over the window: app chrome and upload chrome
@@ -1158,7 +1158,7 @@ export function bindDocumentEvents(state: AppState): void {
     notifyReaderDocument(doc, file);
     // The lock belongs to the file's identity, so it is read here — after the
     // new document replaces the old one and before the reader can touch it.
-    notifyFeatureLockOpened(file);
+    notifyDocumentRestrictionOpened(file);
     readerView.focus();
   }
 
@@ -1168,7 +1168,7 @@ export function bindDocumentEvents(state: AppState): void {
    * an honest error from extractWebDocument rather than a blank page.
    */
   function openWebPage() {
-    if (guardFeatureLock('browse-documents')) return;
+    if (guardDocumentRestriction('browse-documents')) return;
     const url = webUrlInput.value.trim();
     if (!url) { webUrlInput.focus(); return; }
     let parsed: URL;
@@ -1198,7 +1198,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   sampleBtn.addEventListener('click', () => {
-    if (guardFeatureLock('browse-documents')) return;
+    if (guardDocumentRestriction('browse-documents')) return;
     clearReaderError();
     setProgress('Loading sample…');
     // No file: the sample is a plain-text document, so it is read on the
@@ -1207,7 +1207,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   function handleFile(file: File) {
-    if (guardFeatureLock('browse-documents')) return;
+    if (guardDocumentRestriction('browse-documents')) return;
     const request = ++activeFileRequest;
     if (file.size > 25 * 1024 * 1024) {
       showStatus('error', 'File is too large. Maximum size is 25 MB.');
@@ -1317,8 +1317,8 @@ export function bindDocumentEvents(state: AppState): void {
    * deliberately survive — closing a document is not forgetting it.
    */
   function closeDocument() {
-    if (guardFeatureLock('browse-documents')) return;
-    notifyFeatureLockClosed();
+    if (guardDocumentRestriction('browse-documents')) return;
+    notifyDocumentRestrictionClosed();
     activeFileRequest++;
     stopAllSpeech();
     destroyDocView();
@@ -1327,7 +1327,7 @@ export function bindDocumentEvents(state: AppState): void {
     state.extractedDocument = null;
     sourceFile = null;
     progressKey = null;
-    setVoiceTagDocument(null, false);
+    setSectionVoiceDocument(null, false);
     savedProgress = null;
     lastProgressOffset = 0;
     clearTimeout(progressTimer);
@@ -1347,23 +1347,23 @@ export function bindDocumentEvents(state: AppState): void {
     wordList = [];
     renderWordList();
     wordsSuggest.hidden = true;
-    colnotesKey = null;
-    colNotes = [];
+    threeColumnNotesKey = null;
+    threeColumnNotes = [];
     cover = INITIAL_COVER_STATE;
-    renderColNotes();
-    setColNotesOpen(false);
-    colnotesForm.hidden = true;
+    renderThreeColumnNotes();
+    setThreeColumnNotesOpen(false);
+    threeColumnNotesForm.hidden = true;
     editingNoteId = null;
     // Write the answer that was still in flight before the document (and the
     // key it belongs to) goes away.
-    flushBubbleAnswer();
-    bubblesKey = null;
-    bubbleNotes = [];
-    pendingBubbleAnswer = null;
-    clearTimeout(bubbleAnswerTimer);
-    bubbleForm.hidden = true;
-    bubbleAddBtn.setAttribute('aria-expanded', 'false');
-    renderBubbleList();
+    flushPromptAnswer();
+    promptsKey = null;
+    promptNotes = [];
+    pendingPromptAnswer = null;
+    clearTimeout(promptAnswerTimer);
+    promptForm.hidden = true;
+    promptAddBtn.setAttribute('aria-expanded', 'false');
+    renderPromptList();
     testKey = null;
     testAnswers = [];
     renderTestAnswers();
@@ -1751,8 +1751,8 @@ export function bindDocumentEvents(state: AppState): void {
       lookahead: 2,
       speed: state.currentSpeed,
       voiceId: state.selectedVoiceId,
-      voiceTags: currentVoiceTags(),
-      documentId: voiceTagDocumentId() ?? undefined,
+      sectionVoices: currentSectionVoices(),
+      documentId: sectionVoiceDocumentId() ?? undefined,
       silent,
       readingUnit,
       onStateChange: renderReaderState,
@@ -1926,7 +1926,7 @@ export function bindDocumentEvents(state: AppState): void {
   document.getElementById('export-html-btn')?.addEventListener('click', () => exportDocument('html'));
   document.getElementById('export-txt-btn')?.addEventListener('click', () => exportDocument('text'));
   document.getElementById('export-notes-btn')?.addEventListener('click', () => {
-    if (guardFeatureLock('copy-text')) return;
+    if (guardDocumentRestriction('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc) return;
     downloadFile(buildNotesExport({ name: doc.name, text: doc.text }, bookmarks, highlights));
@@ -2213,7 +2213,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   studyGuideBtn.addEventListener('click', async () => {
-    if (guardFeatureLock('copy-text')) return;
+    if (guardDocumentRestriction('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc || !wordList.length) return;
     studyGuideBtn.disabled = true;
@@ -2292,11 +2292,11 @@ export function bindDocumentEvents(state: AppState): void {
     });
   });
 
-  // ── Column notes: a margin rail of notes pinned to offsets ──
-  function setColNotesOpen(on: boolean): void {
-    colnotesEl.hidden = !on;
-    colnotesBtn.setAttribute('aria-pressed', String(on));
-    colnotesBtn.classList.toggle('document-btn--on', on);
+  // ── Three-column notes: a margin rail of notes pinned to offsets ──
+  function setThreeColumnNotesOpen(on: boolean): void {
+    threeColumnNotesEl.hidden = !on;
+    threeColumnNotesBtn.setAttribute('aria-pressed', String(on));
+    threeColumnNotesBtn.classList.toggle('document-btn--on', on);
     preview.classList.toggle('document-preview--notes', on);
   }
 
@@ -2318,7 +2318,7 @@ export function bindDocumentEvents(state: AppState): void {
   function coverButton(field: 'note' | 'cue'): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'colnotes__cover';
+    button.className = 'three-column-notes__cover';
     button.dataset.action = 'reveal';
     button.textContent = field === 'note' ? 'Hidden note — reveal' : 'Hidden cue — reveal';
     // The accessible name says what is behind the cover and how to open it,
@@ -2331,8 +2331,8 @@ export function bindDocumentEvents(state: AppState): void {
     quizBtn.setAttribute('aria-pressed', String(cover.active));
     quizBtn.classList.toggle('document-btn--on', cover.active);
     quizField.value = cover.field;
-    quizRevealAllBtn.disabled = !cover.active || colNotes.length === 0;
-    quizStatus.textContent = coverStatusText(cover, colNotes.map(note => note.id));
+    quizRevealAllBtn.disabled = !cover.active || threeColumnNotes.length === 0;
+    quizStatus.textContent = coverStatusText(cover, threeColumnNotes.map(note => note.id));
   }
 
   /**
@@ -2343,18 +2343,18 @@ export function bindDocumentEvents(state: AppState): void {
    * a cover that is only CSS opacity still lets a screen reader read the
    * answer, which is precisely the reader a quiz must be fair to.
    */
-  function renderColNotes() {
-    colnotesList.replaceChildren();
+  function renderThreeColumnNotes() {
+    threeColumnNotesList.replaceChildren();
     const text = state.extractedDocument?.text ?? '';
-    for (const note of colNotes) {
+    for (const note of threeColumnNotes) {
       const item = document.createElement('li');
-      item.className = 'colnotes__item';
+      item.className = 'three-column-notes__item';
       item.dataset.noteId = note.id;
       const coveredNote = isCovered(cover, note.id) && cover.field === 'note';
       const coveredCue = isCovered(cover, note.id) && cover.field === 'cue';
 
       const anchor = document.createElement('div');
-      anchor.className = 'colnotes__anchor';
+      anchor.className = 'three-column-notes__anchor';
       if (coveredCue) {
         anchor.appendChild(coverButton('cue'));
       } else {
@@ -2387,14 +2387,14 @@ export function bindDocumentEvents(state: AppState): void {
         item.appendChild(coverButton('note'));
       } else {
         const body = document.createElement('p');
-        body.className = 'colnotes__note';
+        body.className = 'three-column-notes__note';
         body.dataset.noteBody = note.id;
         body.tabIndex = -1;
         body.textContent = note.note;
         item.appendChild(body);
       }
       item.appendChild(actions);
-      colnotesList.appendChild(item);
+      threeColumnNotesList.appendChild(item);
     }
     updateQuizUi();
     // The cover button is gone once it is used, so focus has to be moved
@@ -2405,55 +2405,55 @@ export function bindDocumentEvents(state: AppState): void {
       revealFocusId = null;
       // Prefer the note itself: revealing a note should read the answer, and
       // only a cue reveal falls back to the quoted text above it.
-      const body = Array.from(colnotesList.querySelectorAll<HTMLElement>('[data-note-body]'))
+      const body = Array.from(threeColumnNotesList.querySelectorAll<HTMLElement>('[data-note-body]'))
         .find(el => el.dataset.noteBody === id);
-      const cue = Array.from(colnotesList.querySelectorAll<HTMLElement>('[data-note-cue]'))
+      const cue = Array.from(threeColumnNotesList.querySelectorAll<HTMLElement>('[data-note-cue]'))
         .find(el => el.dataset.noteCue === id);
       (body ?? cue)?.focus();
     }
   }
 
-  colnotesBtn.addEventListener('click', () => setColNotesOpen(!!colnotesEl.hidden));
-  colnotesCloseBtn.addEventListener('click', () => setColNotesOpen(false));
+  threeColumnNotesBtn.addEventListener('click', () => setThreeColumnNotesOpen(!!threeColumnNotesEl.hidden));
+  threeColumnNotesCloseBtn.addEventListener('click', () => setThreeColumnNotesOpen(false));
 
-  colnotesAddBtn.addEventListener('click', () => {
+  threeColumnNotesAddBtn.addEventListener('click', () => {
     editingNoteId = null;
     pendingNoteOffset = lastProgressOffset;
-    colnotesText.value = '';
-    colnotesForm.hidden = false;
-    colnotesText.focus();
+    threeColumnNotesText.value = '';
+    threeColumnNotesForm.hidden = false;
+    threeColumnNotesText.focus();
   });
 
-  colnotesCancelBtn.addEventListener('click', () => {
-    colnotesForm.hidden = true;
+  threeColumnNotesCancelBtn.addEventListener('click', () => {
+    threeColumnNotesForm.hidden = true;
     editingNoteId = null;
   });
 
-  colnotesForm.addEventListener('submit', event => {
+  threeColumnNotesForm.addEventListener('submit', event => {
     event.preventDefault();
-    const note = colnotesText.value.trim();
+    const note = threeColumnNotesText.value.trim();
     if (!note) return;
     if (editingNoteId) {
-      colNotes = colNotes.map(entry =>
+      threeColumnNotes = threeColumnNotes.map(entry =>
         entry.id === editingNoteId ? { ...entry, note } : entry);
     } else {
-      colNotes = [...colNotes, {
+      threeColumnNotes = [...threeColumnNotes, {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         offset: pendingNoteOffset,
         note,
         createdAt: Date.now(),
       }].sort((a, b) => a.offset - b.offset);
     }
-    if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
+    if (threeColumnNotesKey) saveDocumentThreeColumnNotes(threeColumnNotesKey, threeColumnNotes);
     editingNoteId = null;
-    colnotesForm.hidden = true;
-    renderColNotes();
+    threeColumnNotesForm.hidden = true;
+    renderThreeColumnNotes();
   });
 
-  colnotesList.addEventListener('click', event => {
+  threeColumnNotesList.addEventListener('click', event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
     const item = button?.closest<HTMLElement>('li[data-note-id]');
-    const note = colNotes.find(n => n.id === item?.dataset.noteId);
+    const note = threeColumnNotes.find(n => n.id === item?.dataset.noteId);
     if (!button || !note) return;
     if (button.dataset.action === 'go') {
       goToDocumentOffset(note.offset);
@@ -2462,21 +2462,21 @@ export function bindDocumentEvents(state: AppState): void {
       // The cover button disappears with this repaint; the focus has to land
       // on the text it was hiding, or the reveal is silent to a keyboard user.
       revealFocusId = note.id;
-      renderColNotes();
+      renderThreeColumnNotes();
     } else if (button.dataset.action === 'edit') {
       editingNoteId = note.id;
       pendingNoteOffset = note.offset;
-      colnotesText.value = note.note;
-      colnotesForm.hidden = false;
-      colnotesText.focus();
+      threeColumnNotesText.value = note.note;
+      threeColumnNotesForm.hidden = false;
+      threeColumnNotesText.focus();
     } else if (button.dataset.action === 'remove') {
-      colNotes = colNotes.filter(n => n.id !== note.id);
-      if (colnotesKey) saveDocumentColumnNotes(colnotesKey, colNotes);
-      renderColNotes();
+      threeColumnNotes = threeColumnNotes.filter(n => n.id !== note.id);
+      if (threeColumnNotesKey) saveDocumentThreeColumnNotes(threeColumnNotesKey, threeColumnNotes);
+      renderThreeColumnNotes();
     }
   });
 
-  // ── Column-note self-test ──────────────────────────────────
+  // ── Three-column-note self-test ──────────────────────────────────
   // The rail can hide one of its two columns per card and uncover them one at
   // a time. The state machine is pure (src/column-cover.ts); this is only the
   // wiring that turns a press into an action and repaints the rail.
@@ -2490,11 +2490,11 @@ export function bindDocumentEvents(state: AppState): void {
       });
       // The covers live in the notes column; turning the quiz on while it is
       // closed would look like the button did nothing.
-      setColNotesOpen(true);
+      setThreeColumnNotesOpen(true);
     }
-    renderColNotes();
+    renderThreeColumnNotes();
     if (cover.active) {
-      colnotesList.querySelector<HTMLElement>('.colnotes__cover')?.focus();
+      threeColumnNotesList.querySelector<HTMLElement>('.three-column-notes__cover')?.focus();
     } else {
       quizBtn.focus();
     }
@@ -2505,15 +2505,15 @@ export function bindDocumentEvents(state: AppState): void {
       type: 'set-field',
       field: quizField.value === 'cue' ? 'cue' : 'note',
     });
-    renderColNotes();
+    renderThreeColumnNotes();
   });
 
   quizRevealAllBtn.addEventListener('click', () => {
-    cover = reduceCover(cover, { type: 'reveal-all', ids: colNotes.map(note => note.id) });
-    renderColNotes();
+    cover = reduceCover(cover, { type: 'reveal-all', ids: threeColumnNotes.map(note => note.id) });
+    renderThreeColumnNotes();
   });
 
-  // ── Bubble notes: inline callouts at the edge of the text ──
+  // ── Prompt notes: inline callouts at the edge of the text ──
   // A highlight that carries a note renders a 💬 marker at the end of its
   // range; a question note renders a ? marker on the word or paragraph it was
   // pinned to, with an answer box inside the same callout. One surface for
@@ -2544,19 +2544,19 @@ export function bindDocumentEvents(state: AppState): void {
     }
   }
 
-  function newBubbleId(): string {
+  function newPromptId(): string {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   /**
-   * The element a bubble is inserted after.
+   * The element a prompt is inserted after.
    *
    * A word anchor lands on the word itself, so the marker sits in the line the
    * question is about. A paragraph anchor lands after the paragraph's last
    * sentence — where the eye already is when the block ends, and far enough
-   * from the opening words that two bubbles do not stack on each other.
+   * from the opening words that two prompts do not stack on each other.
    */
-  function bubbleAnchorElement(note: DocumentBubbleNote): HTMLElement | null {
+  function promptAnchorElement(note: DocumentPromptNote): HTMLElement | null {
     const sentence = readerSentences.find(item => item.start !== undefined
       && item.start <= note.offset && (item.end ?? 0) > note.offset)
       ?? readerSentences.find(item => item.start !== undefined && item.start >= note.offset);
@@ -2581,62 +2581,62 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   /** One marker plus its floating body; both note kinds share the shape. */
-  function bubbleElement(
+  function promptElement(
     id: string,
     markerText: string,
     markerLabel: string,
     content: Node,
   ): HTMLElement {
-    const bubble = document.createElement('span');
-    bubble.className = 'bubble-note';
-    bubble.dataset.bubbleId = id;
+    const prompt = document.createElement('span');
+    prompt.className = 'prompt-note';
+    prompt.dataset.promptId = id;
     const marker = document.createElement('button');
     marker.type = 'button';
-    marker.className = 'bubble-note__marker';
+    marker.className = 'prompt-note__marker';
     marker.textContent = markerText;
     marker.title = markerLabel;
     marker.setAttribute('aria-label', markerLabel);
     // The body is a pop-up, so its state is the marker's state: a screen
     // reader hears "expanded" exactly when the answer box is in the flow.
     marker.setAttribute('aria-expanded', 'false');
-    marker.setAttribute('aria-controls', `bubble-body-${id}`);
+    marker.setAttribute('aria-controls', `prompt-body-${id}`);
     const body = document.createElement('span');
-    body.className = 'bubble-note__body';
-    body.id = `bubble-body-${id}`;
+    body.className = 'prompt-note__body';
+    body.id = `prompt-body-${id}`;
     body.appendChild(content);
-    bubble.append(marker, body);
-    return bubble;
+    prompt.append(marker, body);
+    return prompt;
   }
 
-  function closeOpenBubbles(): void {
-    readerView.querySelectorAll<HTMLElement>('.bubble-note--open').forEach(bubble => {
-      bubble.classList.remove('bubble-note--open');
-      bubble.querySelector('.bubble-note__marker')?.setAttribute('aria-expanded', 'false');
+  function closeOpenPrompts(): void {
+    readerView.querySelectorAll<HTMLElement>('.prompt-note--open').forEach(prompt => {
+      prompt.classList.remove('prompt-note--open');
+      prompt.querySelector('.prompt-note__marker')?.setAttribute('aria-expanded', 'false');
     });
   }
 
-  function renderBubbleNotes() {
-    closeOpenBubbles();
-    readerView.querySelectorAll('.bubble-note').forEach(el => el.remove());
+  function renderPromptNotes() {
+    closeOpenPrompts();
+    readerView.querySelectorAll('.prompt-note').forEach(el => el.remove());
     paintTextHighlights();
-    for (const note of bubbleNotes) {
-      const anchor = bubbleAnchorElement(note);
+    for (const note of promptNotes) {
+      const anchor = promptAnchorElement(note);
       if (!anchor) continue;
       const content = document.createElement('span');
-      content.className = 'bubble-note__question';
+      content.className = 'prompt-note__question';
       const prompt = document.createElement('strong');
-      prompt.className = 'bubble-note__prompt';
+      prompt.className = 'prompt-note__prompt';
       prompt.textContent = note.prompt;
       const answer = document.createElement('textarea');
-      answer.className = 'bubble-note__answer';
+      answer.className = 'prompt-note__answer';
       answer.rows = 2;
       answer.maxLength = 4000;
       answer.value = note.answer;
       answer.placeholder = 'Your answer…';
-      answer.dataset.bubbleAnswer = note.id;
+      answer.dataset.promptAnswer = note.id;
       answer.setAttribute('aria-label', `Answer: ${note.prompt}`);
       content.append(prompt, answer);
-      anchor.insertAdjacentElement('afterend', bubbleElement(note.id, '?', 'Question note', content));
+      anchor.insertAdjacentElement('afterend', promptElement(note.id, '?', 'Question note', content));
     }
     for (const h of highlights) {
       if (!h.note?.trim()) continue;
@@ -2647,31 +2647,31 @@ export function bindDocumentEvents(state: AppState): void {
         : null;
       if (!span) continue;
       span.insertAdjacentElement('afterend',
-        bubbleElement(h.id, '\u{1F4AC}', 'Highlight note', document.createTextNode(h.note)));
+        promptElement(h.id, '\u{1F4AC}', 'Highlight note', document.createTextNode(h.note)));
     }
   }
 
   readerView.addEventListener('click', event => {
-    const marker = (event.target as HTMLElement).closest<HTMLElement>('.bubble-note__marker');
+    const marker = (event.target as HTMLElement).closest<HTMLElement>('.prompt-note__marker');
     if (!marker) return;
-    const bubble = marker.closest<HTMLElement>('.bubble-note');
-    const opening = !bubble?.classList.contains('bubble-note--open');
-    closeOpenBubbles();
-    bubble?.classList.toggle('bubble-note--open', opening);
+    const prompt = marker.closest<HTMLElement>('.prompt-note');
+    const opening = !prompt?.classList.contains('prompt-note--open');
+    closeOpenPrompts();
+    prompt?.classList.toggle('prompt-note--open', opening);
     marker.setAttribute('aria-expanded', String(opening));
-    if (opening) bubble?.querySelector<HTMLTextAreaElement>('[data-bubble-answer]')?.focus();
+    if (opening) prompt?.querySelector<HTMLTextAreaElement>('[data-prompt-answer]')?.focus();
   });
 
   // Escape closes the pop-up and puts focus back on its marker: a keyboard
-  // user must not be left inside a bubble they cannot see.
+  // user must not be left inside a prompt they cannot see.
   readerView.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    const open = (event.target as HTMLElement).closest<HTMLElement>('.bubble-note--open');
+    const open = (event.target as HTMLElement).closest<HTMLElement>('.prompt-note--open');
     if (!open) return;
     event.preventDefault();
     event.stopPropagation();
-    open.querySelector<HTMLElement>('.bubble-note__marker')?.focus();
-    closeOpenBubbles();
+    open.querySelector<HTMLElement>('.prompt-note__marker')?.focus();
+    closeOpenPrompts();
   });
 
   /**
@@ -2681,49 +2681,49 @@ export function bindDocumentEvents(state: AppState): void {
    * caret, and saving only on blur would lose an answer when the document is
    * closed mid-thought.
    */
-  function flushBubbleAnswer(): void {
-    const pending = pendingBubbleAnswer;
-    pendingBubbleAnswer = null;
-    clearTimeout(bubbleAnswerTimer);
-    if (!pending || !bubblesKey) return;
-    const { notes, updated } = setBubbleAnswer(bubbleNotes, pending.id, pending.value);
-    bubbleNotes = notes;
+  function flushPromptAnswer(): void {
+    const pending = pendingPromptAnswer;
+    pendingPromptAnswer = null;
+    clearTimeout(promptAnswerTimer);
+    if (!pending || !promptsKey) return;
+    const { notes, updated } = setPromptAnswer(promptNotes, pending.id, pending.value);
+    promptNotes = notes;
     if (!updated) return;
-    saveDocumentBubbleNotes(bubblesKey, bubbleNotes);
-    renderBubbleList();
+    saveDocumentPromptNotes(promptsKey, promptNotes);
+    renderPromptList();
   }
 
   readerView.addEventListener('input', event => {
-    const field = (event.target as HTMLElement).closest<HTMLTextAreaElement>('[data-bubble-answer]');
-    if (!field?.dataset.bubbleAnswer) return;
-    pendingBubbleAnswer = { id: field.dataset.bubbleAnswer, value: field.value };
-    clearTimeout(bubbleAnswerTimer);
-    bubbleAnswerTimer = setTimeout(flushBubbleAnswer, 400);
+    const field = (event.target as HTMLElement).closest<HTMLTextAreaElement>('[data-prompt-answer]');
+    if (!field?.dataset.promptAnswer) return;
+    pendingPromptAnswer = { id: field.dataset.promptAnswer, value: field.value };
+    clearTimeout(promptAnswerTimer);
+    promptAnswerTimer = setTimeout(flushPromptAnswer, 400);
   });
 
   readerView.addEventListener('focusout', event => {
-    if (!(event.target as HTMLElement).closest('[data-bubble-answer]')) return;
-    flushBubbleAnswer();
+    if (!(event.target as HTMLElement).closest('[data-prompt-answer]')) return;
+    flushPromptAnswer();
   });
 
   /** The tools-section list: every question in the document, answered or not. */
-  function renderBubbleList() {
-    bubblePanel.hidden = !bubblesKey;
-    bubbleAddBtn.disabled = !bubblesKey;
-    bubbleList.replaceChildren();
+  function renderPromptList() {
+    promptPanel.hidden = !promptsKey;
+    promptAddBtn.disabled = !promptsKey;
+    promptList.replaceChildren();
     const text = state.extractedDocument?.text ?? '';
-    for (const note of bubbleNotes) {
+    for (const note of promptNotes) {
       const item = document.createElement('li');
       item.className = 'docbookmarks__item';
-      item.dataset.bubbleNoteId = note.id;
+      item.dataset.promptNoteId = note.id;
       const wrap = document.createElement('div');
       wrap.className = 'docbookmarks__text';
       const question = document.createElement('div');
-      question.className = 'colnotes__anchor';
-      const quote = bubbleAnchorText(text, note);
+      question.className = 'three-column-notes__anchor';
+      const quote = promptAnchorText(text, note);
       question.textContent = quote ? `Q: ${note.prompt} · “${quote}”` : `Q: ${note.prompt}`;
       const answer = document.createElement('p');
-      answer.className = 'colnotes__note';
+      answer.className = 'three-column-notes__note';
       answer.textContent = note.answer.trim() ? `A: ${note.answer}` : 'Not answered yet.';
       wrap.append(question, answer);
       const actions = document.createElement('div');
@@ -2737,44 +2737,44 @@ export function bindDocumentEvents(state: AppState): void {
         actions.appendChild(button);
       }
       item.append(wrap, actions);
-      bubbleList.appendChild(item);
+      promptList.appendChild(item);
     }
   }
 
-  bubbleAddBtn.addEventListener('click', () => {
-    const opening = bubbleForm.hidden;
-    bubbleForm.hidden = !opening;
-    bubbleAddBtn.setAttribute('aria-expanded', String(opening));
+  promptAddBtn.addEventListener('click', () => {
+    const opening = promptForm.hidden;
+    promptForm.hidden = !opening;
+    promptAddBtn.setAttribute('aria-expanded', String(opening));
     if (!opening) return;
     // The form lives inside the collapsed tools section — open it so the
     // click visibly did something.
     readerTools.open = true;
-    pendingBubbleOffset = lastProgressOffset;
-    bubblePrompt.focus();
+    pendingPromptOffset = lastProgressOffset;
+    promptInput.focus();
   });
 
-  bubbleCancelBtn.addEventListener('click', () => {
-    bubbleForm.hidden = true;
-    bubbleAddBtn.setAttribute('aria-expanded', 'false');
-    bubblePrompt.value = '';
-    bubbleAddBtn.focus();
+  promptCancelBtn.addEventListener('click', () => {
+    promptForm.hidden = true;
+    promptAddBtn.setAttribute('aria-expanded', 'false');
+    promptInput.value = '';
+    promptAddBtn.focus();
   });
 
-  bubbleForm.addEventListener('submit', event => {
+  promptForm.addEventListener('submit', event => {
     event.preventDefault();
-    if (!bubblesKey) return;
-    const prompt = bubblePrompt.value.trim();
+    if (!promptsKey) return;
+    const prompt = promptInput.value.trim();
     const text = state.extractedDocument?.text ?? '';
     if (!prompt || !text) return;
-    const kind: BubbleAnchorKind = bubbleAnchorKind.value === 'paragraph' ? 'paragraph' : 'word';
-    const anchor = bubbleAnchorAt(text, pendingBubbleOffset, kind);
+    const kind: PromptAnchorKind = promptAnchorKind.value === 'paragraph' ? 'paragraph' : 'word';
+    const anchor = promptAnchorAt(text, pendingPromptOffset, kind);
     if (!anchor) {
       showReaderNotice('No word or paragraph at the reading position to pin the question to.');
       return;
     }
     const now = Date.now();
-    const id = newBubbleId();
-    bubbleNotes = [...bubbleNotes, {
+    const id = newPromptId();
+    promptNotes = [...promptNotes, {
       id,
       offset: anchor.start,
       anchorEnd: anchor.end,
@@ -2784,33 +2784,33 @@ export function bindDocumentEvents(state: AppState): void {
       createdAt: now,
       updatedAt: now,
     }].sort((a, b) => a.offset - b.offset);
-    saveDocumentBubbleNotes(bubblesKey, bubbleNotes);
-    bubblePrompt.value = '';
-    bubbleForm.hidden = true;
-    bubbleAddBtn.setAttribute('aria-expanded', 'false');
-    renderBubbleList();
-    renderBubbleNotes();
+    saveDocumentPromptNotes(promptsKey, promptNotes);
+    promptInput.value = '';
+    promptForm.hidden = true;
+    promptAddBtn.setAttribute('aria-expanded', 'false');
+    renderPromptList();
+    renderPromptNotes();
     // The marker lives in the reading text, which may be scrolled away: put
     // the question the reader just wrote in front of them, focused.
-    const marker = Array.from(readerView.querySelectorAll<HTMLElement>('.bubble-note'))
-      .find(el => el.dataset.bubbleId === id)
-      ?.querySelector<HTMLElement>('.bubble-note__marker');
+    const marker = Array.from(readerView.querySelectorAll<HTMLElement>('.prompt-note'))
+      .find(el => el.dataset.promptId === id)
+      ?.querySelector<HTMLElement>('.prompt-note__marker');
     marker?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     marker?.focus();
   });
 
-  bubbleList.addEventListener('click', event => {
+  promptList.addEventListener('click', event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
-    const item = button?.closest<HTMLElement>('[data-bubble-note-id]');
-    const note = bubbleNotes.find(entry => entry.id === item?.dataset.bubbleNoteId);
+    const item = button?.closest<HTMLElement>('[data-prompt-note-id]');
+    const note = promptNotes.find(entry => entry.id === item?.dataset.promptNoteId);
     if (!button || !note) return;
     if (button.dataset.action === 'go') {
       goToDocumentOffset(note.offset);
     } else if (button.dataset.action === 'remove') {
-      bubbleNotes = bubbleNotes.filter(entry => entry.id !== note.id);
-      if (bubblesKey) saveDocumentBubbleNotes(bubblesKey, bubbleNotes);
-      renderBubbleList();
-      renderBubbleNotes();
+      promptNotes = promptNotes.filter(entry => entry.id !== note.id);
+      if (promptsKey) saveDocumentPromptNotes(promptsKey, promptNotes);
+      renderPromptList();
+      renderPromptNotes();
     }
   });
 
@@ -2828,12 +2828,12 @@ export function bindDocumentEvents(state: AppState): void {
       item.className = 'doctest__item';
       item.dataset.answerId = entry.id;
       const question = document.createElement('div');
-      question.className = 'colnotes__anchor';
+      question.className = 'three-column-notes__anchor';
       const quote = text.slice(Math.max(0, entry.offset - 30), entry.offset + 50)
         .replace(/\s+/g, ' ').trim();
       question.textContent = quote ? `Q: …${quote}…` : `Question at ${entry.offset}`;
       const body = document.createElement('p');
-      body.className = 'colnotes__note';
+      body.className = 'three-column-notes__note';
       body.textContent = entry.answer;
       const actions = document.createElement('div');
       actions.className = 'docbookmarks__actions';
@@ -2905,7 +2905,7 @@ export function bindDocumentEvents(state: AppState): void {
   });
 
   testSheetBtn.addEventListener('click', () => {
-    if (guardFeatureLock('copy-text')) return;
+    if (guardDocumentRestriction('copy-text')) return;
     const doc = state.extractedDocument;
     if (!doc || !testAnswers.length) return;
     const sheet = buildTestSheet(doc.name, doc.text, testAnswers);

@@ -1,28 +1,28 @@
 /**
- * Bubble notes: a question the reader sets themselves, pinned to a word or a
+ * Prompt notes: a question the reader sets themselves, pinned to a word or a
  * paragraph, with an answer box that opens in place.
  *
- * The reader already has two note surfaces: a column-note rail pinned to
+ * The reader already has two note surfaces: a three-column-note rail pinned to
  * offsets, and highlight notes that float off a marked range. Neither asks
- * anything back, and a study document is mostly questions. A bubble note is
+ * anything back, and a study document is mostly questions. A prompt note is
  * the same callout the highlight notes already use — the marker sits in the
  * text and the body floats beside it — but it carries a prompt and an answer
  * of its own, so it does not have to pretend to be a highlight to exist.
  *
  * Storage is localStorage for the same reason the other note rails use it:
- * a bubble is a few hundred characters, and it must be readable before an
+ * a prompt is a few hundred characters, and it must be readable before an
  * IndexedDB open resolves. Blobs are the only thing that cannot live here.
  */
 
-export type BubbleAnchorKind = 'word' | 'paragraph';
+export type PromptAnchorKind = 'word' | 'paragraph';
 
-export interface DocumentBubbleNote {
+export interface DocumentPromptNote {
   id: string;
   /** Character offset of the anchor: the word's first letter, the paragraph's first character. */
   offset: number;
   /** End of the anchored text, exclusive, so the rail can quote it. */
   anchorEnd: number;
-  anchor: BubbleAnchorKind;
+  anchor: PromptAnchorKind;
   /** The question or instruction. */
   prompt: string;
   /** The reader's answer, empty until written. */
@@ -31,15 +31,16 @@ export interface DocumentBubbleNote {
   updatedAt: number;
 }
 
-const DOCUMENT_BUBBLES_PREFIX = 'yapper.document-bubbles.v1:';
-const MAX_BUBBLES_PER_DOCUMENT = 200;
-/** Prompts and answers are UI-sized, not document-sized: a bubble is a card. */
+// Legacy key value kept verbatim so prompt notes saved before the rename still load.
+const DOCUMENT_PROMPTS_PREFIX = 'yapper.document-bubbles.v1:';
+const MAX_PROMPTS_PER_DOCUMENT = 200;
+/** Prompts and answers are UI-sized, not document-sized: a prompt is a card. */
 const MAX_PROMPT_CHARS = 400;
 const MAX_ANSWER_CHARS = 4000;
 
-/** Bubbles share the identity key's shape: file name, size, and mtime. */
-export function documentBubbleNotesKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
-  return `${DOCUMENT_BUBBLES_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
+/** Prompts share the identity key's shape: file name, size, and mtime. */
+export function documentPromptNotesKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+  return `${DOCUMENT_PROMPTS_PREFIX}${encodeURIComponent(file.name)}:${file.size}:${file.lastModified}`;
 }
 
 /** Characters that belong to the sentence, not to the word being anchored. */
@@ -86,18 +87,18 @@ export function paragraphRanges(text: string): Array<{ start: number; end: numbe
 }
 
 /**
- * Resolve a character offset to the span a bubble should hang off.
+ * Resolve a character offset to the span a prompt should hang off.
  *
  * The offset arrives from a click or the reading position, so it can land on
  * whitespace or punctuation. A word anchor walks out to the surrounding run of
  * non-space and trims the sentence's punctuation off both ends; a paragraph
  * anchor returns the whole block. Returning null is better than guessing: a
- * bubble at the wrong place is a note the reader will not find again.
+ * prompt at the wrong place is a note the reader will not find again.
  */
-export function bubbleAnchorAt(
+export function promptAnchorAt(
   text: string,
   offset: number,
-  kind: BubbleAnchorKind,
+  kind: PromptAnchorKind,
 ): { start: number; end: number } | null {
   if (!text) return null;
   const at = Math.max(0, Math.min(text.length - 1, Math.floor(offset)));
@@ -134,12 +135,12 @@ export function bubbleAnchorAt(
   while (start < end && (EDGE_PUNCTUATION.test(text[start]) || text[start] === '-')) start++;
   while (end > start && (EDGE_PUNCTUATION.test(text[end - 1]) || text[end - 1] === '-')) end--;
   // A run of punctuation or spaces is not a word; better no anchor than a
-  // bubble that quotes a dash.
+  // prompt that quotes a dash.
   return end > start && /\S/.test(text.slice(start, end)) ? { start, end } : null;
 }
 
-/** The document text a bubble points at, for the rail's cue line. */
-export function bubbleAnchorText(text: string, note: Pick<DocumentBubbleNote, 'offset' | 'anchorEnd'>): string {
+/** The document text a prompt points at, for the rail's cue line. */
+export function promptAnchorText(text: string, note: Pick<DocumentPromptNote, 'offset' | 'anchorEnd'>): string {
   return text.slice(note.offset, note.anchorEnd).replace(/\s+/g, ' ').trim();
 }
 
@@ -149,15 +150,15 @@ export function bubbleAnchorText(text: string, note: Pick<DocumentBubbleNote, 'o
  * Everything here came from localStorage, which any other tab (or an old
  * build) can have written, so a malformed record is dropped rather than
  * rendered as `undefined`. The offset is clamped to the text it claims to
- * anchor to: a bubble pointing past the end of the document would never be
+ * anchor to: a prompt pointing past the end of the document would never be
  * findable again.
  */
-export function normalizeBubbleNote(
+export function normalizePromptNote(
   value: unknown,
   index: number,
   textLength = Number.POSITIVE_INFINITY,
-): DocumentBubbleNote | null {
-  const entry = value as Partial<DocumentBubbleNote> | null;
+): DocumentPromptNote | null {
+  const entry = value as Partial<DocumentPromptNote> | null;
   if (!entry || typeof entry !== 'object') return null;
   if (typeof entry.prompt !== 'string' || !entry.prompt.trim()) return null;
   if (!Number.isFinite(entry.offset) || (entry.offset ?? -1) < 0) return null;
@@ -168,7 +169,7 @@ export function normalizeBubbleNote(
   const anchorEnd = Math.max(offset + 1, Math.min(textLength, rawEnd));
   const createdAt = Number.isFinite(entry.createdAt) ? entry.createdAt! : 0;
   return {
-    id: typeof entry.id === 'string' && entry.id ? entry.id : `bubble-${index}`,
+    id: typeof entry.id === 'string' && entry.id ? entry.id : `prompt-${index}`,
     offset,
     anchorEnd,
     anchor,
@@ -179,15 +180,15 @@ export function normalizeBubbleNote(
   };
 }
 
-export function normalizeBubbleNotes(
+export function normalizePromptNotes(
   values: unknown,
   textLength = Number.POSITIVE_INFINITY,
-): DocumentBubbleNote[] {
+): DocumentPromptNote[] {
   if (!Array.isArray(values)) return [];
   return values
-    .slice(0, MAX_BUBBLES_PER_DOCUMENT)
+    .slice(0, MAX_PROMPTS_PER_DOCUMENT)
     .flatMap((value, index) => {
-      const note = normalizeBubbleNote(value, index, textLength);
+      const note = normalizePromptNote(value, index, textLength);
       return note ? [note] : [];
     })
     .sort((a, b) => a.offset - b.offset);
@@ -199,12 +200,12 @@ export function normalizeBubbleNotes(
  * Returns the same list when the answer is unchanged, so a debounced save
  * that fires after every keystroke does not rewrite the store for free.
  */
-export function setBubbleAnswer(
-  notes: readonly DocumentBubbleNote[],
+export function setPromptAnswer(
+  notes: readonly DocumentPromptNote[],
   id: string,
   answer: string,
   now = Date.now(),
-): { notes: DocumentBubbleNote[]; updated: DocumentBubbleNote | null } {
+): { notes: DocumentPromptNote[]; updated: DocumentPromptNote | null } {
   const existing = notes.find(note => note.id === id);
   if (!existing || existing.answer === answer) {
     return { notes: [...notes], updated: null };
@@ -216,22 +217,22 @@ export function setBubbleAnswer(
   };
 }
 
-export function loadDocumentBubbleNotes(
+export function loadDocumentPromptNotes(
   key: string,
   textLength = Number.POSITIVE_INFINITY,
-): DocumentBubbleNote[] {
+): DocumentPromptNote[] {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return [];
-    return normalizeBubbleNotes(JSON.parse(raw) as unknown, textLength);
+    return normalizePromptNotes(JSON.parse(raw) as unknown, textLength);
   } catch {
     return [];
   }
 }
 
-export function saveDocumentBubbleNotes(key: string, notes: readonly DocumentBubbleNote[]): void {
+export function saveDocumentPromptNotes(key: string, notes: readonly DocumentPromptNote[]): void {
   try {
-    localStorage.setItem(key, JSON.stringify(notes.slice(0, MAX_BUBBLES_PER_DOCUMENT)));
+    localStorage.setItem(key, JSON.stringify(notes.slice(0, MAX_PROMPTS_PER_DOCUMENT)));
   } catch {
     // Best-effort: a blocked/full store must not interrupt reading.
   }

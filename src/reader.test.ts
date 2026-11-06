@@ -880,7 +880,7 @@ describe('DocumentReaderSession — per-section voices', () => {
   it('does not start a sentence in the voice of its second half', () => {
     const session = new DocumentReaderSession(ENGINE, TEXT, {
       chunkSize: 300,
-      voiceTags: TAGS,
+      sectionVoices: TAGS,
     });
     expect(session.getChunks()).toHaveLength(2);
 
@@ -900,7 +900,7 @@ describe('DocumentReaderSession — per-section voices', () => {
     const highlights: HighlightInfo[] = [];
     const session = new DocumentReaderSession(ENGINE, TEXT, {
       chunkSize: 300,
-      voiceTags: TAGS,
+      sectionVoices: TAGS,
       onHighlight: info => highlights.push(info),
     });
     session.start(1);

@@ -1,4 +1,4 @@
-// ─── Feature locks ─────────────────────────────────────────────────
+// ─── Document restrictions ─────────────────────────────────────────────────
 // A document can be opened in a context where the reader must not change it:
 // an assessment sitting, a shared machine in a classroom, a supervised
 // reading. The lock is a per-document profile listing what the reader is not
@@ -23,7 +23,7 @@
 // uses (see documentProgressKey), so a lock belongs to the file rather than
 // to its contents. A record that cannot be parsed fails CLOSED: the document
 // stays restricted rather than becoming editable because a byte was
-// corrupted. See loadFeatureLock for the one case where a store that cannot
+// corrupted. See loadDocumentRestriction for the one case where a store that cannot
 // be read at all is treated as unlocked, and why.
 
 import { documentProgressKey } from './persistence';
@@ -54,7 +54,7 @@ export function isLockAction(value: string): value is LockAction {
 }
 
 /** What the reader may not do. The only part of a lock a user edits. */
-export interface FeatureLockProfile {
+export interface DocumentRestrictionProfile {
   disabled: LockAction[];
 }
 
@@ -63,7 +63,7 @@ export interface FeatureLockProfile {
  * There is deliberately no plaintext field — the password cannot be read
  * back, only verified.
  */
-export interface StoredFeatureLock extends FeatureLockProfile {
+export interface StoredDocumentRestriction extends DocumentRestrictionProfile {
   /** Record shape. An unknown version is treated as corrupt (fail closed). */
   version: 1;
   /** Hex-encoded 16 random bytes, one per lock. */
@@ -78,7 +78,7 @@ export interface StoredFeatureLock extends FeatureLockProfile {
 /** What the app knows about a document's lock right now. */
 export type LockState =
   | { kind: 'unlocked' }
-  | { kind: 'locked'; lock: StoredFeatureLock }
+  | { kind: 'locked'; lock: StoredDocumentRestriction }
   /** A record exists but cannot be trusted. Treated as "everything locked". */
   | { kind: 'corrupt'; reason: string };
 
@@ -90,10 +90,11 @@ export const UNLOCKED: LockState = { kind: 'unlocked' };
 // changes (say a content hash replaces lastModified), the lock follows for
 // free. The test suite pins that relationship.
 
+// Legacy key value kept verbatim so restrictions saved before the rename still load.
 const LOCK_PREFIX = 'yapper.feature-lock.v1:';
 const PROGRESS_PREFIX = 'yapper.document-progress.v1:';
 
-export function featureLockKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
+export function documentRestrictionKey(file: Pick<File, 'name' | 'size' | 'lastModified'>): string {
   const progressKey = documentProgressKey(file);
   const identity = progressKey.startsWith(PROGRESS_PREFIX)
     ? progressKey.slice(PROGRESS_PREFIX.length)
@@ -103,7 +104,7 @@ export function featureLockKey(file: Pick<File, 'name' | 'size' | 'lastModified'
 
 // ─── Validation ───────────────────────────────────────────────────
 // Everything read back from storage is unknown input: another version of the
-// app, a hand edit, a half-written record. parseFeatureLock accepts exactly
+// app, a hand edit, a half-written record. parseDocumentRestriction accepts exactly
 // one shape and rejects everything else, including unknown action names —
 // an action this build does not understand may be a restriction it cannot
 // enforce, so silently dropping it would quietly relax the lock.
@@ -116,11 +117,11 @@ const MIN_ITERATIONS = 1;
 const MAX_ITERATIONS = 1_000_000;
 
 /** Canonical order, duplicates dropped — the banner reads the same way twice. */
-export function normaliseProfile(disabled: readonly LockAction[]): FeatureLockProfile {
+export function normaliseProfile(disabled: readonly LockAction[]): DocumentRestrictionProfile {
   return { disabled: LOCK_ACTIONS.filter(action => disabled.includes(action)) };
 }
 
-export function parseFeatureLock(value: unknown): StoredFeatureLock | null {
+export function parseDocumentRestriction(value: unknown): StoredDocumentRestriction | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
 
@@ -165,7 +166,7 @@ export function parseFeatureLock(value: unknown): StoredFeatureLock | null {
  * persist a lock either. Nothing is weakened for the normal case, where the
  * store is readable and a corrupt record is caught above.
  */
-export function loadFeatureLock(key: string): LockState {
+export function loadDocumentRestriction(key: string): LockState {
   let raw: string | null;
   try {
     raw = localStorage.getItem(key);
@@ -181,13 +182,13 @@ export function loadFeatureLock(key: string): LockState {
     return { kind: 'corrupt', reason: 'The stored lock is not readable JSON.' };
   }
 
-  const lock = parseFeatureLock(parsedJson);
+  const lock = parseDocumentRestriction(parsedJson);
   if (!lock) return { kind: 'corrupt', reason: 'The stored lock does not have a valid shape.' };
   return { kind: 'locked', lock };
 }
 
 /** Persist a lock. Returns false when the browser refused to store it. */
-export function saveFeatureLock(key: string, lock: StoredFeatureLock): boolean {
+export function saveDocumentRestriction(key: string, lock: StoredDocumentRestriction): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(lock));
     return true;
@@ -198,7 +199,7 @@ export function saveFeatureLock(key: string, lock: StoredFeatureLock): boolean {
   }
 }
 
-export function clearFeatureLock(key: string): boolean {
+export function clearDocumentRestriction(key: string): boolean {
   try {
     localStorage.removeItem(key);
     return true;
@@ -239,7 +240,7 @@ export function randomSalt(): string {
   return bytesToHex(bytes);
 }
 
-export async function hashFeatureLockPassword(
+export async function hashDocumentRestrictionPassword(
   password: string,
   salt: string,
   iterations: number = DEFAULT_ITERATIONS,
@@ -272,11 +273,11 @@ export async function hashFeatureLockPassword(
  * browser cannot hash: a caller that ignores the throw would otherwise store
  * a record with no usable digest. The password itself is never stored.
  */
-export async function createFeatureLock(
+export async function createDocumentRestriction(
   password: string,
   disabled: readonly LockAction[],
   options: { iterations?: number; now?: number } = {},
-): Promise<StoredFeatureLock> {
+): Promise<StoredDocumentRestriction> {
   if (typeof password !== 'string' || password.length === 0) {
     throw new Error('A lock needs a password.');
   }
@@ -291,7 +292,7 @@ export async function createFeatureLock(
   return {
     version: 1,
     salt,
-    hash: await hashFeatureLockPassword(password, salt, iterations),
+    hash: await hashDocumentRestrictionPassword(password, salt, iterations),
     iterations,
     createdAt: options.now ?? Date.now(),
     ...normaliseProfile(disabled),
@@ -303,12 +304,12 @@ export async function createFeatureLock(
  * record whose salt or hash was altered, a browser without WebCrypto —
  * answers false, which leaves the document locked.
  */
-export async function verifyFeatureLockPassword(
-  lock: StoredFeatureLock,
+export async function verifyDocumentRestrictionPassword(
+  lock: StoredDocumentRestriction,
   password: string,
 ): Promise<boolean> {
   try {
-    const candidate = await hashFeatureLockPassword(password, lock.salt, lock.iterations);
+    const candidate = await hashDocumentRestrictionPassword(password, lock.salt, lock.iterations);
     return constantTimeEqual(candidate, lock.hash);
   } catch {
     return false;

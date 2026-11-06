@@ -429,7 +429,7 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <span class="region-ocr__status" id="region-ocr-status" role="status" aria-live="polite"></span>
               <button class="document-btn" id="lookup-mode-btn" type="button" aria-pressed="false"
                       title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
-              <button class="document-btn" id="colnotes-btn" type="button" aria-pressed="false"
+              <button class="document-btn" id="three-column-notes-btn" type="button" aria-pressed="false"
                       title="Show the margin column of notes pinned to spots in the document">Notes</button>
               <!-- The read-aloud audio as one downloadable bundle. In the bar
                    rather than inside the collapsed tools: it is what someone
@@ -486,49 +486,49 @@ export function buildAppMarkup(opts: LayoutOptions): string {
 
             <div class="reader-error" id="reader-error" role="alert" hidden></div>
 
-            <!-- Feature lock: a per-document restriction for reading in an
+            <!-- Document restrictions: a per-document profile for reading in an
                  assessment context. The bar sits directly under the top bar so
                  a reader never has to guess whether what they are looking at
                  is locked; the controls it covers are blocked in
-                 feature-locks-panel.ts, not merely greyed out. The checkbox
+                 document-restrictions-panel.ts, not merely greyed out. The checkbox
                  list is built from LOCK_ACTIONS so the markup cannot drift
                  from what the guards enforce. -->
-            <section class="feature-lock" id="feature-lock" aria-label="Document lock" hidden>
-              <div class="feature-lock__bar">
-                <span class="feature-lock__badge" id="feature-lock-badge" aria-hidden="true">🔓</span>
-                <span class="feature-lock__state" id="feature-lock-state">Not locked</span>
-                <span class="feature-lock__detail" id="feature-lock-detail"></span>
-                <button class="document-btn" id="feature-lock-manage-btn" type="button" aria-expanded="false">Lock document…</button>
+            <section class="document-restriction" id="document-restriction" aria-label="Document lock" hidden>
+              <div class="document-restriction__bar">
+                <span class="document-restriction__badge" id="document-restriction-badge" aria-hidden="true">🔓</span>
+                <span class="document-restriction__state" id="document-restriction-state">Not locked</span>
+                <span class="document-restriction__detail" id="document-restriction-detail"></span>
+                <button class="document-btn" id="document-restriction-manage-btn" type="button" aria-expanded="false">Lock document…</button>
               </div>
 
-              <form class="feature-lock__form" id="feature-lock-form" hidden>
-                <p class="feature-lock__hint">Choose what the reader may not do while this document is open. Reading aloud is never restricted.</p>
-                <div class="feature-lock__choices" id="feature-lock-choices"></div>
-                <label class="feature-lock__field">Password
-                  <input type="password" id="feature-lock-password" autocomplete="new-password" required />
+              <form class="document-restriction__form" id="document-restriction-form" hidden>
+                <p class="document-restriction__hint">Choose what the reader may not do while this document is open. Reading aloud is never restricted.</p>
+                <div class="document-restriction__choices" id="document-restriction-choices"></div>
+                <label class="document-restriction__field">Password
+                  <input type="password" id="document-restriction-password" autocomplete="new-password" required />
                 </label>
-                <label class="feature-lock__field">Repeat password
-                  <input type="password" id="feature-lock-confirm" autocomplete="new-password" required />
+                <label class="document-restriction__field">Repeat password
+                  <input type="password" id="document-restriction-confirm" autocomplete="new-password" required />
                 </label>
-                <div class="feature-lock__actions">
+                <div class="document-restriction__actions">
                   <button class="document-btn document-btn--primary" type="submit">Turn on lock</button>
-                  <button class="document-btn" type="button" id="feature-lock-cancel-btn">Cancel</button>
+                  <button class="document-btn" type="button" id="document-restriction-cancel-btn">Cancel</button>
                 </div>
               </form>
 
-              <form class="feature-lock__form" id="feature-lock-unlock-form" hidden>
-                <p class="feature-lock__hint">Enter the lock password to lift the restriction. The password is checked against the stored digest; it is never saved in the clear.</p>
-                <label class="feature-lock__field">Password
-                  <input type="password" id="feature-lock-unlock-password" autocomplete="current-password" required />
+              <form class="document-restriction__form" id="document-restriction-unlock-form" hidden>
+                <p class="document-restriction__hint">Enter the lock password to lift the restriction. The password is checked against the stored digest; it is never saved in the clear.</p>
+                <label class="document-restriction__field">Password
+                  <input type="password" id="document-restriction-unlock-password" autocomplete="current-password" required />
                 </label>
-                <div class="feature-lock__actions">
+                <div class="document-restriction__actions">
                   <button class="document-btn document-btn--primary" type="submit">Unlock until closed</button>
-                  <button class="document-btn" type="button" id="feature-lock-remove-btn">Remove lock…</button>
-                  <button class="document-btn" type="button" id="feature-lock-cancel-unlock-btn">Cancel</button>
+                  <button class="document-btn" type="button" id="document-restriction-remove-btn">Remove lock…</button>
+                  <button class="document-btn" type="button" id="document-restriction-cancel-unlock-btn">Cancel</button>
                 </div>
               </form>
 
-              <p class="feature-lock__status" id="feature-lock-status" role="status" aria-live="polite"></p>
+              <p class="document-restriction__status" id="document-restriction-status" role="status" aria-live="polite"></p>
             </section>
 
             <!-- The real thing: pages as they appear in the file. Populated only
@@ -542,21 +542,21 @@ export function buildAppMarkup(opts: LayoutOptions): string {
 
             <!-- Margin column: notes pinned to document offsets, riding
                  beside the pages like a second column of the book. -->
-            <aside class="colnotes" id="colnotes" aria-label="Column notes" hidden>
-              <div class="colnotes__head">
-                <span class="section-label">Column notes</span>
-                <button class="document-btn" id="colnotes-add-btn" type="button">Note here</button>
-                <button class="document-btn" id="colnotes-close-btn" type="button" aria-label="Close notes column"><span aria-hidden="true">✕</span></button>
+            <aside class="three-column-notes" id="three-column-notes" aria-label="Three-column notes" hidden>
+              <div class="three-column-notes__head">
+                <span class="section-label">Three-column notes</span>
+                <button class="document-btn" id="three-column-notes-add-btn" type="button">Note here</button>
+                <button class="document-btn" id="three-column-notes-close-btn" type="button" aria-label="Close notes column"><span aria-hidden="true">✕</span></button>
               </div>
-              <form class="colnotes__form" id="colnotes-form" hidden>
-                <textarea class="docbookmarks__note" id="colnotes-text" rows="3" maxlength="1000"
+              <form class="three-column-notes__form" id="three-column-notes-form" hidden>
+                <textarea class="docbookmarks__note" id="three-column-notes-text" rows="3" maxlength="1000"
                           placeholder="Note for this spot…"></textarea>
                 <div class="docbookmarks__row">
                   <button class="document-btn document-btn--primary" type="submit">Save note</button>
-                  <button class="document-btn" type="button" id="colnotes-cancel-btn">Cancel</button>
+                  <button class="document-btn" type="button" id="three-column-notes-cancel-btn">Cancel</button>
                 </div>
               </form>
-              <ul class="colnotes__list" id="colnotes-list"></ul>
+              <ul class="three-column-notes__list" id="three-column-notes-list"></ul>
             </aside>
 
             <!-- Secondary affordances stay reachable but collapsed: the
@@ -583,41 +583,41 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                 <ul class="docbookmarks__list" id="voice-note-list" aria-label="Voice notes in this document"></ul>
               </div>
 
-              <div class="study-tools__group" id="docbubbles">
-                <div class="section-label">Bubble notes</div>
+              <div class="study-tools__group" id="docprompts">
+                <div class="section-label">Prompt notes</div>
                 <div class="docbookmarks__row">
-                  <button class="document-btn" type="button" id="bubble-add-btn" aria-expanded="false"
+                  <button class="document-btn" type="button" id="prompt-add-btn" aria-expanded="false"
                           title="Pin a question to the word or paragraph at your reading position">Ask a question here</button>
-                  <label class="docbookmarks__label" for="bubble-anchor">Anchor</label>
-                  <select class="docbookmarks__input" id="bubble-anchor">
+                  <label class="docbookmarks__label" for="prompt-anchor">Anchor</label>
+                  <select class="docbookmarks__input" id="prompt-anchor">
                     <option value="word">Word</option>
                     <option value="paragraph">Paragraph</option>
                   </select>
                 </div>
-                <form class="docbookmarks__form" id="bubble-form" hidden>
-                  <label class="docbookmarks__label" for="bubble-prompt">Question or instruction</label>
-                  <textarea class="docbookmarks__note" id="bubble-prompt" rows="2" maxlength="400"></textarea>
+                <form class="docbookmarks__form" id="prompt-form" hidden>
+                  <label class="docbookmarks__label" for="prompt-input">Question or instruction</label>
+                  <textarea class="docbookmarks__note" id="prompt-input" rows="2" maxlength="400"></textarea>
                   <div class="docbookmarks__row">
                     <button class="document-btn document-btn--primary" type="submit">Pin question</button>
-                    <button class="document-btn" type="button" id="bubble-cancel-btn">Cancel</button>
+                    <button class="document-btn" type="button" id="prompt-cancel-btn">Cancel</button>
                   </div>
                 </form>
-                <ul class="docbookmarks__list" id="bubble-list"></ul>
+                <ul class="docbookmarks__list" id="prompt-list"></ul>
               </div>
 
-              <div class="study-tools__group" id="colnote-quiz">
-                <div class="section-label">Column-note self-test</div>
+              <div class="study-tools__group" id="three-column-note-quiz">
+                <div class="section-label">Three-column-note self-test</div>
                 <div class="docbookmarks__row">
-                  <button class="document-btn" type="button" id="colnote-quiz-btn" aria-pressed="false">Self-test</button>
-                  <label class="docbookmarks__label" for="colnote-cover-field">Cover</label>
-                  <select class="docbookmarks__input" id="colnote-cover-field">
+                  <button class="document-btn" type="button" id="three-column-note-quiz-btn" aria-pressed="false">Self-test</button>
+                  <label class="docbookmarks__label" for="three-column-note-cover-field">Cover</label>
+                  <select class="docbookmarks__input" id="three-column-note-cover-field">
                     <option value="note">The notes</option>
                     <option value="cue">The cues</option>
                   </select>
-                  <button class="document-btn" type="button" id="colnote-reveal-all-btn" disabled>Reveal all</button>
+                  <button class="document-btn" type="button" id="three-column-note-reveal-all-btn" disabled>Reveal all</button>
                 </div>
                 <p class="study-tools__hint">Covered cards show an opaque cover in the Notes column; each one reveals on its own button.</p>
-                <p class="study-tools__status" id="colnote-quiz-status" role="status" aria-live="polite"></p>
+                <p class="study-tools__status" id="three-column-note-quiz-status" role="status" aria-live="polite"></p>
               </div>
             </section>
 
@@ -651,23 +651,23 @@ export function buildAppMarkup(opts: LayoutOptions): string {
 
             <!-- Per-section voices: give a paragraph or a selection a
                  different speaker than the body text. Stored per file (see
-                 voice-tags.ts) and wired by ui/voice-tags-panel.ts. The page
+                 section-voices.ts) and wired by ui/section-voices-panel.ts. The page
                  text is untouched — only which voice synthesizes which words
                  changes. -->
-            <div class="voice-tags" id="voice-tags">
+            <div class="section-voices" id="section-voices">
               <div class="section-label">Section voices</div>
-              <div class="docbookmarks__row voice-tags__row">
-                <select class="voice-tags__select" id="voice-tag-voice" aria-label="Voice for the tagged section"></select>
-                <button class="document-btn" type="button" id="voice-tag-paragraph-btn"
+              <div class="docbookmarks__row section-voices__row">
+                <select class="section-voices__select" id="section-voice-picker" aria-label="Voice for the tagged section"></select>
+                <button class="document-btn" type="button" id="section-voice-paragraph-btn"
                         title="Read the paragraph at the reading cursor in the chosen voice">Tag paragraph</button>
-                <button class="document-btn" type="button" id="voice-tag-selection-btn"
+                <button class="document-btn" type="button" id="section-voice-selection-btn"
                         title="Read the selected text in the chosen voice">Tag selection</button>
-                <button class="document-btn" type="button" id="voice-tag-clear-btn" disabled
+                <button class="document-btn" type="button" id="section-voice-clear-btn" disabled
                         title="Read the whole document in one voice again">Clear all</button>
               </div>
-              <p class="voice-tags__hint">The page keeps its words; only the speaking voice changes.</p>
-              <ul class="voice-tags__list docbookmarks__list" id="voice-tag-list"></ul>
-              <p class="voice-tags__status" id="voice-tag-status" role="status" aria-live="polite"></p>
+              <p class="section-voices__hint">The page keeps its words; only the speaking voice changes.</p>
+              <ul class="section-voices__list docbookmarks__list" id="section-voice-list"></ul>
+              <p class="section-voices__status" id="section-voice-status" role="status" aria-live="polite"></p>
             </div>
 
             <!-- Marked-up ranges of the document text, kept per uploaded file. -->
