@@ -25,7 +25,7 @@ Yapper is a browser-only TTS SPA. Vite builds a static `dist/` for GitHub Pages;
 **Model routing**
 
 - Kokoro + Kitten: `registerCustomEngine(modelId, new WorkerBackedEngine())` in `main.ts`. Worker speaks a small request/response protocol from `worker-bridge.ts`.
-- SpeechT5 + MMS-TTS: Transformers.js pipeline inside `TTSEngine` (main thread).
+- MMS-TTS: Transformers.js pipeline inside `TTSEngine` (main thread). SpeechT5 remains in the registry but is hidden from the picker (`hidden: true`), because it is a text→mel model whose vocoder stack is not assembled.
 
 **Documents**
 
