@@ -526,6 +526,61 @@ export function buildAppMarkup(opts: LayoutOptions): string {
             <details class="reader-tools" id="reader-tools">
               <summary>Structure, notes &amp; export</summary>
 
+            <!-- Study tools: speak a note instead of typing one, pin a question
+                 to a word or paragraph, or cover a column of the notes rail and
+                 quiz yourself. Wired by voice-notes-panel.ts and
+                 document-panel.ts. -->
+            <section class="study-tools" id="study-tools" aria-label="Study tools">
+              <div class="study-tools__group" id="voice-notes">
+                <div class="section-label">Voice notes</div>
+                <div class="docbookmarks__row">
+                  <button class="document-btn" type="button" id="voice-note-record-btn"
+                          aria-pressed="false" disabled
+                          title="Record a voice note at this spot">● Record</button>
+                  <span class="study-tools__timer" id="voice-note-timer" aria-hidden="true">0:00</span>
+                  <span class="study-tools__status" id="voice-note-status" role="status" aria-live="polite"></span>
+                </div>
+                <ul class="docbookmarks__list" id="voice-note-list" aria-label="Voice notes in this document"></ul>
+              </div>
+
+              <div class="study-tools__group" id="docbubbles">
+                <div class="section-label">Bubble notes</div>
+                <div class="docbookmarks__row">
+                  <button class="document-btn" type="button" id="bubble-add-btn" aria-expanded="false"
+                          title="Pin a question to the word or paragraph at your reading position">Ask a question here</button>
+                  <label class="docbookmarks__label" for="bubble-anchor">Anchor</label>
+                  <select class="docbookmarks__input" id="bubble-anchor">
+                    <option value="word">Word</option>
+                    <option value="paragraph">Paragraph</option>
+                  </select>
+                </div>
+                <form class="docbookmarks__form" id="bubble-form" hidden>
+                  <label class="docbookmarks__label" for="bubble-prompt">Question or instruction</label>
+                  <textarea class="docbookmarks__note" id="bubble-prompt" rows="2" maxlength="400"></textarea>
+                  <div class="docbookmarks__row">
+                    <button class="document-btn document-btn--primary" type="submit">Pin question</button>
+                    <button class="document-btn" type="button" id="bubble-cancel-btn">Cancel</button>
+                  </div>
+                </form>
+                <ul class="docbookmarks__list" id="bubble-list"></ul>
+              </div>
+
+              <div class="study-tools__group" id="colnote-quiz">
+                <div class="section-label">Column-note self-test</div>
+                <div class="docbookmarks__row">
+                  <button class="document-btn" type="button" id="colnote-quiz-btn" aria-pressed="false">Self-test</button>
+                  <label class="docbookmarks__label" for="colnote-cover-field">Cover</label>
+                  <select class="docbookmarks__input" id="colnote-cover-field">
+                    <option value="note">The notes</option>
+                    <option value="cue">The cues</option>
+                  </select>
+                  <button class="document-btn" type="button" id="colnote-reveal-all-btn" disabled>Reveal all</button>
+                </div>
+                <p class="study-tools__hint">Covered cards show an opaque cover in the Notes column; each one reveals on its own button.</p>
+                <p class="study-tools__status" id="colnote-quiz-status" role="status" aria-live="polite"></p>
+              </div>
+            </section>
+
             <!-- Classified document structure -->
             <div class="classify-panel" id="classify-panel" hidden>
               <div class="section-label">Document structure</div>

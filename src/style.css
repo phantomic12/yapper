@@ -3792,3 +3792,70 @@ body.document-open .document-preview--notes .reader-view {
   padding: 10px 12px;
 }
 .document-web__input:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+
+/* ─── Study tools (voice notes, bubble notes, column-note self-test) ───
+   Three surfaces under one heading. Each is its own card so a reader can tell
+   the microphone controls from the quiz controls without reading a label. */
+.study-tools { display: grid; gap: 14px; margin: 4px 0 18px; }
+.study-tools__group {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.study-tools__timer {
+  min-width: 3.2rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.study-tools__status,
+.study-tools__hint { margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+
+/* Opaque on purpose: a see-through cover can be read at an angle, and a
+   colour-only one disappears in high-contrast mode. The hatching says
+   "something is under here" without showing any of it. */
+.colnotes__cover {
+  display: block;
+  width: 100%;
+  margin: 4px 0 6px;
+  padding: 14px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--bg-elevated) 0 8px,
+    var(--bg-surface) 8px 16px
+  );
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.colnotes__cover:hover,
+.colnotes__cover:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The question bubble carries an answer box, so it is a small form rather
+   than a one-line note — and it is wider than the default callout. */
+.bubble-note__question { display: grid; gap: 6px; }
+.bubble-note__prompt { font-size: 0.85rem; font-weight: 600; }
+.bubble-note__answer {
+  width: 100%;
+  min-width: min(240px, 70vw);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  resize: vertical;
+}
+.bubble-note__answer:focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
