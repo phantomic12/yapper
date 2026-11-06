@@ -12,6 +12,7 @@ import {
 import { bindStreamPlayer } from './ui/stream-player';
 import { bindDictation } from './ui/dictation';
 import { bindPronunciationPanel } from './ui/pronunciation-panel';
+import { bindReadingQualityPanel } from './ui/reading-quality-panel';
 import { loadPronunciations } from './pronunciation';
 import { bindThemeToggle } from './theme';
 import { bindAdvancedToggle } from './advanced-mode';
@@ -172,6 +173,7 @@ async function render(): Promise<void> {
   bindDocumentEvents(state);
   bindWriteEvents(state);
   bindPronunciationPanel(state);
+  bindReadingQualityPanel();
   bindDictation(state);
   bindStreamPlayer(state);
   installPersistence(state);

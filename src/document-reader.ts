@@ -18,6 +18,9 @@ import {
 } from './document-formats';
 import { getOcrEngine } from './ocr';
 import { getLlmOcrEngine } from './engines/llm-ocr';
+import { loadCorrections, type CorrectionRule } from './corrections';
+import { loadHeaderFooterSuppression } from './header-footer';
+import { assemblePdfPages, type PdfLineRun, type PdfPageLine } from './pdf-pages';
 import { engineSupportsPdfJs, pdfUnsupportedMessage } from './pdf-capability';
 import { getMimeType, getFileExtension, MAX_PDF_PAGES, quadToBbox, type OcrMode, type BboxWord, type QuadWord } from './document-types';
 export { getMimeType, getFileExtension, MAX_PDF_PAGES, type OcrMode, type BboxWord, type QuadWord, quadToBbox, parseCsv } from './document-types';
@@ -125,6 +128,17 @@ export interface ExtractOptions {
   ocrMode?: OcrMode;
   /** Language passed to Tesseract (ignored for LLM mode). */
   ocrLang?: string;
+  /**
+   * Corrections applied to PDF text as it is extracted (both OCR and the
+   * embedded text layer). Undefined means "use the saved list"; pass `[]`
+   * to explicitly disable them for one extraction.
+   */
+  corrections?: readonly CorrectionRule[];
+  /**
+   * Drop lines that repeat at the top or bottom of most pages. Undefined
+   * means "use the saved preference"; true/false overrides it for one call.
+   */
+  stripPageMargins?: boolean;
   /** Optional progress callback for large documents. */
   onProgress?: (message: string) => void;
   /**
@@ -394,9 +408,11 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
   ): Promise<ExtractedDocument> => {
     const buffer = await readArrayBuffer(file);
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
-    const parts: string[] = [];
-    const layoutBlocks: LayoutBlock[] = [];
-    const anchors: TextAnchor[] = [];
+    // Lines are collected page by page before anything is joined. Two
+    // reasons: the margin heuristic needs a page as a list of lines, and the
+    // character offsets can only be computed once the final set of lines is
+    // known — a dropped header shifts every offset after it.
+    const pages: PdfPageLine[][] = [];
     const useOcr = options.useOcr ?? false;
     const maxPages = Math.min(pdf.numPages, options.maxPdfPages ?? MAX_PDF_PAGES);
     if (maxPages < pdf.numPages) {
@@ -404,24 +420,6 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
         `PDF has ${pdf.numPages} pages; only the first ${maxPages} will be extracted`,
       );
     }
-
-    /**
-     * Append a line and report where it landed in the joined text.
-     *
-     * The final document is `parts.join('\n\n')`, so part N starts at the sum
-     * of every earlier part's length plus two. Tracking that running offset
-     * as we go is the only way the anchors can point at real characters —
-     * a two-character-per-part error here would shift every subsequent
-     * highlight by two characters, which is invisible until a sentence
-     * highlights the wrong line and then looks like a rendering bug.
-     */
-    let offset = 0;
-    const pushPart = (text: string): number => {
-      const start = offset;
-      offset += text.length + 2; // the '\n\n' separator join() inserts
-      parts.push(text);
-      return start;
-    };
 
     for (let i = 1; i <= maxPages; i++) {
       onProgress?.(`Processing PDF page ${i}/${maxPages}…`);
@@ -432,39 +430,29 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
         // resetting the stall timer (Tesseract emits per-% updates).
         const ocrOptions: ExtractOptions = { ...options, onProgress };
         const blocks = await ocrPage(page, i, ocrOptions);
-        layoutBlocks.push(...blocks);
-        // OCR already produced page geometry; the anchors are a re-index of
-        // the same rectangles, so the viewer has one shape to read.
-        for (const block of blocks) {
-          const start = pushPart(block.text);
-          anchors.push({
-            page: block.page,
-            x: block.x,
-            y: block.y,
-            width: block.width,
-            height: block.height,
-            start,
-            end: start + block.text.length,
-          });
-        }
+        // An OCR block is already one line with one box; carry both through
+        // unchanged so suppression and corrections can still decide about
+        // it as a unit.
+        pages.push(blocks.map(block => ({
+          text: block.text,
+          rect: { x: block.x, y: block.y, width: block.width, height: block.height },
+        })));
       } else {
         const content = await page.getTextContent({ includeMarkedContent: false });
         // Rectangles are captured in scale-1 viewport space, so a zoom is a
         // multiply at render time rather than a second transform here.
         const viewport = page.getViewport({ scale: 1 });
         let lastY = 0;
+        const lines: PdfPageLine[] = [];
         const lineParts: string[] = [];
-        const lineAnchors: Omit<TextAnchor, 'page'>[] = [];
+        const lineRuns: PdfLineRun[] = [];
         let lineLen = 0;
 
         const flushLine = (): void => {
           if (!lineParts.length) return;
-          const lineStart = pushPart(lineParts.join(' '));
-          for (const a of lineAnchors) {
-            anchors.push({ ...a, page: i, start: lineStart + a.start, end: lineStart + a.end });
-          }
+          lines.push({ text: lineParts.join(' '), runs: [...lineRuns] });
           lineParts.length = 0;
-          lineAnchors.length = 0;
+          lineRuns.length = 0;
           lineLen = 0;
         };
 
@@ -478,7 +466,7 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
           }
           if (lineParts.length) lineLen += 1; // the space join() puts between items
           lineParts.push(txt);
-          lineAnchors.push({
+          lineRuns.push({
             ...textItemRect(viewport, textItem),
             start: lineLen,
             end: lineLen + txt.length,
@@ -487,16 +475,30 @@ async function extractPdf(file: File, options: ExtractOptions): Promise<Extracte
           lastY = textItem.transform[5];
         }
         flushLine();
+        pages.push(lines);
       }
     }
 
+    // Undefined means "whatever the reading-quality panel last saved"; an
+    // explicit value wins so a caller (or a test) can pin the behaviour.
+    const assembled = assemblePdfPages(pages, {
+      corrections: options.corrections ?? loadCorrections(),
+      stripPageMargins: options.stripPageMargins ?? loadHeaderFooterSuppression(),
+    });
+    if (assembled.removedLines > 0) {
+      onProgress?.(
+        `Ignoring ${assembled.removedLines} repeating header/footer line` +
+        `${assembled.removedLines === 1 ? '' : 's'}`,
+      );
+    }
+
     return {
-      text: parts.join('\n\n'),
-      layoutBlocks: useOcr && layoutBlocks.length ? layoutBlocks : undefined,
+      text: assembled.text,
+      layoutBlocks: useOcr && assembled.layoutBlocks.length ? assembled.layoutBlocks : undefined,
       // A PDF with no extractable text (pure scans, or a text layer pdfjs
       // cannot find) has nothing to anchor and still renders fine visually,
       // so an empty array is a legitimate answer, not a failure.
-      anchors: anchors.length ? anchors : undefined,
+      anchors: assembled.anchors.length ? assembled.anchors : undefined,
       mimeType: 'application/pdf',
       name: file.name,
     };
