@@ -1439,7 +1439,9 @@ export function bindDocumentEvents(state: AppState): void {
   }
 
   function clearPaintMarks(): void {
-    for (const el of paintedElements) el.classList.remove('reader-unit', 'reader-active-word');
+    for (const el of paintedElements) {
+      el.classList.remove('reader-unit', 'reader-active-word', 'reader-active-sentence');
+    }
     paintedElements = [];
   }
 
@@ -1494,6 +1496,19 @@ export function bindDocumentEvents(state: AppState): void {
     if (activeWord) {
       activeWord.classList.add('reader-active-word');
       marked.push(activeWord);
+    }
+    // The sentence holding the cursor is marked as a whole, not only through
+    // its words. The unit band deliberately lives on the words so it can
+    // follow the unit choice, which left nothing on the sentence span — and
+    // with it nothing that says *which sentence* the reader is in. That is
+    // the one fact every consumer of the highlight needs: the document view
+    // scrolls to it, the reading tools key off it, and a UI check cannot see
+    // a word move without it. It paints nothing of its own (see style.css);
+    // it is the sentence-level coordinate of the cursor.
+    const activeSentence = sentenceElementIn(root, info.sentenceIndex);
+    if (activeSentence) {
+      activeSentence.classList.add('reader-active-sentence');
+      marked.push(activeSentence);
     }
     return { word: activeWord, marked };
   }

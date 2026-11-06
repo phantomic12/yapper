@@ -431,6 +431,13 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                       title="When on, tapping a word shows its definition instead of reading from there">Look up</button>
               <button class="document-btn" id="colnotes-btn" type="button" aria-pressed="false"
                       title="Show the margin column of notes pinned to spots in the document">Notes</button>
+              <!-- The read-aloud audio as one downloadable bundle. In the bar
+                   rather than inside the collapsed tools: it is what someone
+                   reaches for the moment the reading stops, and a control
+                   inside a closed <details> cannot be clicked at all — the
+                   click lands on nothing and the export silently never runs. -->
+              <button class="document-btn" id="export-audiobook-btn" type="button"
+                      title="Download the read-aloud audio as a zip: merged WAV, captions, and a karaoke page">Audiobook</button>
               <div class="docview-switch" role="group" aria-label="How to show the document">
                 <span class="section-label docview-switch__label">View</span>
                 <button class="docview-switch__btn" type="button" data-docview="document" aria-pressed="true"
@@ -695,7 +702,10 @@ export function buildAppMarkup(opts: LayoutOptions): string {
               <ol class="doctest__list" id="test-list"></ol>
             </div>
 
-            <!-- Downloads and the keyboard cheat sheet. -->
+            <!-- Downloads and the keyboard cheat sheet. The audiobook bundle
+                 lives in the open-document bar instead: it is the one export
+                 that is about the reading session, and it has to be clickable
+                 the moment the read stops. -->
             <div class="docexports" id="docexports">
               <div class="section-label">Export</div>
               <div class="docbookmarks__row">
@@ -703,8 +713,6 @@ export function buildAppMarkup(opts: LayoutOptions): string {
                 <button class="document-btn" id="export-html-btn" type="button">HTML</button>
                 <button class="document-btn" id="export-txt-btn" type="button">Text</button>
                 <button class="document-btn" id="export-notes-btn" type="button">Notes</button>
-                <button class="document-btn" id="export-audiobook-btn" type="button"
-                        title="Download the read-aloud audio as a zip: merged WAV, captions, and a karaoke page">Audiobook</button>
                 <button class="document-btn" id="review-notes-btn" type="button"
                         title="Listen to your highlights and notes as a review session">▶ Review notes</button>
                 <button class="document-btn" id="shortcuts-btn" type="button" title="Keyboard shortcuts">Shortcuts (?)</button>

@@ -6,6 +6,34 @@ All notable changes to Yapper are recorded here. Versions follow
 ## [Unreleased]
 
 ### Fixed
+- **The highlight stopped saying which sentence it was in.** The
+  dual-highlight rewrite moved the reading-unit band onto the individual word
+  spans so it could follow the unit choice — and dropped the sentence-span
+  class with it. Nothing painted `reader-active-sentence` any more, so the
+  sentence the cursor was in existed only as an ancestor of the word chip:
+  a consumer watching the reading position saw the word move while the
+  sentence stayed unknown, and an end-to-end check that waits for the sentence
+  index waited out the whole document instead (120s, then "Finished", no
+  highlight recorded). Pause-then-Resume looked broken for the same reason:
+  the check that should have caught the advancing highlight was still waiting
+  when playback ended, so the session had already finished by the time the
+  Resume click arrived and `resume()` refused. The marker is back on the
+  sentence holding the cursor, on both the inline view and the overlay, and it
+  paints nothing of its own — the band still lives on the words.
+- **The audiobook export could not be clicked.** The bundle button lived
+  inside the collapsed "Structure, notes & export" section, and a control
+  inside a closed `<details>` is not rendered: the trusted click landed on
+  nothing, the handler never ran, and the export produced no file at all —
+  with no error, because the export function was never entered. The button now
+  sits in the open-document bar beside the reading controls it belongs to,
+  where it is visible the moment a read stops.
+- **The OCR switch vanished exactly when a scanned file was open.** The
+  open-document layout hid the whole options block, taking the OCR switch and
+  the extraction progress line with it — so turning OCR on for the scan in
+  front of you was impossible, and "OCR page 2: 40%" could not be seen while
+  it mattered. The row stays; the reading column is a flex column exactly the
+  window's height, so the document keeps what is left and the tools still
+  scroll into reach when expanded.
 - **EPUB files imported as an empty document.** `spineItem.load()` resolves
   `xml.documentElement` — the `<html>` *element*, not the Document it was
   parsed from — and extraction read `.body` off it, a property that exists only

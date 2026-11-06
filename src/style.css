@@ -1515,11 +1515,11 @@ body {
   background: var(--bg-surface);
   color: var(--text-dim);
 }
-/* Kept as an alias: earlier builds painted the unit on the sentence span.
-   The band now lives on the word spans so it can follow any unit choice. */
-.reader-active-sentence {
-  background: var(--reader-unit-bg);
-}
+/* `.reader-active-sentence` marks the sentence holding the cursor. It has no
+   rule of its own, deliberately: the band lives on the word spans
+   (`reader-word.reader-unit`) so it can follow the reading-unit choice, and a
+   sentence-wide wash would light up the whole sentence even when one word is
+   the unit. The class is a coordinate, not a paint. */
 .reader-word {
   border-radius: 2px;
   transition: background 0.05s ease, box-shadow 0.05s ease;
@@ -2221,20 +2221,37 @@ body.document-open .document-drop,
 body.document-open .document-sample,
 body.document-open .document-web,
 body.document-open .document-need-model,
-body.document-open .document-options,
 body.document-open .docrecent,
 body.document-open .docsearch {
   display: none;
 }
 
-/* The preview column is exactly the window: the bar, then the
-   document, then the tools. Definite height so the document's flex
-   share resolves to what the window leaves it; opening the tools lets
-   the column overflow and the page scroll. */
-body.document-open .document-preview {
+/* What stays above the document, on purpose: the OCR switch and the
+   extraction progress line. A scanned page is exactly the case where the
+   reader needs to turn OCR on and watch "OCR page 2: 40%" while the file is
+   open, and hiding the whole options block (as this rule used to) left both
+   unreachable — the switch could be seen only before a file was picked.
+   The reading column is a flex column exactly the window's height, so the
+   row costs the document a little space instead of pushing it off screen;
+   `overflow-y: auto` is what still lets the tools section below the document
+   be reached once it is expanded. */
+body.document-open .reader-page {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  overflow-y: auto;
+}
+
+/* The preview column is the rest of the window: the bar, then the
+   document, then the tools. `min-height: 0` is what lets the document's
+   flex share resolve below its content height; opening the tools lets the
+   column overflow and the page scroll. */
+body.document-open .document-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: auto;
   margin-bottom: 0;
 }
 
